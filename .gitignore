@@ -34,3 +34,9 @@ pnpm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Rust and generated workers
+/src-tauri/target/
+/src-tauri/gen/
+/public/monaco/
+/artifacts/

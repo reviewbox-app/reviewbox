@@ -1,7 +1,11 @@
-dist/
 node_modules/
 .next/
-.turbo/
+out/
 coverage/
-pnpm-lock.yaml
-.pnpm-store/
+src-tauri/target/
+src-tauri/gen/
+public/monaco/
+artifacts/
+bun.lock
+src-tauri/Cargo.lock
+next-env.d.ts

@@ -1,0 +1,21 @@
+[package]
+name = "reviewbox"
+version = "0.1.0"
+description = "A desktop workspace for agent-assisted code review"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[lib]
+name = "reviewbox_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+
+[lints.rust]
+unsafe_code = "forbid"
