@@ -155,7 +155,11 @@ export function DevelopmentWorkbench() {
           <Button onClick={runProbes} disabled={!mounted || running}>
             Tester le socle
           </Button>
-          <Button variant="outline" onClick={toggleEditors} disabled={running}>
+          <Button
+            variant="secondary"
+            onClick={toggleEditors}
+            disabled={running}
+          >
             {mounted ? "Démonter les éditeurs" : "Remonter les éditeurs"}
           </Button>
           <Button variant="secondary" onClick={increment}>

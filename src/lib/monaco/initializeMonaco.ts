@@ -1,3 +1,5 @@
+import { defineReviewboxThemes } from "./reviewboxThemes"
+
 let initialization: Promise<void> | undefined
 
 function getWorkerName(label: string): string {
@@ -40,6 +42,7 @@ export function initializeMonaco(): Promise<void> {
     ])
 
     loader.config({ monaco })
+    defineReviewboxThemes(monaco)
   })().catch((error: unknown) => {
     initialization = undefined
     throw error

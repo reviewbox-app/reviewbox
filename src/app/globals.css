@@ -54,7 +54,7 @@
   --card-foreground: oklch(0.21 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.21 0 0);
-  --primary: oklch(0.488 0.243 264.376);
+  --primary: #3969ff;
   --primary-foreground: oklch(1 0 0);
   --secondary: oklch(0.21 0 0 / 8%);
   --secondary-foreground: oklch(0.21 0 0);
@@ -74,7 +74,7 @@
   --radius: 0.625rem;
   --sidebar: oklch(1 0 0);
   --sidebar-foreground: oklch(0.21 0 0);
-  --sidebar-primary: oklch(0.546 0.245 262.881);
+  --sidebar-primary: #3969ff;
   --sidebar-primary-foreground: oklch(1 0 0);
   --sidebar-accent: oklch(0.21 0 0 / 8%);
   --sidebar-accent-foreground: oklch(0.21 0 0);
@@ -89,7 +89,7 @@
   --card-foreground: oklch(1 0 0);
   --popover: oklch(0.25 0 0);
   --popover-foreground: oklch(1 0 0);
-  --primary: oklch(0.5 0.199 265.638);
+  --primary: #3969ff;
   --primary-foreground: oklch(1 0 0);
   --secondary: oklch(1 0 0 / 10%);
   --secondary-foreground: oklch(0.985 0 0);
@@ -108,7 +108,7 @@
   --chart-5: oklch(0.424 0.199 265.638);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(1 0 0);
-  --sidebar-primary: oklch(0.623 0.214 259.815);
+  --sidebar-primary: #3969ff;
   --sidebar-primary-foreground: oklch(1 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(1 0 0);
@@ -129,30 +129,68 @@
 }
 
 @theme inline {
+  --font-mono: var(--font-mono);
   --color-review-validated: var(--review-validated);
+  --color-review-validated-soft: var(--review-validated-soft);
   --color-review-attention: var(--review-attention);
+  --color-review-attention-soft: var(--review-attention-soft);
   --color-review-question: var(--review-question);
+  --color-review-question-soft: var(--review-question-soft);
   --color-review-step: var(--review-step);
+  --color-diff-added: var(--diff-added-fg);
+  --color-diff-removed: var(--diff-removed-fg);
+  --radius-panel: 24px;
 }
+
+/* Reading states, diff and syntax colors from RB / Colors in the prototype. */
 :root {
   --review-validated: #16a34a;
+  --review-validated-soft: #16a34a1a;
   --review-attention: #d97706;
+  --review-attention-soft: #d977061a;
   --review-question: #7c3aed;
+  --review-question-soft: #7c3aed17;
   --review-step: #1447e60a;
   --diff-added-bg: #16a34a12;
+  --diff-added-gutter: #16a34a24;
+  --diff-added-fg: #15803d;
   --diff-removed-bg: #e7000b0d;
+  --diff-removed-gutter: #e7000b1f;
+  --diff-removed-fg: #c10007;
 }
 .dark {
   --review-validated: #4ade80;
+  --review-validated-soft: #4ade8024;
   --review-attention: #fbbf24;
+  --review-attention-soft: #fbbf241f;
   --review-question: #a78bfa;
+  --review-question-soft: #a78bfa24;
   --review-step: #5c80ff12;
   --diff-added-bg: #4ade8012;
+  --diff-added-gutter: #4ade8029;
+  --diff-added-fg: #86efac;
   --diff-removed-bg: #ff646712;
+  --diff-removed-gutter: #ff646729;
+  --diff-removed-fg: #fca5a5;
 }
+
+/* Floating bars keep 80% of their surface and blur what scrolls beneath. */
+@utility glass-bar {
+  background-color: color-mix(in oklab, var(--card) 80%, transparent);
+  backdrop-filter: blur(14px);
+}
+@utility glass-popover {
+  background-color: color-mix(in oklab, var(--popover) 70%, transparent);
+  backdrop-filter: blur(40px);
+}
+
+/* Monaco decorations for the current reading step. */
 .review-passage {
   background: var(--review-step);
-  border-left: 2px solid var(--primary);
+}
+.review-passage-margin {
+  background: var(--review-step);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 .review-validated {
   border-left: 2px solid var(--review-validated);
