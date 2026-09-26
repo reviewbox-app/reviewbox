@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
 import type {
   ProjectSettings,
@@ -62,18 +63,17 @@ export function ProjectSettingsPanel() {
     setSaved(false)
   }
   return (
-    <section className="min-h-0 space-y-5 overflow-auto text-sm">
+    <section className="max-w-xl space-y-5 text-sm">
       <div>
-        <h2 className="text-lg font-medium">Project settings</h2>
-        <p className="mt-2 text-muted-foreground">
+        <p className="text-muted-foreground">
           Saved in .reviewbox and shared through Git. Executables and
           permissions remain in Application settings.
         </p>
       </div>
       <Label htmlFor="settings-project">Project</Label>
-      <select
+      <NativeSelect
         id="settings-project"
-        className="h-9 w-full rounded-md border bg-background px-3"
+        className="w-full"
         value={repositoryId}
         onChange={(e) => {
           setSettings(null)
@@ -81,14 +81,16 @@ export function ProjectSettingsPanel() {
         }}
       >
         {!repositories.length && (
-          <option value="">Open a repository first</option>
+          <NativeSelectOption value="">
+            Open a repository first
+          </NativeSelectOption>
         )}
         {repositories.map((repo) => (
-          <option key={repo.id} value={repo.id}>
+          <NativeSelectOption key={repo.id} value={repo.id}>
             {repo.name} — {repo.path}
-          </option>
+          </NativeSelectOption>
         ))}
-      </select>
+      </NativeSelect>
       {settings && (
         <form
           className="space-y-5"
@@ -119,9 +121,9 @@ export function ProjectSettingsPanel() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="project-scope">Default review scope</Label>
-            <select
+            <NativeSelect
               id="project-scope"
-              className="h-9 w-full rounded-md border bg-background px-3"
+              className="w-full"
               value={settings.defaultScope}
               onChange={(e) =>
                 update({ defaultScope: e.target.value as Scope })
@@ -129,10 +131,10 @@ export function ProjectSettingsPanel() {
             >
               {["local", "staged", "unstaged", "commit", "range"].map(
                 (scope) => (
-                  <option key={scope}>{scope}</option>
+                  <NativeSelectOption key={scope}>{scope}</NativeSelectOption>
                 )
               )}
-            </select>
+            </NativeSelect>
           </div>
           <Label>
             <Checkbox
@@ -144,17 +146,23 @@ export function ProjectSettingsPanel() {
             Include untracked files by default
           </Label>
           <div className="space-y-2">
-            <Label htmlFor="project-provider">Default agent</Label>
-            <select
+            <Label htmlFor="project-provider">
+              Rev’s harness for this project
+            </Label>
+            <NativeSelect
               id="project-provider"
-              className="h-9 w-full rounded-md border bg-background px-3"
+              className="w-full"
               value={settings.provider ?? ""}
               onChange={(e) => update({ provider: e.target.value || null })}
             >
-              <option value="">Use application default</option>
-              <option value="codex">Codex</option>
-              <option value="claude">Claude</option>
-            </select>
+              <NativeSelectOption value="">
+                Use application default
+              </NativeSelectOption>
+              <NativeSelectOption value="codex">Codex</NativeSelectOption>
+              <NativeSelectOption value="claude">
+                Claude Code
+              </NativeSelectOption>
+            </NativeSelect>
           </div>
           <div className="space-y-2">
             <Label htmlFor="project-model">Model override</Label>

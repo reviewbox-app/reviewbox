@@ -49,8 +49,9 @@ export function LanguageServerSettingsPanel() {
         </p>
       )}
       {settings?.servers.map((server) => (
-        <fieldset key={server.id} className="space-y-3 rounded-xl border p-4">
-          <legend className="px-2">{server.name}</legend>
+        <fieldset key={server.id} className="space-y-3 rounded-3xl border p-5">
+          <legend className="sr-only">{server.name}</legend>
+          <p className="font-medium">{server.name}</p>
           <Label htmlFor={`${server.id}-name`}>Name</Label>
           <Input
             id={`${server.id}-name`}
@@ -66,7 +67,7 @@ export function LanguageServerSettingsPanel() {
           <Label htmlFor={`${server.id}-args`}>Arguments (one per line)</Label>
           <textarea
             id={`${server.id}-args`}
-            className="min-h-16 w-full rounded-lg border bg-background p-2 font-mono text-xs"
+            className="min-h-16 w-full rounded-2xl bg-input/50 px-2.5 py-2 font-mono text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/30"
             value={server.arguments.join("\n")}
             onChange={(e) =>
               update(server.id, {
@@ -106,7 +107,7 @@ export function LanguageServerSettingsPanel() {
       ))}
       <div className="flex gap-2">
         <Button
-          variant="outline"
+          variant="secondary"
           disabled={!settings}
           onClick={() =>
             settings &&
