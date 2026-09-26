@@ -6,14 +6,19 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import { Button } from "@/components/ui/button"
+import { HugeiconsIcon } from "@hugeicons/react"
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
+  AlertCircleIcon,
+  Cancel01Icon,
+  InformationCircleIcon,
+  SecurityCheckIcon,
+} from "@hugeicons/core-free-icons"
+import {
+  useRevStatus,
+  harnessNames,
+} from "@/features/agents/hooks/useRevStatus"
 import { WorkspaceTitleBar } from "../components/WorkspaceTitleBar"
+import { CommandPalette } from "./CommandPalette"
 import { RepositoryHome } from "@/features/repositories/composites/RepositoryHome"
 import { NewReviewDialog } from "@/features/repositories/composites/NewReviewDialog"
 import { ReviewHistoryDialog } from "@/features/review/composites/ReviewHistoryDialog"
@@ -27,7 +32,7 @@ import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
 import { UnderstandWorkspace } from "@/features/knowledge/composites/UnderstandWorkspace"
 import { useReviewSession } from "@/features/review/hooks/useReviewSession"
 import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
-import { anchorFor } from "@/features/review/helpers/review.helpers"
+import { anchorFor, linesLabel } from "@/features/review/helpers/review.helpers"
 import {
   desktopAvailable,
   errorMessage,
@@ -37,6 +42,7 @@ import type { Topic } from "@/lib/desktop/contracts.generated"
 
 export function ReviewBoxApp() {
   const session = useReviewSession()
+  const rev = useRevStatus()
   const {
     space,
     setSpace,
@@ -46,8 +52,6 @@ export function ReviewBoxApp() {
     setSettings,
     palette,
     setPalette,
-    fileSearch,
-    setFileSearch,
     setInspector,
     setNoteKind,
     split,
@@ -62,6 +66,7 @@ export function ReviewBoxApp() {
     busy,
     action,
     next,
+    nextTopic,
     choose,
     setNewReview,
   } = session
@@ -69,11 +74,22 @@ export function ReviewBoxApp() {
     (c) => c.id === selected?.changeId
   )
   const passage = change?.passages.find((p) => p.id === selected?.passageId)
+  const stepIndex = workspace?.review.topics
+    .map((t) =>
+      t.steps.findIndex((s) =>
+        s.anchors.some((a) => a.passageId === selected?.passageId)
+      )
+    )
+    .find((i) => i >= 0)
+  const stepLabel =
+    passage && stepIndex !== undefined
+      ? `Step ${stepIndex + 1} · ${linesLabel(passage)}`
+      : undefined
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement
+      const target = event.target instanceof HTMLElement ? event.target : null
       const typing =
-        target?.isContentEditable ||
+        !!target?.isContentEditable ||
         !!target?.closest("input,textarea,select,[role=combobox]")
       if (event.isComposing) return
       const meta = event.metaKey || event.ctrlKey
@@ -112,6 +128,8 @@ export function ReviewBoxApp() {
       } else if (!typing && !meta && space === "review") {
         if (event.key === "j") next(1)
         if (event.key === "k") next(-1)
+        if (event.key === "]") nextTopic(1)
+        if (event.key === "[") nextTopic(-1)
         if (event.key === "v" && selected)
           void action({ kind: "validate", anchor: selected })
         if (event.key === "n" || event.key === "q") {
@@ -121,8 +139,9 @@ export function ReviewBoxApp() {
         if (event.key === "Escape") setCoverage(false)
       }
     }
-    window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
+    // Capture phase: Monaco claims ⌘K as a chord prefix once the code has focus.
+    window.addEventListener("keydown", handler, true)
+    return () => window.removeEventListener("keydown", handler, true)
   }, [
     choose,
     repository,
@@ -142,6 +161,7 @@ export function ReviewBoxApp() {
     topic,
     session.newReview,
     space,
+    nextTopic,
   ])
   const { open: openRepository, setError: reportError } = session
   useEffect(() => {
@@ -167,37 +187,53 @@ export function ReviewBoxApp() {
   }, [openRepository, reportError])
   return (
     <div className="flex h-svh min-h-[500px] flex-col overflow-hidden bg-background text-foreground">
-      <WorkspaceTitleBar repository={repository} onHome={session.home} />
+      <WorkspaceTitleBar
+        repository={repository}
+        rev={rev}
+        onHome={session.home}
+      />
       {session.error && (
         <div
           role="alert"
-          className="mx-3 mb-2 flex items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"
+          className="mx-2 mb-2 flex items-center gap-2.5 rounded-2xl bg-destructive/10 py-2 pr-2 pl-3 text-sm text-destructive"
         >
+          <HugeiconsIcon
+            icon={AlertCircleIcon}
+            size={16}
+            className="shrink-0"
+          />
           <span className="flex-1">{session.error}</span>
           <Button
             variant="ghost"
-            size="xs"
+            size="icon-xs"
+            aria-label="Dismiss"
             onClick={() => session.setError("")}
           >
-            Dismiss
+            <HugeiconsIcon icon={Cancel01Icon} size={14} />
           </Button>
         </div>
       )}
       {session.changed && workspace && (
         <div
           role="status"
-          className="mx-3 mb-2 flex items-center gap-3 rounded-xl border border-review-attention/30 px-4 py-2 text-xs"
+          className="mx-2 mb-2 flex items-center gap-2.5 rounded-2xl bg-review-attention-soft py-1.5 pr-1.5 pl-3 text-sm"
         >
+          <HugeiconsIcon
+            icon={InformationCircleIcon}
+            size={16}
+            className="shrink-0 text-review-attention"
+          />
           <span className="flex-1">
-            The repository changed. You are still reading your frozen snapshot.
+            The repository changed outside ReviewBox. Your snapshot is
+            untouched.
           </span>
           <Button
-            variant="outline"
-            size="xs"
+            variant="secondary"
+            size="sm"
             disabled={busy}
             onClick={() => void session.refresh()}
           >
-            Capture a new version
+            Refresh snapshot
           </Button>
         </div>
       )}
@@ -255,7 +291,7 @@ export function ReviewBoxApp() {
                 .catch((e) => session.setError(errorMessage(e)))
             }
           />
-          <main className="flex min-w-0 flex-1 overflow-hidden rounded-[14px] border bg-card">
+          <main className="flex min-w-0 flex-1 overflow-hidden rounded-panel border bg-card">
             <ResizablePanelGroup orientation="horizontal">
               <ResizablePanel
                 id="code"
@@ -265,6 +301,7 @@ export function ReviewBoxApp() {
                 {coverage ? (
                   <CoveragePanel
                     workspace={workspace}
+                    coverage={session.coverage}
                     onSelect={session.select}
                     onClose={() => setCoverage(false)}
                   />
@@ -274,6 +311,7 @@ export function ReviewBoxApp() {
                     snapshot={workspace.snapshot}
                     change={change}
                     passage={passage}
+                    stepLabel={stepLabel}
                     position={workspace.review.position}
                     onPosition={(position) =>
                       void action({ kind: "savePosition", position })
@@ -292,7 +330,7 @@ export function ReviewBoxApp() {
                         : "Choose a different scope or use Understand to explore the captured source files."}
                     </p>
                     <Button
-                      variant="outline"
+                      variant="secondary"
                       onClick={() => setNewReview(true)}
                     >
                       Choose changes
@@ -302,7 +340,7 @@ export function ReviewBoxApp() {
               </ResizablePanel>
               {!coverage && (
                 <>
-                  <ResizableHandle withHandle />
+                  <ResizableHandle />
                   <ResizablePanel
                     id="inspector"
                     defaultSize="384px"
@@ -341,9 +379,24 @@ export function ReviewBoxApp() {
         </div>
       )}
       {!repository && (
-        <footer className="flex h-10 shrink-0 items-center justify-between border-t px-5 text-xs text-muted-foreground">
-          <span>Local only · no account · reviews are stored on this Mac</span>
-          <span>ReviewBox</span>
+        <footer className="flex h-10 shrink-0 items-center justify-between gap-4 border-t px-5 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <HugeiconsIcon icon={SecurityCheckIcon} size={14} />
+            Local only · no account · reviews are stored on this Mac
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className={
+                rev.state === "ready"
+                  ? "size-1.5 rounded-full bg-review-validated"
+                  : "size-1.5 rounded-full bg-review-attention"
+              }
+            />
+            {rev.harness
+              ? `Rev · ${harnessNames[rev.harness.provider] ?? rev.harness.provider}${rev.harness.version ? ` ${rev.harness.version}` : ""} · ${rev.harness.available ? "available" : "not found"}`
+              : "Rev · harness unknown"}
+          </span>
         </footer>
       )}
       {repository && (
@@ -381,43 +434,43 @@ export function ReviewBoxApp() {
         />
       )}
       <SettingsDialog open={settings} onClose={() => setSettings(false)} />
-      <Dialog open={palette} onOpenChange={setPalette}>
-        <DialogContent>
-          <DialogTitle>Find a changed file</DialogTitle>
-          <DialogDescription>
-            Open a passage in the current frozen snapshot.
-          </DialogDescription>
-          <Input
-            autoFocus
-            aria-label="Search changed files"
-            value={fileSearch}
-            onChange={(e) => setFileSearch(e.target.value)}
-            placeholder="Search files…"
-          />
-          <div className="max-h-80 overflow-auto">
-            {workspace?.snapshot.changes
-              .filter((c) =>
-                c.path.toLowerCase().includes(fileSearch.toLowerCase())
-              )
-              .map((c) => (
-                <Button
-                  key={c.id}
-                  variant="ghost"
-                  className="w-full justify-start font-mono text-xs"
-                  onClick={() => {
-                    session.select(
-                      anchorFor(workspace.snapshot, c.id, c.passages[0])
-                    )
-                    setSpace("review")
-                    setPalette(false)
-                  }}
-                >
-                  {c.path} · {c.layer}
-                </Button>
-              ))}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <CommandPalette
+        open={palette}
+        onOpenChange={setPalette}
+        workspace={workspace}
+        actions={{
+          step: next,
+          validate: () =>
+            selected && void action({ kind: "validate", anchor: selected }),
+          comment: (kind) => {
+            setSpace("review")
+            setNoteKind(kind)
+            setInspector("notes")
+          },
+          openChange: (changeId) => {
+            const target = workspace?.snapshot.changes.find(
+              (c) => c.id === changeId
+            )
+            if (!workspace || !target) return
+            session.select(
+              anchorFor(workspace.snapshot, target.id, target.passages[0])
+            )
+            setSpace("review")
+          },
+          space: setSpace,
+          coverage: () => {
+            setSpace("review")
+            setCoverage(true)
+          },
+          askRev: () => {
+            setSpace("review")
+            setInspector("ask")
+          },
+          newReview: () => repository && setNewReview(true),
+          openRepository: () => void choose(),
+          settings: () => setSettings(true),
+        }}
+      />
     </div>
   )
 }
