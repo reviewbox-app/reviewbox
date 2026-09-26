@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "reviewbox" },
+    "projectId": { "type": "string" },
+    "version": { "const": 1 }
+  },
+  "required": ["format", "version", "projectId"],
+  "title": "Manifest",
+  "type": "object"
+}

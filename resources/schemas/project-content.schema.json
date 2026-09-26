@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseOid": { "type": ["string", "null"] },
+    "gitOid": { "type": ["string", "null"] },
+    "hash": { "type": "string" },
+    "hex": { "type": ["string", "null"] },
+    "prefix": { "format": "uint", "minimum": 0, "type": "integer" },
+    "size": { "format": "uint32", "minimum": 0, "type": "integer" },
+    "suffix": { "format": "uint", "minimum": 0, "type": "integer" },
+    "text": { "type": ["string", "null"] },
+    "version": { "const": 1 }
+  },
+  "required": ["version", "hash", "size", "prefix", "suffix"],
+  "title": "PortableContent",
+  "type": "object"
+}
