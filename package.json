@@ -16,8 +16,18 @@
     "format:check": "bun --bun prettier --check .",
     "typecheck": "bun --bun next typegen && bun --bun tsc --noEmit",
     "rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings",
-    "check": "bun run typecheck && bun run lint && bun run format:check && bun run rust:check",
-    "tauri": "bun --bun node_modules/@tauri-apps/cli/tauri.js"
+    "check": "bun run contracts:check && bun run schemas:check && bun run typecheck && bun run lint && bun run format:check && bun run rust:check",
+    "tauri": "bun --bun node_modules/@tauri-apps/cli/tauri.js",
+    "contracts:generate": "bun scripts/export-contracts.ts",
+    "contracts:check": "bun scripts/export-contracts.ts --check",
+    "test": "bun test src/features",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked --lib",
+    "test:web": "bun --bun playwright test",
+    "test:native": "bun scripts/test-native.ts",
+    "build:native-validation": "bun run tauri build --debug --no-bundle --features native-validation",
+    "schemas:generate": "bun scripts/export-project-schemas.ts",
+    "schemas:check": "bun scripts/export-project-schemas.ts --check",
+    "test:project-cli": "bun scripts/test-project-cli.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -53,6 +63,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@tauri-apps/cli": "^2.11.5",
     "@types/bun": "^1.4.2",
