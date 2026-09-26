@@ -53,7 +53,7 @@ export function GlossaryEditor({
                 ))}
               </ol>
               <Button
-                variant="outline"
+                variant="secondary"
                 size="xs"
                 onClick={() => {
                   setSenseTerm(term.id)

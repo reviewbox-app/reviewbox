@@ -1,5 +1,6 @@
 "use client"
 import { useState } from "react"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import {
   Dialog,
   DialogContent,
@@ -95,23 +96,23 @@ export function OccurrenceDialog({
         <Label htmlFor="occurrence-sense">
           Or explicitly link an existing meaning
         </Label>
-        <select
+        <NativeSelect
           id="occurrence-sense"
           value={sense}
           onChange={(e) => setSense(e.target.value)}
-          className="h-9 rounded-lg border bg-background px-2 text-sm"
+          className="w-full"
         >
-          <option value="">No linked meaning</option>
+          <NativeSelectOption value="">No linked meaning</NativeSelectOption>
           {terms
             .filter((t) => !t.archived)
             .flatMap((term) =>
               term.senses.map((s) => (
-                <option key={s.id} value={s.id}>
+                <NativeSelectOption key={s.id} value={s.id}>
                   {term.term} — {s.description}
-                </option>
+                </NativeSelectOption>
               ))
             )}
-        </select>
+        </NativeSelect>
         <DialogFooter>
           <Button
             disabled={location === null || (!description.trim() && !selected)}
