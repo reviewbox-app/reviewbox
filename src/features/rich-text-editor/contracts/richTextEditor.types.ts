@@ -8,4 +8,9 @@ export interface RichTextEditorProps {
   editable?: boolean
   className?: string
   ariaLabel?: string
+  placeholder?: string
+  /** `field` draws its own input frame; `plain` inherits the surrounding surface. */
+  variant?: "field" | "plain"
+  /** Submit shortcut (⌘↵ / Ctrl+↵) from inside the editor. */
+  onSubmit?: () => void
 }
