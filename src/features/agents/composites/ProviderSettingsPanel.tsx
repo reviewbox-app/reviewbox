@@ -2,7 +2,9 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import { SettingRow } from "@/features/settings/components/SettingRow"
+import { harnessNames } from "../hooks/useRevStatus"
 import type { ProviderSettings } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { agentCommands } from "../services/agent.commands"
@@ -26,7 +28,7 @@ export function ProviderSettingsPanel({ onSaved }: { onSaved: () => void }) {
   }, [])
   return (
     <form
-      className="space-y-4 border-t pt-5"
+      className="rounded-3xl border px-5"
       onSubmit={(e) => {
         e.preventDefault()
         if (!settings) return
@@ -44,66 +46,80 @@ export function ProviderSettingsPanel({ onSaved }: { onSaved: () => void }) {
     >
       {settings && (
         <>
-          <Label htmlFor="default-provider">Default harness</Label>
-          <select
-            id="default-provider"
-            className="w-full rounded-lg border bg-background p-2"
-            value={settings.defaultProvider}
-            onChange={(e) =>
-              setSettings({ ...settings, defaultProvider: e.target.value })
-            }
+          <SettingRow
+            title="Rev’s harness"
+            description="Used by Rev for suggestions, questions and explanations."
           >
-            <option value="codex">Codex</option>
-            <option value="claude">Claude Code</option>
-          </select>
-          {settings.providers.map((provider) => (
-            <fieldset
-              key={provider.provider}
-              className="space-y-3 rounded-xl border p-3"
+            <NativeSelect
+              id="default-provider"
+              aria-label="Rev’s harness"
+              className="w-44"
+              value={settings.defaultProvider}
+              onChange={(e) =>
+                setSettings({ ...settings, defaultProvider: e.target.value })
+              }
             >
-              <legend className="px-2">{provider.provider}</legend>
-              <Label htmlFor={`executable-${provider.provider}`}>
-                CLI executable
-              </Label>
-              <Input
-                id={`executable-${provider.provider}`}
-                value={provider.executable}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    providers: settings.providers.map((p) =>
-                      p.provider === provider.provider
-                        ? { ...p, executable: e.target.value }
-                        : p
-                    ),
-                  })
-                }
-              />
-              <Label htmlFor={`model-${provider.provider}`}>
-                Model override (optional)
-              </Label>
-              <Input
-                id={`model-${provider.provider}`}
-                value={provider.model ?? ""}
-                placeholder="Use the harness default"
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    providers: settings.providers.map((p) =>
-                      p.provider === provider.provider
-                        ? { ...p, model: e.target.value || null }
-                        : p
-                    ),
-                  })
-                }
-              />
-            </fieldset>
+              {Object.entries(harnessNames).map(([value, name]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </SettingRow>
+          {settings.providers.map((provider) => (
+            <SettingRow
+              key={provider.provider}
+              title={`${harnessNames[provider.provider] ?? provider.provider} executable and model`}
+              description="The model stays the harness default unless you override it."
+            >
+              <div className="flex w-72 flex-col gap-2">
+                <Input
+                  id={`executable-${provider.provider}`}
+                  aria-label={`${provider.provider} executable`}
+                  className="font-mono text-xs"
+                  value={provider.executable}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      providers: settings.providers.map((p) =>
+                        p.provider === provider.provider
+                          ? { ...p, executable: e.target.value }
+                          : p
+                      ),
+                    })
+                  }
+                />
+                <Input
+                  id={`model-${provider.provider}`}
+                  aria-label={`${provider.provider} model override`}
+                  value={provider.model ?? ""}
+                  placeholder="Harness default model"
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      providers: settings.providers.map((p) =>
+                        p.provider === provider.provider
+                          ? { ...p, model: e.target.value || null }
+                          : p
+                      ),
+                    })
+                  }
+                />
+              </div>
+            </SettingRow>
           ))}
-          <Button disabled={busy}>Save and detect again</Button>
+          <div className="flex items-center justify-end gap-3 py-4">
+            {error && (
+              <p role="alert" className="flex-1 text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <Button disabled={busy}>Save and detect again</Button>
+          </div>
         </>
       )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
+      {!settings && error && (
+        <p role="alert" className="py-4 text-sm text-destructive">
           {error}
         </p>
       )}

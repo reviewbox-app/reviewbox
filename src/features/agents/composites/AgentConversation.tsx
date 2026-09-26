@@ -1,42 +1,98 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  AiMagicIcon,
+  ArrowRight01Icon,
+  Cancel01Icon,
+  Copy01Icon,
+  GitCommitIcon,
+  NoteEditIcon,
+  SecurityCheckIcon,
+  SentIcon,
+  StopIcon,
+  ViewIcon,
+} from "@hugeicons/core-free-icons"
 import {
   Dialog,
   DialogContent,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
-import { ProposalDialog } from "./ProposalDialog"
-import { agentCommands } from "../services/agent.commands"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import { Kbd } from "@/components/ui/kbd"
 import { Label } from "@/components/ui/label"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import { Spinner } from "@/components/ui/spinner"
+import { Textarea } from "@/components/ui/textarea"
 import type {
+  AgentEvent,
   AgentRequest,
   Snapshot,
   AgentRun,
+  PromptPreview,
   Proposal,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
+import { cn } from "@/lib/utils"
+import { ProposalDialog } from "./ProposalDialog"
+import { agentCommands } from "../services/agent.commands"
+import { harnessNames } from "../hooks/useRevStatus"
+
+const actionLabels: Record<string, string> = {
+  ask: "Ask a question",
+  topics: "Suggest review topics",
+  file: "Explain this file",
+  block: "Explain a block",
+  glossary: "Suggest project definitions",
+  refresh: "Refresh the explanation",
+}
+
+function RevHeader({ time }: { time?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <Avatar size="sm">
+        <AvatarFallback>
+          <HugeiconsIcon icon={AiMagicIcon} size={12} />
+        </AvatarFallback>
+      </Avatar>
+      <span className="text-sm font-medium">Rev</span>
+      <Badge variant="secondary">Suggestion</Badge>
+      {time && <span className="text-xs text-muted-foreground">{time}</span>}
+    </div>
+  )
+}
+
+/** Ask Rev: explicit context, streamed answer, and a composer. Answers stay suggestions. */
 export function AgentConversation({
   reviewId,
   snapshot,
   initialPath,
+  contextLabel,
   onSave,
   actions = ["ask", "topics"],
   onApplied,
+  className,
 }: {
   reviewId: string
   snapshot: Snapshot
   initialPath?: string
+  /** Current reading position shown in the context, e.g. "Step 2 · validation.rs · 18–34". */
+  contextLabel?: string
   onSave?: (run: AgentRun) => void
   actions?: string[]
   onApplied?: () => void
+  className?: string
 }) {
-  const [preview, setPreview] = useState<
-    import("@/lib/desktop/contracts.generated").PromptPreview | null
-  >(null)
+  const [preview, setPreview] = useState<PromptPreview | null>(null)
   const [error, setError] = useState("")
   const [provider, setProvider] = useState("codex")
   const [action, setAction] = useState(actions[0])
@@ -44,6 +100,7 @@ export function AgentConversation({
   const [history, setHistory] = useState<AgentRun[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [proposal, setProposal] = useState<Proposal | null>(null)
+  const [choosing, setChoosing] = useState(false)
   useEffect(() => {
     let alive = true
     void Promise.all([
@@ -74,6 +131,7 @@ export function AgentConversation({
     }
   }, [reviewId, snapshot.repositoryId])
   const [question, setQuestion] = useState("")
+  const [asked, setAsked] = useState("")
   const [paths, setPaths] = useState<string[]>(initialPath ? [initialPath] : [])
   const [output, setOutput] = useState("")
   const [status, setStatus] = useState("")
@@ -88,8 +146,24 @@ export function AgentConversation({
     },
     [reviewId, snapshot.id]
   )
+  const stop = () => {
+    if (running.current)
+      void agentCommands
+        .cancel(running.current)
+        .catch((e) => setError(errorMessage(e)))
+  }
+  const request = (id: string): AgentRequest => ({
+    id,
+    reviewId,
+    provider,
+    action,
+    request: question,
+    paths,
+  })
+  const canSend =
+    !active && (action !== "ask" || !!question.trim()) && paths.length > 0
   const start = async () => {
-    if (running.current) return
+    if (running.current || !canSend) return
     const id = crypto.randomUUID()
     running.current = id
     sequence.current = 0
@@ -97,26 +171,18 @@ export function AgentConversation({
     setError("")
     setOutput("")
     setCompleted(null)
+    setAsked(action === "ask" ? question : (actionLabels[action] ?? action))
+    setQuestion("")
     setStatus("Connecting…")
-    const onEvent = (
-      event: import("@/lib/desktop/contracts.generated").AgentEvent
-    ) => {
+    const onEvent = (event: AgentEvent) => {
       if (running.current !== event.runId || event.sequence <= sequence.current)
         return
       sequence.current = event.sequence
       if (event.kind === "delta") setOutput((text) => text + event.text)
       else setStatus(event.text || event.kind)
     }
-    const request: AgentRequest = {
-      id,
-      reviewId,
-      provider,
-      action,
-      request: question,
-      paths,
-    }
     try {
-      const run = await agentCommands.start(request, onEvent)
+      const run = await agentCommands.start(request(id), onEvent)
       if (running.current === id) {
         setCompleted(run)
         setHistory((items) => [run, ...items])
@@ -135,100 +201,303 @@ export function AgentConversation({
       }
     }
   }
+  const files = [
+    ...new Set([
+      ...snapshot.changes.map((c) => c.path),
+      ...snapshot.files.map((f) => f.path),
+    ]),
+  ]
+  const pending = proposals.filter((p) => p.status === "pending")
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex gap-2">
-        {["codex", "claude"].map((value) => (
-          <Button
-            key={value}
-            variant={provider === value ? "secondary" : "ghost"}
-            size="sm"
-            disabled={active}
-            onClick={() => setProvider(value)}
-          >
-            {value === "codex" ? "Codex" : "Claude Code"}
-          </Button>
-        ))}
-      </div>
-      {actions.length > 1 && (
-        <label className="space-y-2 text-xs">
-          Action
-          <select
-            aria-label="Agent action"
-            value={action}
-            disabled={active}
-            onChange={(e) => setAction(e.target.value)}
-            className="block w-full rounded-lg border bg-background p-2"
-          >
-            {actions.map((value) => (
-              <option key={value} value={value}>
-                {{
-                  ask: "Ask a question",
-                  topics: "Propose review topics",
-                  file: "Explain this file",
-                  block: "Explain a block",
-                  glossary: "Propose project definitions",
-                  refresh: "Refresh the explanation",
-                }[value] ?? value}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <details className="rounded-xl border p-3 text-xs" open>
-        <summary className="cursor-pointer font-medium">
-          Context · {paths.length} files · snapshot {snapshot.id.slice(0, 6)}
-        </summary>
-        <p className="my-3 text-muted-foreground">
-          Only the selected frozen file contents are sent. Environment files and
-          private-key files are excluded.
-        </p>
-        <div className="max-h-36 space-y-2 overflow-auto">
-          {[
-            ...new Set([
-              ...snapshot.files.map((f) => f.path),
-              ...snapshot.changes.map((c) => c.path),
-            ]),
-          ]
-            .map((path) => ({ path }))
-            .map((file) => (
-              <Label key={file.path} className="text-xs">
-                <Checkbox
-                  disabled={active}
-                  checked={paths.includes(file.path)}
-                  onCheckedChange={(checked) =>
-                    setPaths(
-                      checked
-                        ? [...paths, file.path]
-                        : paths.filter((path) => path !== file.path)
-                    )
-                  }
-                />
-                <span className="truncate">{file.path}</span>
-              </Label>
-            ))}
-        </div>
-      </details>
-      <Button
-        size="xs"
-        variant="ghost"
-        disabled={active || !paths.length}
-        onClick={() =>
-          void agentCommands
-            .preview({
-              id: crypto.randomUUID(),
-              reviewId,
-              provider,
-              action,
-              request: question,
-              paths,
-            })
-            .then(setPreview)
-            .catch((e) => setError(errorMessage(e)))
+    <div
+      className={cn("relative flex flex-col", className)}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && active) {
+          e.stopPropagation()
+          stop()
         }
-      >
-        Preview the exact prompt and context
-      </Button>
+      }}
+    >
+      <div className="min-h-0 flex-1 space-y-5 overflow-auto px-5 pt-5 pb-44">
+        <section className="space-y-2.5 rounded-2xl bg-muted/60 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-medium">Context sent to Rev</h3>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="-my-1 text-muted-foreground"
+              disabled={active || !paths.length}
+              onClick={() =>
+                void agentCommands
+                  .preview(request(crypto.randomUUID()))
+                  .then(setPreview)
+                  .catch((e) => setError(errorMessage(e)))
+              }
+            >
+              <HugeiconsIcon icon={ViewIcon} />
+              Preview
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {contextLabel && <Badge variant="secondary">{contextLabel}</Badge>}
+            {paths.map((path) => (
+              <Badge key={path} variant="secondary" title={path}>
+                {path.split("/").at(-1)}
+                <button
+                  type="button"
+                  aria-label={`Remove ${path} from context`}
+                  disabled={active}
+                  className="-mr-0.5 rounded-full text-muted-foreground hover:text-foreground"
+                  onClick={() => setPaths(paths.filter((p) => p !== path))}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={10} />
+                </button>
+              </Badge>
+            ))}
+            <Badge variant="secondary">
+              <HugeiconsIcon icon={GitCommitIcon} />
+              snapshot {snapshot.id.slice(0, 6)}
+            </Badge>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-5 px-2"
+              disabled={active}
+              onClick={() => setChoosing(!choosing)}
+            >
+              {choosing ? "Done" : "Add files…"}
+            </Button>
+          </div>
+          {choosing && (
+            <div className="max-h-36 space-y-1.5 overflow-auto rounded-xl bg-background/60 p-2">
+              {files.map((path) => (
+                <Label key={path} className="text-xs font-normal">
+                  <Checkbox
+                    disabled={active}
+                    checked={paths.includes(path)}
+                    onCheckedChange={(checked) =>
+                      setPaths(
+                        checked
+                          ? [...paths, path]
+                          : paths.filter((p) => p !== path)
+                      )
+                    }
+                  />
+                  <span className="truncate font-mono">{path}</span>
+                </Label>
+              ))}
+            </div>
+          )}
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <HugeiconsIcon icon={SecurityCheckIcon} size={12} />
+            Only frozen file contents are sent. Excluded: .env, private keys.
+          </p>
+        </section>
+        {asked && (
+          <article className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Avatar size="sm">
+                <AvatarFallback className="text-[10px]">RV</AvatarFallback>
+              </Avatar>
+              <span className="text-sm font-medium">You</span>
+            </div>
+            <p className="pl-8 text-sm leading-6 whitespace-pre-wrap">
+              {asked}
+            </p>
+          </article>
+        )}
+        {(output || active) && (
+          <article className="space-y-1">
+            <RevHeader />
+            <div className="space-y-3 pl-8">
+              {output && (
+                <p className="text-sm leading-6 whitespace-pre-wrap">
+                  {output}
+                </p>
+              )}
+              {active && (
+                <p
+                  role="status"
+                  className="flex items-center gap-2 text-xs text-muted-foreground"
+                >
+                  <Spinner className="size-3.5" />
+                  {status}
+                  <Kbd>Esc</Kbd>
+                </p>
+              )}
+              {completed && !active && (
+                <div className="flex flex-wrap gap-1">
+                  {onSave && completed.action === "ask" && (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      disabled={completed.snapshotId !== snapshot.id}
+                      onClick={() => onSave(completed)}
+                    >
+                      <HugeiconsIcon icon={NoteEditIcon} />
+                      Keep as note
+                    </Button>
+                  )}
+                  {completed.action !== "ask" && (
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      disabled={completed.snapshotId !== snapshot.id}
+                      onClick={() =>
+                        void agentCommands
+                          .proposal(completed.id)
+                          .then(setProposal)
+                          .catch((e) => setError(errorMessage(e)))
+                      }
+                    >
+                      Review proposal
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => void navigator.clipboard?.writeText(output)}
+                  >
+                    <HugeiconsIcon icon={Copy01Icon} />
+                    Copy
+                  </Button>
+                </div>
+              )}
+            </div>
+          </article>
+        )}
+        {!asked && !output && !active && (
+          <p className="text-sm leading-6 text-muted-foreground">
+            Ask Rev about the code in context. Rev explains and suggests; it
+            never validates a passage or resolves a question.
+          </p>
+        )}
+        {error && (
+          <p
+            role="alert"
+            className="rounded-2xl bg-destructive/10 p-3 text-sm text-destructive"
+          >
+            {error}
+          </p>
+        )}
+        {(pending.length > 0 || history.length > 0) && (
+          <Collapsible>
+            <CollapsibleTrigger className="group/earlier flex items-center gap-1 text-xs text-muted-foreground outline-none hover:text-foreground">
+              <HugeiconsIcon
+                icon={ArrowRight01Icon}
+                size={14}
+                className="transition-transform group-data-[panel-open]/earlier:rotate-90"
+              />
+              Earlier answers and pending proposals
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-2 space-y-1">
+              {pending.map((p) => (
+                <Button
+                  key={p.id}
+                  className="w-full justify-start"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setProposal(p)}
+                >
+                  Proposal · {p.content.kind} ·{" "}
+                  {p.snapshotId === snapshot.id ? "pending" : "older snapshot"}
+                </Button>
+              ))}
+              {history.map((run) => (
+                <Button
+                  key={run.id}
+                  className="w-full justify-start"
+                  variant="ghost"
+                  size="sm"
+                  disabled={active}
+                  onClick={() => {
+                    setCompleted(run.status === "completed" ? run : null)
+                    setAsked(actionLabels[run.action] ?? run.action)
+                    setOutput(run.output)
+                    setStatus(run.status)
+                    setError("")
+                  }}
+                >
+                  {actionLabels[run.action] ?? run.action} ·{" "}
+                  {harnessNames[run.provider] ?? run.provider} · {run.status}
+                </Button>
+              ))}
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+      </div>
+      <footer className="absolute inset-x-0 bottom-0 border-t glass-bar p-3">
+        <div className="rounded-3xl border bg-card/60 focus-within:border-ring">
+          <Textarea
+            value={question}
+            disabled={active}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                void start()
+              }
+            }}
+            placeholder={
+              action === "ask"
+                ? "Ask Rev about this code…"
+                : "Add instructions for Rev (optional)…"
+            }
+            aria-label="Question for Rev"
+            className="max-h-40 min-h-12 bg-transparent px-3.5 pt-2.5 focus-visible:border-transparent focus-visible:ring-0"
+          />
+          <div className="flex items-center gap-2 p-2">
+            {actions.length > 1 && (
+              <NativeSelect
+                size="sm"
+                aria-label="What Rev should do"
+                value={action}
+                disabled={active}
+                onChange={(e) => setAction(e.target.value)}
+              >
+                {actions.map((value) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {actionLabels[value] ?? value}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
+            <NativeSelect
+              size="sm"
+              aria-label="Rev's harness"
+              title="Harness used by Rev for this request"
+              value={provider}
+              disabled={active}
+              onChange={(e) => setProvider(e.target.value)}
+            >
+              {Object.entries(harnessNames).map(([value, name]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <span className="flex-1" />
+            {active ? (
+              <Button variant="secondary" size="sm" onClick={stop}>
+                <HugeiconsIcon icon={StopIcon} />
+                Stop
+              </Button>
+            ) : (
+              <Button
+                size="icon-sm"
+                aria-label="Ask Rev"
+                disabled={!canSend}
+                onClick={() => void start()}
+              >
+                <HugeiconsIcon icon={SentIcon} size={14} />
+              </Button>
+            )}
+          </div>
+        </div>
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          Answers are suggestions — never validations.
+        </p>
+      </footer>
       <Dialog
         open={!!preview}
         onOpenChange={(v) => {
@@ -236,125 +505,13 @@ export function AgentConversation({
         }}
       >
         <DialogContent className="max-h-[85vh] overflow-auto sm:max-w-3xl">
-          <DialogTitle>Context sent to the provider</DialogTitle>
+          <DialogTitle>Context sent to Rev</DialogTitle>
           <DialogDescription>{preview?.sources.join(" · ")}</DialogDescription>
           <pre className="font-mono text-xs whitespace-pre-wrap">
             {preview?.text}
           </pre>
         </DialogContent>
       </Dialog>
-      <Textarea
-        value={question}
-        disabled={active}
-        onChange={(e) => setQuestion(e.target.value)}
-        placeholder="Ask about this code…"
-        aria-label="Question for agent"
-      />
-      <div className="flex gap-2">
-        <Button
-          disabled={
-            active || (action === "ask" && !question.trim()) || !paths.length
-          }
-          onClick={() => void start()}
-        >
-          Ask {provider === "codex" ? "Codex" : "Claude"}
-        </Button>
-        {active && (
-          <Button
-            variant="outline"
-            onClick={() => {
-              if (running.current)
-                void agentCommands
-                  .cancel(running.current)
-                  .catch((e) => setError(errorMessage(e)))
-            }}
-          >
-            Stop
-          </Button>
-        )}
-      </div>
-      {status && (
-        <p role="status" className="text-xs text-muted-foreground">
-          {status}
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      {output && (
-        <article className="space-y-3">
-          <p className="text-[11px] text-review-attention">
-            Agent suggestion · unverified
-          </p>
-          <p className="text-sm leading-6 whitespace-pre-wrap">{output}</p>
-          {onSave && completed?.action === "ask" && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={active || completed.snapshotId !== snapshot.id}
-              onClick={() => onSave(completed)}
-            >
-              Keep as a note
-            </Button>
-          )}
-          {completed && completed.action !== "ask" && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={active || completed.snapshotId !== snapshot.id}
-              onClick={() =>
-                void agentCommands
-                  .proposal(completed.id)
-                  .then(setProposal)
-                  .catch((e) => setError(errorMessage(e)))
-              }
-            >
-              Review proposal
-            </Button>
-          )}
-        </article>
-      )}
-      {(proposals.some((p) => p.status === "pending") ||
-        history.length > 0) && (
-        <details className="space-y-3 rounded-xl border p-3 text-xs">
-          <summary className="cursor-pointer">
-            Previous responses and pending proposals
-          </summary>
-          {proposals
-            .filter((p) => p.status === "pending")
-            .map((p) => (
-              <Button
-                key={p.id}
-                className="mt-2 w-full justify-start"
-                variant="outline"
-                size="sm"
-                onClick={() => setProposal(p)}
-              >
-                {p.content.kind} ·{" "}
-                {p.snapshotId === snapshot.id ? "Pending" : "Older snapshot"}
-              </Button>
-            ))}
-          {history.map((run) => (
-            <Button
-              key={run.id}
-              className="mt-2 w-full justify-start"
-              variant="ghost"
-              size="sm"
-              disabled={active}
-              onClick={() => {
-                setCompleted(run.status === "completed" ? run : null)
-                setOutput(run.output)
-                setStatus(run.status)
-                setError("")
-              }}
-            >
-              {run.provider} · {run.action} · {run.status}
-            </Button>
-          ))}
-        </details>
-      )}
       {proposal && (
         <ProposalDialog
           key={proposal.id}

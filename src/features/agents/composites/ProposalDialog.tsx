@@ -280,7 +280,7 @@ export function ProposalDialog({
             Keep pending
           </Button>
           <Button
-            variant="outline"
+            variant="secondary"
             disabled={busy}
             onClick={() => void answer(false)}
           >
