@@ -2,9 +2,27 @@
 import { useEffect, useRef, useState } from "react"
 import { useTheme } from "next-themes"
 import type { editor } from "monaco-editor"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  FileEditIcon,
+  MoreHorizontalIcon,
+  Search01Icon,
+  Target02Icon,
+  ViewIcon,
+} from "@hugeicons/core-free-icons"
 import { CodeDiffEditor } from "@/features/code-editor/components/CodeDiffEditor"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { reviewboxTheme } from "@/lib/monaco/reviewboxThemes"
 import type {
   Change,
   Passage,
@@ -13,25 +31,58 @@ import type {
   ReadingPosition,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
-import { languageFor } from "../helpers/review.helpers"
+import {
+  fileName,
+  folderOf,
+  languageFor,
+  languageName,
+} from "../helpers/review.helpers"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
+
+function passageDecoration(passage: Passage): editor.IModelDeltaDecoration {
+  const start = passage.newLines ? passage.newStart : passage.oldStart
+  return {
+    range: {
+      startLineNumber: start,
+      endLineNumber:
+        start + Math.max(passage.newLines || passage.oldLines, 1) - 1,
+      startColumn: 1,
+      endColumn: 1,
+    },
+    options: {
+      isWholeLine: true,
+      className: "review-passage",
+      marginClassName: "review-passage-margin",
+    },
+  }
+}
 
 export function ReviewCodePane({
   snapshot,
   change,
   passage,
+  stepLabel,
   position,
   onPosition,
 }: {
   snapshot: Snapshot
   change: Change
   passage?: Passage
+  /** "Step 2 · lines 18–34" when the passage belongs to the reading path. */
+  stepLabel?: string
   position: ReadingPosition
   onPosition: (position: ReadingPosition) => void
 }) {
   const [trimWhitespace, setTrimWhitespace] = useState(false)
   const [content, setContent] = useState<FileContent | null>(null)
   const [error, setError] = useState("")
+  const [counts, setCounts] = useState<{
+    added: number
+    removed: number
+  } | null>(null)
+  const [cursor, setCursor] = useState<{ line: number; column: number } | null>(
+    null
+  )
   const { resolvedTheme } = useTheme()
   const { split, setSplit } = useReviewWorkspaceStore()
   const instance = useRef<editor.IStandaloneDiffEditor | null>(null)
@@ -70,19 +121,7 @@ export function ReviewCodePane({
     marks.current?.before.clear()
     marks.current?.after.clear()
     const side = passage.newLines ? marks.current?.after : marks.current?.before
-    const start = passage.newLines ? passage.newStart : passage.oldStart
-    side?.set([
-      {
-        range: {
-          startLineNumber: start,
-          endLineNumber:
-            start + Math.max(passage.newLines || passage.oldLines, 1) - 1,
-          startColumn: 1,
-          endColumn: 1,
-        },
-        options: { isWholeLine: true, className: "review-passage" },
-      },
-    ])
+    side?.set([passageDecoration(passage)])
     const target = passage.newLines
       ? instance.current.getModifiedEditor()
       : instance.current.getOriginalEditor()
@@ -90,51 +129,105 @@ export function ReviewCodePane({
       passage.newLines ? passage.newStart : passage.oldStart
     )
   }, [passage])
+  const folder = folderOf(change.path)
   return (
     <section
-      className="flex min-w-0 flex-1 flex-col overflow-hidden"
+      className="relative flex min-w-0 flex-1 flex-col overflow-hidden"
       aria-label="Code diff"
     >
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b pr-3 pl-4">
+        <HugeiconsIcon
+          icon={FileEditIcon}
+          size={16}
+          className="shrink-0 text-muted-foreground"
+        />
         <span
-          className="min-w-0 flex-1 truncate font-mono text-xs"
-          title={change.path}
+          className="min-w-0 truncate text-sm"
+          title={
+            change.previousPath
+              ? `${change.previousPath} → ${change.path}`
+              : change.path
+          }
         >
-          {change.path}
+          {folder && <span className="text-muted-foreground">{folder}/</span>}
+          <span className="font-medium">{fileName(change.path)}</span>
         </span>
+        {counts && (
+          <span className="flex shrink-0 gap-1.5 text-xs font-medium tabular-nums">
+            {counts.added > 0 && (
+              <span className="text-diff-added">+{counts.added}</span>
+            )}
+            {counts.removed > 0 && (
+              <span className="text-diff-removed">−{counts.removed}</span>
+            )}
+          </span>
+        )}
         {change.previousPath && (
           <Badge
-            variant="outline"
-            title={`Exact content moved from ${change.previousPath}`}
+            variant="secondary"
+            title={`Moved from ${change.previousPath}`}
           >
             Moved
           </Badge>
         )}
-        <Badge variant="secondary">{change.layer}</Badge>
-        <Button
-          size="xs"
-          variant={trimWhitespace ? "secondary" : "ghost"}
-          onClick={() => setTrimWhitespace(!trimWhitespace)}
-          title="Changes remain in coverage even when whitespace is hidden"
+        {stepLabel && (
+          <Badge variant="secondary" className="shrink-0">
+            <HugeiconsIcon icon={Target02Icon} />
+            {stepLabel}
+          </Badge>
+        )}
+        <span className="flex-1" />
+        <Tabs
+          value={split ? "split" : "unified"}
+          onValueChange={(value) => setSplit(value === "split")}
         >
-          {trimWhitespace ? "Show raw" : "Hide edge whitespace"}
+          <TabsList>
+            <TabsTrigger value="unified">Unified</TabsTrigger>
+            <TabsTrigger value="split">Split</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Find in file"
+          disabled={!content}
+          onClick={() =>
+            void instance.current
+              ?.getModifiedEditor()
+              .getAction("actions.find")
+              ?.run()
+          }
+        >
+          <HugeiconsIcon icon={Search01Icon} size={16} />
         </Button>
-        <div className="flex rounded-full bg-muted p-0.5">
-          <Button
-            variant={split ? "ghost" : "secondary"}
-            size="xs"
-            onClick={() => setSplit(false)}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Display options"
+              />
+            }
           >
-            Unified
-          </Button>
-          <Button
-            variant={split ? "secondary" : "ghost"}
-            size="xs"
-            onClick={() => setSplit(true)}
-          >
-            Split
-          </Button>
-        </div>
+            <HugeiconsIcon icon={MoreHorizontalIcon} size={16} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Display · {change.layer}</DropdownMenuLabel>
+              <DropdownMenuCheckboxItem
+                checked={trimWhitespace}
+                onCheckedChange={setTrimWhitespace}
+              >
+                Hide edge whitespace
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuGroup>
+            <p className="px-2 pt-1 pb-2 text-xs text-muted-foreground">
+              Filtering changes the display only. Coverage still counts the raw
+              diff.
+            </p>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
       {error || content?.unavailableReason ? (
         <div className="p-8 text-sm leading-6 text-muted-foreground">
@@ -155,54 +248,13 @@ export function ReviewCodePane({
             language={languageFor(change.path)}
             originalModelPath={`reviewbox://${snapshot.id}/${change.id}/before/${change.path}`}
             modifiedModelPath={`reviewbox://${snapshot.id}/${change.id}/after/${change.path}`}
-            theme={
-              resolvedTheme === "dark" ? "reviewbox-dark" : "reviewbox-light"
-            }
-            beforeMount={(monaco) => {
-              for (const dark of [false, true])
-                monaco.editor.defineTheme(
-                  `reviewbox-${dark ? "dark" : "light"}`,
-                  {
-                    base: dark ? "vs-dark" : "vs",
-                    inherit: true,
-                    rules: [
-                      {
-                        token: "keyword",
-                        foreground: dark ? "8fb0ff" : "1447e6",
-                      },
-                      {
-                        token: "string",
-                        foreground: dark ? "6ee7b7" : "0b7a55",
-                      },
-                      {
-                        token: "comment",
-                        foreground: dark ? "777777" : "999999",
-                      },
-                      {
-                        token: "number",
-                        foreground: dark ? "fdba74" : "c2410c",
-                      },
-                    ],
-                    colors: {
-                      "editor.background": dark ? "#222222" : "#ffffff",
-                      "diffEditor.insertedTextBackground": dark
-                        ? "#4ade8020"
-                        : "#16a34a20",
-                      "diffEditor.removedTextBackground": dark
-                        ? "#ff646720"
-                        : "#e7000b20",
-                      "editorLineNumber.foreground": dark
-                        ? "#777777"
-                        : "#999999",
-                    },
-                  }
-                )
-            }}
+            theme={reviewboxTheme(resolvedTheme !== "light")}
             options={{
               readOnly: true,
               ignoreTrimWhitespace: trimWhitespace,
               originalEditable: false,
               renderSideBySide: split,
+              useInlineViewWhenSpaceIsLimited: false,
               automaticLayout: true,
               minimap: { enabled: false },
               fontFamily: "var(--font-mono)",
@@ -210,9 +262,17 @@ export function ReviewCodePane({
               lineHeight: 20,
               fontLigatures: false,
               scrollBeyondLastLine: false,
-              padding: { top: 16 },
+              padding: { top: 8, bottom: 8 },
               hideUnchangedRegions: { enabled: true, contextLineCount: 4 },
               renderOverviewRuler: false,
+              renderIndicators: true,
+              glyphMargin: false,
+              folding: false,
+              lineDecorationsWidth: 12,
+              scrollbar: {
+                verticalScrollbarSize: 8,
+                horizontalScrollbarSize: 8,
+              },
             }}
             onMount={(mounted) => {
               instance.current = mounted
@@ -221,26 +281,10 @@ export function ReviewCodePane({
               const beforeMarks = original.createDecorationsCollection()
               const afterMarks = modified.createDecorationsCollection()
               marks.current = { before: beforeMarks, after: afterMarks }
-              if (passage) {
-                const start = passage.newLines
-                  ? passage.newStart
-                  : passage.oldStart
-                const target = passage.newLines ? afterMarks : beforeMarks
-                target.set([
-                  {
-                    range: {
-                      startLineNumber: start,
-                      endLineNumber:
-                        start +
-                        Math.max(passage.newLines || passage.oldLines, 1) -
-                        1,
-                      startColumn: 1,
-                      endColumn: 1,
-                    },
-                    options: { isWholeLine: true, className: "review-passage" },
-                  },
+              if (passage)
+                (passage.newLines ? afterMarks : beforeMarks).set([
+                  passageDecoration(passage),
                 ])
-              }
               if (position.changeId === change.id && position.line > 0) {
                 modified.setPosition({ lineNumber: position.line, column: 1 })
                 modified.setScrollTop(position.scrollTop)
@@ -249,6 +293,19 @@ export function ReviewCodePane({
                   passage.newLines ? passage.newStart : passage.oldStart
                 )
               }
+              const diff = mounted.onDidUpdateDiff(() => {
+                let added = 0
+                let removed = 0
+                for (const c of mounted.getLineChanges() ?? []) {
+                  if (c.modifiedEndLineNumber > 0)
+                    added +=
+                      c.modifiedEndLineNumber - c.modifiedStartLineNumber + 1
+                  if (c.originalEndLineNumber > 0)
+                    removed +=
+                      c.originalEndLineNumber - c.originalStartLineNumber + 1
+                }
+                setCounts({ added, removed })
+              })
               let timer: ReturnType<typeof setTimeout> | undefined
               const persist = () => {
                 clearTimeout(timer)
@@ -266,11 +323,18 @@ export function ReviewCodePane({
                 )
               }
               const scroll = modified.onDidScrollChange(persist)
-              const cursor = modified.onDidChangeCursorPosition(persist)
+              const moved = modified.onDidChangeCursorPosition((event) => {
+                setCursor({
+                  line: event.position.lineNumber,
+                  column: event.position.column,
+                })
+                persist()
+              })
               cleanup.current = () => {
                 clearTimeout(timer)
+                diff.dispose()
                 scroll.dispose()
-                cursor.dispose()
+                moved.dispose()
                 beforeMarks.clear()
                 afterMarks.clear()
                 marks.current = null
@@ -283,12 +347,19 @@ export function ReviewCodePane({
           Loading frozen content…
         </div>
       )}
-      <footer className="flex h-7 shrink-0 items-center justify-between border-t px-4 text-[10px] text-muted-foreground">
-        <span>
+      <footer className="flex h-7 shrink-0 items-center gap-4 border-t px-4 text-xs text-muted-foreground">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+          <HugeiconsIcon icon={ViewIcon} size={14} />
           Read-only · snapshot {snapshot.id.slice(0, 6)}
           {trimWhitespace ? " · filtered display, raw coverage" : ""}
         </span>
-        <span>{languageFor(change.path)} · UTF-8</span>
+        <span>{languageName(change.path)}</span>
+        <span>UTF-8</span>
+        {cursor && (
+          <span className="tabular-nums">
+            Ln {cursor.line}, Col {cursor.column}
+          </span>
+        )}
       </footer>
     </section>
   )

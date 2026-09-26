@@ -1,31 +1,87 @@
 import { cn } from "@/lib/utils"
-export function ReviewStatus({ status }: { status: string }) {
+
+export type ReadingStatus =
+  | "Unread"
+  | "In progress"
+  | "Question"
+  | "Validated"
+  | "Re-review"
+  | "Uncovered"
+
+/** 16px reading-state glyph (RB/Status); the label stays available to assistive tech. */
+export function ReviewStatus({
+  status,
+  className,
+}: {
+  status: ReadingStatus | string
+  className?: string
+}) {
   return (
-    <span
+    <svg
+      viewBox="0 0 16 16"
       role="img"
       aria-label={status}
-      title={status}
-      className={cn(
-        "inline-flex size-4 shrink-0 items-center justify-center rounded-full border text-[10px]",
-        status === "Validated" &&
-          "border-transparent bg-review-validated text-background",
-        status === "Question" &&
-          "border-transparent bg-review-question text-background",
-        status === "Re-review" &&
-          "border-review-attention text-review-attention",
-        status === "In progress" && "border-primary text-primary",
-        status === "Unread" && "border-muted-foreground text-muted-foreground"
-      )}
+      className={cn("size-4 shrink-0", className)}
     >
-      {status === "Validated"
-        ? "✓"
-        : status === "Question"
-          ? "?"
-          : status === "Re-review"
-            ? "!"
-            : status === "In progress"
-              ? "•"
-              : ""}
-    </span>
+      <title>{status}</title>
+      {status === "In progress" ? (
+        <g className="text-primary">
+          <circle
+            cx="8"
+            cy="8"
+            r="5.25"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          <circle cx="8" cy="8" r="3" fill="currentColor" />
+        </g>
+      ) : status === "Validated" ? (
+        <g>
+          <circle cx="8" cy="8" r="7" className="fill-review-validated" />
+          <path
+            d="M5.2 8.2 7.1 10l3.7-3.9"
+            fill="none"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="stroke-background"
+          />
+        </g>
+      ) : status === "Question" || status === "Re-review" ? (
+        <g>
+          <circle
+            cx="8"
+            cy="8"
+            r="7"
+            className={
+              status === "Question"
+                ? "fill-review-question"
+                : "fill-review-attention"
+            }
+          />
+          <text
+            x="8"
+            y="11.5"
+            textAnchor="middle"
+            fontSize="10"
+            fontWeight="600"
+            className="fill-background font-sans"
+          >
+            {status === "Question" ? "?" : "!"}
+          </text>
+        </g>
+      ) : (
+        <circle
+          cx="8"
+          cy="8"
+          r="5.25"
+          fill="none"
+          strokeWidth="1.5"
+          strokeDasharray={status === "Uncovered" ? "2.2 2.2" : undefined}
+          className="stroke-muted-foreground"
+        />
+      )}
+    </svg>
   )
 }

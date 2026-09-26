@@ -91,7 +91,7 @@ export function TopicEditorDialog({
           {draft.steps.map((step, index) => (
             <li
               key={step.id}
-              className="flex items-center gap-2 rounded-lg border p-2"
+              className="flex items-center gap-2 rounded-2xl border p-2 pl-3"
             >
               <span className="min-w-0 flex-1 truncate text-sm">
                 {index + 1}. {step.title}
@@ -181,7 +181,7 @@ export function TopicEditorDialog({
             )}
           </div>
           <Button
-            variant="outline"
+            variant="secondary"
             onClick={addStep}
             disabled={!title.trim() || !selected.length}
           >

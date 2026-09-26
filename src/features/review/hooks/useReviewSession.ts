@@ -215,15 +215,31 @@ export function useReviewSession() {
   const next = useCallback(
     (direction: number) => {
       if (!workspace) return
-      const anchors = workspace.snapshot.changes.flatMap((c) =>
-        c.passages.map((p) => anchorFor(workspace.snapshot, c.id, p))
+      // Reading order: the steps of the tour, then what is outside it.
+      const steps = workspace.review.topics.flatMap((t) =>
+        t.steps.flatMap((s) =>
+          s.anchors
+            .filter((a) => a.snapshotId === workspace.snapshot.id)
+            .slice(0, 1)
+            .map((a) => ({ anchor: a, stepId: s.id }))
+        )
       )
-      const index = anchors.findIndex(
-        (a) => a.passageId === selected?.passageId
+      const inTour = new Set(steps.map((s) => s.anchor.passageId))
+      const rest = workspace.snapshot.changes.flatMap((c) =>
+        c.passages
+          .filter((p) => !inTour.has(p.id))
+          .map((p) => ({
+            anchor: anchorFor(workspace.snapshot, c.id, p),
+            stepId: undefined,
+          }))
       )
-      const anchor =
-        anchors[Math.max(0, Math.min(anchors.length - 1, index + direction))]
-      if (anchor) select(anchor)
+      const order = [...steps, ...rest]
+      const index = order.findIndex(
+        (a) => a.anchor.passageId === selected?.passageId
+      )
+      const target =
+        order[Math.max(0, Math.min(order.length - 1, index + direction))]
+      if (target) select(target.anchor, target.stepId)
     },
     [workspace, selected, select]
   )
@@ -311,6 +327,27 @@ export function useReviewSession() {
       window.removeEventListener("focus", check)
     }
   }, [watchedSnapshotId]) // Snapshot is immutable; revisions must not restart the watcher.
+  const nextTopic = useCallback(
+    (direction: number) => {
+      if (!workspace) return
+      const topics = workspace.review.topics
+      const index = topics.findIndex((t) =>
+        t.steps.some((s) =>
+          s.anchors.some((a) => a.passageId === selected?.passageId)
+        )
+      )
+      const topic =
+        topics[Math.max(0, Math.min(topics.length - 1, index + direction))]
+      const step = topic?.steps.find((s) =>
+        s.anchors.some((a) => a.snapshotId === workspace.snapshot.id)
+      )
+      const anchor = step?.anchors.find(
+        (a) => a.snapshotId === workspace.snapshot.id
+      )
+      if (step && anchor) select(anchor, step.id)
+    },
+    [workspace, selected, select]
+  )
   const home = useCallback(async () => {
     await mutations.current
     generation.current++
@@ -341,6 +378,7 @@ export function useReviewSession() {
     action,
     select,
     next,
+    nextTopic,
     refresh,
     home,
     install,

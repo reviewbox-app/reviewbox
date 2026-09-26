@@ -125,7 +125,7 @@ export function ReviewHistoryDialog({
                     .map((a) => (
                       <p
                         key={a.id}
-                        className="rounded-lg border p-2 text-xs whitespace-pre-wrap"
+                        className="rounded-2xl border p-3 text-xs whitespace-pre-wrap"
                       >
                         {a.question ? "Question" : "Note"} · {a.author}
                         <br />
