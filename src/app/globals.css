@@ -127,3 +127,33 @@
     @apply font-sans;
   }
 }
+
+@theme inline {
+  --color-review-validated: var(--review-validated);
+  --color-review-attention: var(--review-attention);
+  --color-review-question: var(--review-question);
+  --color-review-step: var(--review-step);
+}
+:root {
+  --review-validated: #16a34a;
+  --review-attention: #d97706;
+  --review-question: #7c3aed;
+  --review-step: #1447e60a;
+  --diff-added-bg: #16a34a12;
+  --diff-removed-bg: #e7000b0d;
+}
+.dark {
+  --review-validated: #4ade80;
+  --review-attention: #fbbf24;
+  --review-question: #a78bfa;
+  --review-step: #5c80ff12;
+  --diff-added-bg: #4ade8012;
+  --diff-removed-bg: #ff646712;
+}
+.review-passage {
+  background: var(--review-step);
+  border-left: 2px solid var(--primary);
+}
+.review-validated {
+  border-left: 2px solid var(--review-validated);
+}

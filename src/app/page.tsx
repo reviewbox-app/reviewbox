@@ -1,5 +1,4 @@
-import { ReviewBoxHome } from "@/features/app-shell/composites/ReviewBoxHome"
-
+import { ReviewBoxApp } from "@/features/app-shell/composites/ReviewBoxApp"
 export default function HomePage() {
-  return <ReviewBoxHome />
+  return <ReviewBoxApp />
 }

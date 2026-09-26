@@ -14,11 +14,13 @@
       {
         "label": "main",
         "title": "ReviewBox",
-        "width": 1200,
-        "height": 800,
+        "width": 1440,
+        "height": 900,
         "minWidth": 800,
         "minHeight": 600,
-        "decorations": true
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
@@ -56,6 +58,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../resources/agents/": "agents/",
+      "../resources/schemas/": "schemas/"
+    }
   }
 }
