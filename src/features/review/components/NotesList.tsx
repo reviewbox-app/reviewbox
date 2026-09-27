@@ -1,6 +1,7 @@
 import type { JSONContent } from "@tiptap/core"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Delete02Icon } from "@hugeicons/core-free-icons"
+import { Delete02Icon, InformationCircleIcon } from "@hugeicons/core-free-icons"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { RichTextEditor } from "@/features/rich-text-editor/components/RichTextEditor"
 import type { Annotation } from "@/lib/desktop/contracts.generated"
@@ -104,10 +105,14 @@ export function NotesList({
   return (
     <div className="space-y-5">
       {notes.length === 0 && (
-        <p className="text-sm leading-6 text-muted-foreground">
-          No notes on this passage yet. Write one below, or switch to Question
-          when you need an answer before validating.
-        </p>
+        <Alert size="sm" variant="faded">
+          <HugeiconsIcon icon={InformationCircleIcon} aria-hidden />
+          <AlertTitle>No notes on this passage yet.</AlertTitle>
+          <AlertDescription>
+            Write one below, or switch to Question when you need an answer
+            before validating.
+          </AlertDescription>
+        </Alert>
       )}
       <Section title="Open" count={open.length}>
         {open.map(question)}

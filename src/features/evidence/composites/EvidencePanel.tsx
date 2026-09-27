@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -13,6 +14,7 @@ import { errorMessage } from "@/lib/desktop/review.commands"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowReloadHorizontalIcon,
+  InformationCircleIcon,
   TestTube01Icon,
 } from "@hugeicons/core-free-icons"
 import {
@@ -202,10 +204,14 @@ export function EvidencePanel({
         </p>
       )}
       {!busy && runs.length === 0 && (
-        <p className="text-xs leading-5 text-muted-foreground">
-          No observed evidence yet. A test result is recorded with the exact
-          command and whether the captured source still matched.
-        </p>
+        <Alert size="sm" variant="faded">
+          <HugeiconsIcon icon={InformationCircleIcon} aria-hidden />
+          <AlertTitle>No observed evidence yet.</AlertTitle>
+          <AlertDescription>
+            A test result is recorded with the exact command and whether the
+            captured source still matched.
+          </AlertDescription>
+        </Alert>
       )}
       {runs.map((run) => {
         const outcome = evidenceOutcome(run, snapshotId)
