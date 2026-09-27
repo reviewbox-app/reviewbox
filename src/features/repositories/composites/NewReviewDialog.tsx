@@ -1,275 +1,313 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useRef } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
-  Camera01Icon,
+  Cancel01Icon,
   GitBranchIcon,
-  InformationCircleIcon,
   SecurityCheckIcon,
 } from "@hugeicons/core-free-icons"
 import {
   Dialog,
   DialogContent,
-  DialogTitle,
   DialogDescription,
+  DialogTitle,
 } from "@/components/ui/dialog"
-import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Kbd } from "@/components/ui/kbd"
-import { Checkbox } from "@/components/ui/checkbox"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { cn } from "@/lib/utils"
-import type {
-  CaptureRequest,
-  Repository,
-  Scope,
-} from "@/lib/desktop/contracts.generated"
+import { Progress } from "@/components/ui/progress"
+import { Spinner } from "@/components/ui/spinner"
+import type { Repository } from "@/lib/desktop/contracts.generated"
+import {
+  useNewReviewWizard,
+  type CreatedReview,
+} from "../hooks/useNewReviewWizard"
+import { NewReviewStepper } from "../components/NewReviewStepper"
+import { ReviewScopeStep, fileCount } from "../components/ReviewScopeStep"
+import {
+  FrozenFilesNotice,
+  ScopeExplanation,
+  PreparationExplanation,
+} from "../components/ReviewExplanation"
+import { PreparationStep } from "../components/PreparationStep"
+import { WizardColumns } from "../components/WizardColumns"
+import { HarnessSetupStep } from "./HarnessSetupStep"
 
-const scopes: { value: Scope; title: string; detail: string }[] = [
-  {
-    value: "local",
-    title: "Local changes",
-    detail: "Staged and unstaged, kept as separate layers",
-  },
-  {
-    value: "unstaged",
-    title: "Unstaged changes",
-    detail: "What is in the working tree only",
-  },
-  {
-    value: "staged",
-    title: "Staged changes",
-    detail: "What the next commit would contain",
-  },
-  {
-    value: "commit",
-    title: "A commit",
-    detail: "Review exactly what one commit changed",
-  },
-  {
-    value: "range",
-    title: "A range of commits",
-    detail: "Compare a base with a target",
-  },
-]
-
-const notes: Record<Scope, string[]> = {
-  local: [
-    "Partially staged files keep both the staged and the working version.",
-    "Renamed files are compared with their previous path.",
-    "Binary files are listed, not displayed.",
-  ],
-  unstaged: [
-    "Only the difference between the index and the working tree.",
-    "Binary files are listed, not displayed.",
-  ],
-  staged: [
-    "Only the difference between HEAD and the index.",
-    "Unstaged edits to the same files stay out of this review.",
-  ],
-  commit: ["The commit is compared with its first parent."],
-  range: ["Every change between the base and the target, as one snapshot."],
-}
-
-export function NewReviewDialog({
-  repository,
-  open,
-  busy,
-  onClose,
-  onCreate,
-}: {
+interface Props {
   repository: Repository
   open: boolean
-  busy: boolean
   onClose: () => void
-  onCreate: (request: CaptureRequest) => void
-}) {
-  const [scope, setScope] = useState<Scope>("local")
-  const [base, setBase] = useState("HEAD~1")
-  const [target, setTarget] = useState("HEAD")
-  const [includeUntracked, setIncludeUntracked] = useState(false)
-  const [settingsError, setSettingsError] = useState("")
-  useEffect(() => {
-    if (!open) return
-    let alive = true
-    reviewCommands
-      .projectSettings(repository.id)
-      .then((settings) => {
-        if (alive) {
-          setScope(settings.defaultScope)
-          setIncludeUntracked(settings.includeUntracked)
-          setSettingsError("")
-        }
-      })
-      .catch((e) => {
-        if (alive) setSettingsError(errorMessage(e))
-      })
-    return () => {
-      alive = false
-    }
-  }, [open, repository.id])
-  const submit = () =>
-    onCreate({
-      repositoryId: repository.id,
-      scope,
-      base,
-      target,
-      includeUntracked,
-    })
-  const untracked = scope === "local" || scope === "unstaged"
+  onCreated: (result: CreatedReview) => void
+}
+
+export function NewReviewDialog(props: Props) {
+  return props.open ? (
+    <NewReviewWizard key={props.repository.id} {...props} />
+  ) : null
+}
+
+const capturePhases: Record<string, string> = {
+  preparing: "Preparing files",
+  copying_head: "Reading the last commit",
+  copying_index: "Reading staged files",
+  copying_worktree: "Reading working files",
+  copying_base: "Reading the base",
+  copying_target: "Reading the target",
+  comparing: "Comparing changes",
+  verifying: "Checking the frozen files",
+  publishing: "Saving the review",
+  completed: "Review ready",
+}
+
+function NewReviewWizard({ repository, onCreated, onClose }: Props) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const wizard = useNewReviewWizard(repository.id, onCreated, onClose)
+  const { step, capturing, progress } = wizard
+  const publishing =
+    progress?.phase === "publishing" || progress?.phase === "completed"
+  const close = () => {
+    if (!publishing) void wizard.close()
+  }
   return (
     <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v && !busy) onClose()
+      open
+      onOpenChange={(open) => {
+        if (!open) close()
       }}
     >
-      <DialogContent className="flex h-[min(760px,calc(100vh-4rem))] flex-col gap-0 p-0 sm:max-w-5xl">
-        <form
-          className="flex min-h-0 flex-1 flex-col"
-          onSubmit={(e) => {
-            e.preventDefault()
-            submit()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !busy) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-        >
-          <header className="border-b px-6 pt-5 pb-4">
-            <DialogTitle className="text-lg">New review</DialogTitle>
-            <DialogDescription className="mt-1 flex items-center gap-1.5 text-xs">
-              <HugeiconsIcon icon={GitBranchIcon} size={12} />
-              {repository.name} · {repository.branch}
+      <DialogContent
+        ref={dialogRef}
+        initialFocus={dialogRef}
+        showCloseButton={false}
+        backdropClassName="top-13 bg-transparent! backdrop-blur-none!"
+        className="top-13! right-2 bottom-2 left-2! flex w-auto! max-w-none! translate-x-0! translate-y-0! flex-col gap-0 overflow-hidden bg-card! p-0 sm:max-w-none!"
+        onKeyDownCapture={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.nativeEvent.isComposing ||
+            event.key !== "Enter"
+          )
+            return
+          const target =
+            event.target instanceof HTMLElement ? event.target : null
+          if (
+            target?.closest(
+              "button:not([role=radio]):not([role=checkbox]),input,textarea,[role=combobox],[role=listbox],[role=option]"
+            )
+          )
+            return
+          if (
+            wizard.canNext &&
+            ((step === "preparation" && (event.metaKey || event.ctrlKey)) ||
+              (step !== "preparation" && !event.metaKey && !event.ctrlKey))
+          ) {
+            event.preventDefault()
+            event.stopPropagation()
+            void wizard.next()
+          }
+        }}
+      >
+        <header className="flex min-h-[62px] shrink-0 items-center gap-3 border-b py-4 pr-4 pl-6">
+          <div className="flex min-w-0 flex-1 items-center gap-4">
+            <DialogTitle className="truncate text-xl leading-7">
+              New review
+            </DialogTitle>
+            <DialogDescription className="hidden min-w-0 items-center gap-1.5 text-xs min-[1150px]:flex">
+              <HugeiconsIcon
+                icon={GitBranchIcon}
+                size={14}
+                className="shrink-0"
+              />
+              <span className="truncate">
+                {repository.name} · {repository.branch}
+              </span>
             </DialogDescription>
-          </header>
-          <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,5fr)_minmax(0,7fr)] max-md:grid-cols-1">
-            <div className="min-h-0 overflow-auto border-r p-6 max-md:border-r-0">
-              <h3 className="mb-3 text-sm font-medium">
-                What do you want to review?
-              </h3>
-              <RadioGroup
-                value={scope}
-                onValueChange={(value) => setScope(value as Scope)}
-                className="gap-2"
-              >
-                {scopes.map((item) => (
-                  <label
-                    key={item.value}
-                    className={cn(
-                      "block cursor-pointer rounded-3xl border bg-card p-4 transition-colors hover:bg-accent/40",
-                      scope === item.value &&
-                        "border-primary bg-accent/60 hover:bg-accent/60"
-                    )}
-                  >
-                    <span className="flex items-start gap-3">
-                      <RadioGroupItem value={item.value} className="mt-0.5" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium">
-                          {item.title}
-                        </span>
-                        <span className="mt-0.5 block text-xs text-muted-foreground">
-                          {item.detail}
-                        </span>
-                      </span>
-                    </span>
-                    {scope === item.value && item.value === "commit" && (
-                      <Input
-                        aria-label="Commit"
-                        className="mt-3 font-mono text-xs"
-                        value={target}
-                        onChange={(e) => setTarget(e.target.value)}
-                        required
-                      />
-                    )}
-                    {scope === item.value && item.value === "range" && (
-                      <span className="mt-3 flex items-center gap-2">
-                        <Input
-                          aria-label="Base reference"
-                          className="font-mono text-xs"
-                          value={base}
-                          onChange={(e) => setBase(e.target.value)}
-                          required
-                        />
-                        <span className="text-muted-foreground">›</span>
-                        <Input
-                          aria-label="Target reference"
-                          className="font-mono text-xs"
-                          value={target}
-                          onChange={(e) => setTarget(e.target.value)}
-                          required
-                        />
-                      </span>
-                    )}
-                  </label>
-                ))}
-              </RadioGroup>
-            </div>
-            <div className="min-h-0 overflow-auto p-6">
-              <h3 className="flex items-center gap-2 text-sm font-medium">
-                <HugeiconsIcon icon={Camera01Icon} size={16} />
-                Snapshot
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Frozen when you start: later edits in the repository won’t
-                change what you review. You’ll be offered a refresh instead.
-              </p>
-              <ul className="mt-5 space-y-2">
-                {notes[scope].map((note) => (
-                  <li
-                    key={note}
-                    className="flex gap-2 text-xs leading-5 text-muted-foreground"
-                  >
-                    <HugeiconsIcon
-                      icon={InformationCircleIcon}
-                      size={14}
-                      className="mt-0.5 shrink-0"
-                    />
-                    {note}
-                  </li>
-                ))}
-              </ul>
-              {untracked && (
-                <Label className="mt-6 font-normal">
-                  <Checkbox
-                    checked={includeUntracked}
-                    onCheckedChange={(v) => setIncludeUntracked(v === true)}
-                  />
-                  Include untracked files
-                </Label>
-              )}
-              {settingsError && (
-                <p role="alert" className="mt-4 text-sm text-destructive">
-                  {settingsError}
-                </p>
-              )}
-            </div>
           </div>
-          <footer className="flex items-center gap-3 border-t px-6 py-3">
-            <span className="flex flex-1 items-center gap-1.5 text-xs text-muted-foreground">
-              <HugeiconsIcon icon={SecurityCheckIcon} size={14} />
-              Read-only: nothing in the repository is checked out, staged or
-              reset.
-            </span>
+          {step !== "loading" && (
+            <NewReviewStepper step={step} setup={wizard.setup} />
+          )}
+          <div className="flex min-w-7 flex-1 justify-end">
             <Button
+              size="icon-sm"
               variant="ghost"
-              type="button"
-              onClick={onClose}
-              disabled={busy}
+              aria-label="Close new review"
+              disabled={publishing || wizard.cancelling}
+              onClick={close}
             >
-              Cancel
+              <HugeiconsIcon icon={Cancel01Icon} size={16} />
             </Button>
-            <Kbd>⌘↵</Kbd>
-            <Button disabled={busy}>
-              <HugeiconsIcon icon={Camera01Icon} size={16} />
-              {busy ? "Capturing snapshot…" : "Freeze snapshot and start"}
+          </div>
+        </header>
+        {wizard.error && (
+          <p
+            role="alert"
+            className="mx-5 mt-3 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          >
+            {wizard.error}
+          </p>
+        )}
+        {capturing ? (
+          <div
+            className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 overflow-y-auto p-6"
+            aria-live="polite"
+          >
+            <Spinner className="size-5" />
+            <h3 className="text-lg font-medium">Copying review files…</h3>
+            <p className="text-xs text-muted-foreground">
+              {fileCount(wizard.selected?.files ?? 0)} ·{" "}
+              {capturePhases[progress?.phase ?? "preparing"] ??
+                "Preparing files"}
+            </p>
+            <Progress
+              aria-label="Capture progress"
+              className="w-full max-w-[360px]"
+              value={
+                progress?.total
+                  ? (100 * progress.completed) / progress.total
+                  : null
+              }
+            />
+            {progress?.total != null && (
+              <p className="text-xs text-muted-foreground tabular-nums">
+                {progress.completed} / {progress.total}
+              </p>
+            )}
+            <FrozenFilesNotice starting />
+          </div>
+        ) : step === "loading" ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Spinner />
+            Checking review settings and harnesses…
+          </div>
+        ) : step === "rev" ? (
+          <HarnessSetupStep
+            provider={wizard.provider}
+            providers={wizard.providers.providers}
+            checking={wizard.providers.checking}
+            error={wizard.providers.error}
+            onSelect={wizard.setProvider}
+            onDetect={() => void wizard.providers.refresh()}
+          />
+        ) : (
+          <WizardColumns
+            left={
+              step === "scope" ? (
+                <ReviewScopeStep
+                  request={wizard.request}
+                  preview={wizard.preview}
+                  onChange={wizard.change}
+                />
+              ) : (
+                <PreparationStep
+                  mode={wizard.mode}
+                  ready={wizard.ready}
+                  scope={wizard.request.scope}
+                  stats={wizard.selected}
+                  onChange={wizard.setMode}
+                  onBack={() => wizard.setStep("scope")}
+                />
+              )
+            }
+            right={
+              <div className="w-full max-w-[480px]">
+                {step === "scope" ? (
+                  <ScopeExplanation
+                    scope={wizard.request.scope}
+                    stats={wizard.selected}
+                    all={wizard.preview?.scopes ?? []}
+                    base={wizard.request.base ?? "HEAD~1"}
+                    target={wizard.request.target ?? "HEAD"}
+                  />
+                ) : (
+                  <PreparationExplanation mode={wizard.mode} />
+                )}
+                {wizard.previewing && (
+                  <p
+                    role="status"
+                    className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"
+                  >
+                    <Spinner />
+                    Updating file counts…
+                  </p>
+                )}
+                {wizard.selected?.error && (
+                  <p role="alert" className="mt-4 text-sm text-destructive">
+                    {wizard.selected.error}
+                  </p>
+                )}
+                {!wizard.previewing &&
+                  wizard.selected &&
+                  !wizard.selected.error &&
+                  wizard.selected.files === 0 && (
+                    <p
+                      role="status"
+                      className="mt-4 text-sm text-muted-foreground"
+                    >
+                      No changes. Choose another scope or reference.
+                    </p>
+                  )}
+              </div>
+            }
+            notice={<FrozenFilesNotice />}
+          />
+        )}
+        <footer className="flex min-h-[57px] shrink-0 items-center gap-2.5 border-t glass-bar py-3 pr-4 pl-7">
+          <HugeiconsIcon
+            icon={SecurityCheckIcon}
+            size={16}
+            className="shrink-0 text-muted-foreground"
+          />
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+            Read-only: your source files and Git index stay unchanged.
+          </p>
+          {capturing ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={publishing || wizard.cancelling}
+              onClick={close}
+            >
+              {wizard.cancelling ? "Cancelling…" : "Cancel"}
             </Button>
-          </footer>
-        </form>
+          ) : (
+            <>
+              {step === "rev" ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={wizard.advancing}
+                  onClick={wizard.skip}
+                >
+                  Continue without Rev
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    step === "preparation"
+                      ? wizard.setStep("scope")
+                      : wizard.setup
+                        ? wizard.setStep("rev")
+                        : close()
+                  }
+                >
+                  {step === "preparation" || (step === "scope" && wizard.setup)
+                    ? "Back"
+                    : "Cancel"}
+                </Button>
+              )}
+              <Kbd>{step === "preparation" ? "⌘↵" : "↵"}</Kbd>
+              <Button
+                size="sm"
+                disabled={!wizard.canNext}
+                onClick={() => void wizard.next()}
+              >
+                {wizard.advancing && <Spinner />}
+                {step === "preparation" ? "Start review" : "Next"}
+              </Button>
+            </>
+          )}
+        </footer>
       </DialogContent>
     </Dialog>
   )

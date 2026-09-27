@@ -5,20 +5,29 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import { ModelSelector } from "@/features/agents/components/ModelSelector"
+import { useProviderStatus } from "@/features/agents/hooks/useProviderStatus"
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
 import type {
+  PreparationMode,
   ProjectSettings,
   Repository,
   Scope,
 } from "@/lib/desktop/contracts.generated"
 
 export function ProjectSettingsPanel() {
+  const { settings: providerSettings } = useProviderStatus()
   const [repositories, setRepositories] = useState<Repository[]>([])
   const [repositoryId, setRepositoryId] = useState("")
   const [settings, setSettings] = useState<ProjectSettings | null>(null)
   const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
+  const effectiveProvider =
+    settings?.provider ?? providerSettings?.defaultProvider ?? ""
+  const providerConfig = providerSettings?.providers.find(
+    (p) => p.provider === effectiveProvider
+  )
   useEffect(() => {
     let alive = true
     reviewCommands
@@ -138,13 +147,29 @@ export function ProjectSettingsPanel() {
           </div>
           <Label>
             <Checkbox
-              checked={settings.includeUntracked}
+              checked={!settings.includeUntracked}
               onCheckedChange={(value) =>
-                update({ includeUntracked: value === true })
+                update({ includeUntracked: value !== true })
               }
             />
-            Include untracked files by default
+            Exclude untracked files by default
           </Label>
+          <div className="space-y-2">
+            <Label htmlFor="project-preparation">Default preparation</Label>
+            <NativeSelect
+              id="project-preparation"
+              className="w-full"
+              value={settings.defaultPreparation}
+              onChange={(e) =>
+                update({
+                  defaultPreparation: e.target.value as PreparationMode,
+                })
+              }
+            >
+              <NativeSelectOption value="rev">With Rev</NativeSelectOption>
+              <NativeSelectOption value="manual">Myself</NativeSelectOption>
+            </NativeSelect>
+          </div>
           <div className="space-y-2">
             <Label htmlFor="project-provider">
               Rev’s harness for this project
@@ -153,7 +178,9 @@ export function ProjectSettingsPanel() {
               id="project-provider"
               className="w-full"
               value={settings.provider ?? ""}
-              onChange={(e) => update({ provider: e.target.value || null })}
+              onChange={(e) =>
+                update({ provider: e.target.value || null, model: null })
+              }
             >
               <NativeSelectOption value="">
                 Use application default
@@ -166,15 +193,24 @@ export function ProjectSettingsPanel() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="project-model">Model override</Label>
-            <Input
+            <ModelSelector
+              key={`${repositoryId}:${effectiveProvider}:${providerConfig?.executable ?? ""}`}
               id="project-model"
-              placeholder="Use application default"
-              value={settings.model ?? ""}
-              onChange={(e) => update({ model: e.target.value.trim() || null })}
+              provider={effectiveProvider}
+              executable={providerConfig?.executable}
+              defaultLabel="Use application settings"
+              value={settings.model}
+              disabled={busy}
+              onChange={(model) =>
+                update({
+                  model,
+                  ...(model ? { provider: effectiveProvider } : {}),
+                })
+              }
             />
           </div>
           <div className="flex items-center gap-3">
-            <Button disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? "Saving…" : "Save project settings"}
             </Button>
             {saved && <span role="status">Saved in .reviewbox</span>}

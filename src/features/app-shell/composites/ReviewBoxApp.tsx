@@ -21,6 +21,7 @@ import { WorkspaceTitleBar } from "../components/WorkspaceTitleBar"
 import { CommandPalette } from "./CommandPalette"
 import { RepositoryHome } from "@/features/repositories/composites/RepositoryHome"
 import { NewReviewDialog } from "@/features/repositories/composites/NewReviewDialog"
+import { PreparingReview } from "@/features/agents/composites/PreparingReview"
 import { ReviewHistoryDialog } from "@/features/review/composites/ReviewHistoryDialog"
 import { ReviewSidebar } from "@/features/review/components/ReviewSidebar"
 import { ReviewCodePane } from "@/features/review/composites/ReviewCodePane"
@@ -32,7 +33,11 @@ import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
 import { UnderstandWorkspace } from "@/features/knowledge/composites/UnderstandWorkspace"
 import { useReviewSession } from "@/features/review/hooks/useReviewSession"
 import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
-import { anchorFor, linesLabel } from "@/features/review/helpers/review.helpers"
+import {
+  anchorFor,
+  linesLabel,
+  readingStep,
+} from "@/features/review/helpers/review.helpers"
 import {
   desktopAvailable,
   errorMessage,
@@ -58,6 +63,10 @@ export function ReviewBoxApp() {
     setSplit,
   } = useReviewWorkspaceStore()
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [preparing, setPreparing] = useState<{
+    reviewId: string
+    provider: string
+  } | null>(null)
   const [topic, setTopic] = useState<Topic | null | undefined>(undefined)
   const {
     workspace,
@@ -74,13 +83,9 @@ export function ReviewBoxApp() {
     (c) => c.id === selected?.changeId
   )
   const passage = change?.passages.find((p) => p.id === selected?.passageId)
-  const stepIndex = workspace?.review.topics
-    .map((t) =>
-      t.steps.findIndex((s) =>
-        s.anchors.some((a) => a.passageId === selected?.passageId)
-      )
-    )
-    .find((i) => i >= 0)
+  const stepIndex = workspace
+    ? readingStep(workspace.review, selected)?.index
+    : undefined
   const stepLabel =
     passage && stepIndex !== undefined
       ? `Step ${stepIndex + 1} · ${linesLabel(passage)}`
@@ -99,7 +104,13 @@ export function ReviewBoxApp() {
         void choose()
         return
       }
-      if (settings || palette || topic !== undefined || session.newReview)
+      if (
+        settings ||
+        palette ||
+        topic !== undefined ||
+        session.newReview ||
+        preparing
+      )
         return
       if (meta && event.key.toLowerCase() === "n" && repository) {
         event.preventDefault()
@@ -160,6 +171,7 @@ export function ReviewBoxApp() {
     palette,
     topic,
     session.newReview,
+    preparing,
     space,
     nextTopic,
   ])
@@ -245,10 +257,21 @@ export function ReviewBoxApp() {
           onChoose={() => void choose()}
           onForget={(id) => void session.forget(id)}
         />
+      ) : workspace && preparing?.reviewId === workspace.review.id ? (
+        <PreparingReview
+          key={`${workspace.review.id}/${workspace.snapshot.id}/${preparing.provider}`}
+          workspace={workspace}
+          provider={preparing.provider}
+          onDone={() => setPreparing(null)}
+          onApplied={() =>
+            reviewCommands.load(workspace.review.id).then(session.accept)
+          }
+        />
       ) : space === "resume" ? (
         <ResumeReviews
           repository={repository}
           onOpen={(id) => void session.load(id)}
+          onDeleted={session.deleted}
           onNew={() => setNewReview(true)}
           onError={session.setError}
         />
@@ -311,6 +334,7 @@ export function ReviewBoxApp() {
                     snapshot={workspace.snapshot}
                     change={change}
                     passage={passage}
+                    selection={selected}
                     stepLabel={stepLabel}
                     position={workspace.review.position}
                     onPosition={(position) =>
@@ -353,7 +377,7 @@ export function ReviewBoxApp() {
                       workspace={workspace}
                       anchor={selected}
                       busy={busy}
-                      onAction={(value) => void action(value)}
+                      onAction={action}
                       onNext={next}
                       onApplied={() =>
                         void reviewCommands
@@ -394,7 +418,7 @@ export function ReviewBoxApp() {
               }
             />
             {rev.harness
-              ? `Rev · ${harnessNames[rev.harness.provider] ?? rev.harness.provider}${rev.harness.version ? ` ${rev.harness.version}` : ""} · ${rev.harness.available ? "available" : "not found"}`
+              ? `Rev · ${harnessNames[rev.harness.provider] ?? rev.harness.provider}${rev.harness.version ? ` ${rev.harness.version}` : ""} · ${rev.state}`
               : "Rev · harness unknown"}
           </span>
         </footer>
@@ -403,9 +427,22 @@ export function ReviewBoxApp() {
         <NewReviewDialog
           repository={repository}
           open={session.newReview}
-          busy={busy}
           onClose={() => setNewReview(false)}
-          onCreate={(value) => void session.create(value)}
+          onCreated={({
+            workspace: created,
+            preparation,
+            provider,
+            warning,
+          }) => {
+            session.install(created)
+            session.setError(warning)
+            setPreparing(
+              preparation === "rev"
+                ? { reviewId: created.review.id, provider }
+                : null
+            )
+            setNewReview(false)
+          }}
         />
       )}
       {workspace && topic !== undefined && (
