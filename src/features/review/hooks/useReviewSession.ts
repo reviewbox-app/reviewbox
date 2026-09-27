@@ -15,7 +15,7 @@ import {
   setActiveRepository,
 } from "@/lib/desktop/review.commands"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
-import { anchorFor } from "../helpers/review.helpers"
+import { anchorFor, readingStep } from "../helpers/review.helpers"
 
 export function useReviewSession() {
   const [repositories, setRepositories] = useState<Repository[]>([])
@@ -194,7 +194,8 @@ export function useReviewSession() {
   )
   const select = useCallback(
     (anchor: CodeAnchor, stepId?: string) => {
-      setSelected(anchor)
+      // Re-selecting the current passage is also an explicit navigation request.
+      setSelected({ ...anchor })
       showCoverage(false)
       const value = current.current
       if (value && anchor.snapshotId === value.snapshot.id)
@@ -220,7 +221,6 @@ export function useReviewSession() {
         t.steps.flatMap((s) =>
           s.anchors
             .filter((a) => a.snapshotId === workspace.snapshot.id)
-            .slice(0, 1)
             .map((a) => ({ anchor: a, stepId: s.id }))
         )
       )
@@ -234,8 +234,9 @@ export function useReviewSession() {
           }))
       )
       const order = [...steps, ...rest]
+      const stepId = readingStep(workspace.review, selected)?.step.id
       const index = order.findIndex(
-        (a) => a.anchor.passageId === selected?.passageId
+        (a) => a.anchor.passageId === selected?.passageId && a.stepId === stepId
       )
       const target =
         order[Math.max(0, Math.min(order.length - 1, index + direction))]
@@ -331,11 +332,8 @@ export function useReviewSession() {
     (direction: number) => {
       if (!workspace) return
       const topics = workspace.review.topics
-      const index = topics.findIndex((t) =>
-        t.steps.some((s) =>
-          s.anchors.some((a) => a.passageId === selected?.passageId)
-        )
-      )
+      const currentTopic = readingStep(workspace.review, selected)?.topic.id
+      const index = topics.findIndex((t) => t.id === currentTopic)
       const topic =
         topics[Math.max(0, Math.min(topics.length - 1, index + direction))]
       const step = topic?.steps.find((s) =>
@@ -383,6 +381,16 @@ export function useReviewSession() {
     home,
     install,
     accept,
+    deleted: (id: string) => {
+      if (current.current?.review.id !== id) return
+      generation.current++
+      current.current = null
+      setWorkspace(null)
+      setSelected(null)
+      setCoverage(null)
+      setChanged(false)
+      setBusy(false)
+    },
     forget: async (id: string) => {
       try {
         await reviewCommands.forget(id)

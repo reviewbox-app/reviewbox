@@ -13,7 +13,12 @@ import { cn } from "@/lib/utils"
 import { CoverageBar, coverageSegments } from "../components/CoverageBar"
 import { FileRow } from "../components/FileRow"
 import { ReviewStatus, type ReadingStatus } from "../components/ReviewStatus"
-import { anchorFor, lineRange, passageStatus } from "../helpers/review.helpers"
+import {
+  anchorFor,
+  lineRange,
+  passageStatus,
+  outsideReviewFiles,
+} from "../helpers/review.helpers"
 
 const cell: Record<ReadingStatus, string> = {
   Validated: "bg-review-validated",
@@ -35,6 +40,7 @@ export function CoveragePanel({
   onSelect: (anchor: CodeAnchor) => void
   onClose: () => void
 }) {
+  const outsideFiles = outsideReviewFiles(workspace)
   const [outside, setOutside] = useState(false)
   const steps = new Map(
     workspace.review.topics.flatMap((topic) =>
@@ -74,7 +80,7 @@ export function CoveragePanel({
             <TabsList>
               <TabsTrigger value="all">All</TabsTrigger>
               <TabsTrigger value="outside">
-                Outside the tour · {coverage?.outside ?? 0}
+                Outside the tour · {outsideFiles.length} files
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -106,55 +112,79 @@ export function CoveragePanel({
         </ul>
       </header>
       <div className="space-y-4 p-6">
-        {files.map(({ change, passages }) => (
-          <article key={change.id} className="rounded-3xl border">
-            <div className="flex items-center gap-3 border-b p-2 pr-4">
-              <FileRow
-                change={change}
-                className="min-w-0 flex-1"
-                onClick={() => onSelect(passages[0].anchor)}
-              />
-              <span className="flex gap-1" aria-hidden>
-                {passages.map((p) => (
-                  <span
-                    key={p.passage.id}
-                    className={cn("size-2.5 rounded-[3px]", cell[p.status])}
-                  />
-                ))}
-              </span>
-            </div>
-            <ul className="divide-y">
-              {passages
-                .filter((p) => !outside || !p.inTour)
-                .map((p) => (
-                  <li
-                    key={p.passage.id}
-                    className="flex items-center gap-3 px-4 py-2.5 text-sm"
-                  >
-                    <ReviewStatus status={p.status} />
-                    <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">
-                      {lineRange(p.passage)}
-                    </span>
+        {outside &&
+          outsideFiles.map((file) => (
+            <article
+              key={file.path}
+              className="flex min-w-0 items-center gap-3 rounded-3xl border p-4"
+            >
+              <ReviewStatus status="Uncovered" />
+              <div className="min-w-0 flex-1">
+                <p className="font-mono text-sm wrap-anywhere">{file.path}</p>
+                <p className="text-xs text-muted-foreground">
+                  {file.layers.join(" · ")} · {file.anchors.length} of{" "}
+                  {file.total} changes outside the tour
+                </p>
+              </div>
+              <Button
+                size="xs"
+                variant="secondary"
+                onClick={() => onSelect(file.anchors[0])}
+              >
+                Review file
+              </Button>
+            </article>
+          ))}
+        {!outside &&
+          files.map(({ change, passages }) => (
+            <article key={change.id} className="rounded-3xl border">
+              <div className="flex items-center gap-3 border-b p-2 pr-4">
+                <FileRow
+                  change={change}
+                  className="min-w-0 flex-1"
+                  onClick={() => onSelect(passages[0].anchor)}
+                />
+                <span className="flex gap-1" aria-hidden>
+                  {passages.map((p) => (
                     <span
-                      className={cn(
-                        "min-w-0 flex-1 truncate",
-                        !p.inTour && "text-muted-foreground"
-                      )}
+                      key={p.passage.id}
+                      className={cn("size-2.5 rounded-[3px]", cell[p.status])}
+                    />
+                  ))}
+                </span>
+              </div>
+              <ul className="divide-y">
+                {passages
+                  .filter((p) => !outside || !p.inTour)
+                  .map((p) => (
+                    <li
+                      key={p.passage.id}
+                      className="flex items-center gap-3 px-4 py-2.5 text-sm"
                     >
-                      {steps.get(p.passage.id) ?? "Outside the tour"}
-                    </span>
-                    <Button
-                      size="xs"
-                      variant={p.inTour ? "ghost" : "secondary"}
-                      onClick={() => onSelect(p.anchor)}
-                    >
-                      {p.inTour ? "Open" : "Review here"}
-                    </Button>
-                  </li>
-                ))}
-            </ul>
-          </article>
-        ))}
+                      <ReviewStatus status={p.status} />
+                      <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">
+                        {lineRange(p.passage)}
+                      </span>
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate",
+                          !p.inTour && "text-muted-foreground"
+                        )}
+                      >
+                        {steps.get(p.passage.id) ?? "Outside the tour"}
+                      </span>
+                      <Button
+                        size="xs"
+                        variant={p.inTour ? "ghost" : "secondary"}
+                        onClick={() => onSelect(p.anchor)}
+                      >
+                        {p.inTour ? "Open" : "Review here"}
+                      </Button>
+                    </li>
+                  ))}
+              </ul>
+            </article>
+          ))}
       </div>
     </section>
   )

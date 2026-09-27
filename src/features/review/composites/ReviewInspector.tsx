@@ -1,7 +1,7 @@
 "use client"
-import { EvidencePanel } from "@/features/evidence/composites/EvidencePanel"
-import { AgentConversation } from "@/features/agents/composites/AgentConversation"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AgentConversation } from "@/features/agents/composites/AgentConversation"
+import { EvidencePanel } from "@/features/evidence/composites/EvidencePanel"
 import type {
   CodeAnchor,
   ReviewAction,
@@ -17,6 +17,7 @@ import {
   isValidated,
   linesLabel,
   passageStatus,
+  readingStep,
   shortTime,
 } from "../helpers/review.helpers"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
@@ -32,7 +33,7 @@ export function ReviewInspector({
   workspace: Workspace
   anchor: CodeAnchor | null
   busy: boolean
-  onAction: (action: ReviewAction) => void
+  onAction: (action: ReviewAction) => Promise<boolean>
   onNext: (direction: number) => void
   onApplied: () => void
 }) {
@@ -42,16 +43,10 @@ export function ReviewInspector({
   const notes = review.annotations.filter(
     (n) => n.anchor.passageId === anchor?.passageId
   )
-  const topic = review.topics.find((t) =>
-    t.steps.some((s) =>
-      s.anchors.some((a) => a.passageId === anchor?.passageId)
-    )
-  )
-  const stepIndex =
-    topic?.steps.findIndex((s) =>
-      s.anchors.some((a) => a.passageId === anchor?.passageId)
-    ) ?? -1
-  const step = topic?.steps[stepIndex]
+  const reading = readingStep(review, anchor)
+  const topic = reading?.topic
+  const stepIndex = reading?.index ?? -1
+  const step = reading?.step
   const change = snapshot.changes.find((c) => c.id === anchor?.changeId)
   const passage = change?.passages.find((p) => p.id === anchor?.passageId)
   const status = anchor ? passageStatus(workspace, anchor) : "Unread"
@@ -67,13 +62,17 @@ export function ReviewInspector({
     anchor?.snapshotId === snapshot.id && status !== "Re-review"
   const openNotes = notes.filter((n) => n.question && !n.resolved).length
   return (
-    <aside className="relative flex w-full min-w-0 flex-col">
-      <div className="flex h-12 shrink-0 items-end border-b px-4">
+    <aside className="@container relative flex w-full min-w-0 flex-col">
+      <div className="flex h-12 shrink-0 items-end border-b px-2 @[340px]:px-4">
         <Tabs
+          className="w-full min-w-0"
           value={inspector}
           onValueChange={(v) => setInspector(v as typeof inspector)}
         >
-          <TabsList variant="line" className="pb-1.5">
+          <TabsList
+            variant="line"
+            className="w-full gap-0 pb-1.5 [&_[role=tab]]:px-1 [&_[role=tab]]:text-xs @[340px]:[&_[role=tab]]:px-3 @[340px]:[&_[role=tab]]:text-sm"
+          >
             <TabsTrigger value="explanation">Explanation</TabsTrigger>
             <TabsTrigger value="notes">
               Notes · {notes.length}
@@ -107,7 +106,7 @@ export function ReviewInspector({
         />
       ) : (
         <>
-          <div className="min-h-0 flex-1 overflow-auto px-5 pt-5 pb-36">
+          <div className="min-h-0 flex-1 scrollbar-none overflow-auto px-5 pt-5 pb-44 wrap-anywhere">
             {inspector === "explanation" ? (
               <StepExplanation
                 position={
@@ -154,20 +153,23 @@ export function ReviewInspector({
               />
             )}
           </div>
-          <footer className="absolute inset-x-0 bottom-0 border-t glass-bar">
+          <footer className="absolute inset-x-0 bottom-0 glass-bar">
+            <div className="pointer-none: absolute -top-6 left-0 h-6 w-full bg-linear-0 from-popover to-transparent" />
+
             {inspector === "notes" && validAnchor ? (
               <NoteComposer
                 kind={noteKind}
                 disabled={busy}
                 onKind={setNoteKind}
                 onSubmit={(body, question) =>
-                  anchor &&
-                  onAction({
-                    kind: "addAnnotation",
-                    anchor,
-                    body: JSON.stringify(body),
-                    question,
-                  })
+                  anchor
+                    ? onAction({
+                        kind: "addAnnotation",
+                        anchor,
+                        body: JSON.stringify(body),
+                        question,
+                      })
+                    : Promise.resolve(false)
                 }
               />
             ) : (

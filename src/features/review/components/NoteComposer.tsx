@@ -20,16 +20,23 @@ export function NoteComposer({
   kind: "note" | "question"
   disabled: boolean
   onKind: (kind: "note" | "question") => void
-  onSubmit: (body: JSONContent, question: boolean) => void
+  onSubmit: (body: JSONContent, question: boolean) => Promise<boolean>
 }) {
   const [draft, setDraft] = useState<JSONContent | null>(null)
   const [editorKey, setEditorKey] = useState(0)
+  const [saving, setSaving] = useState(false)
   const question = kind === "question"
-  const submit = () => {
-    if (!draft || isEmpty(draft) || disabled) return
-    onSubmit(draft, question)
-    setDraft(null)
-    setEditorKey((key) => key + 1)
+  const submit = async () => {
+    if (!draft || isEmpty(draft) || disabled || saving) return
+    setSaving(true)
+    try {
+      if (await onSubmit(draft, question)) {
+        setDraft(null)
+        setEditorKey((key) => key + 1)
+      }
+    } finally {
+      setSaving(false)
+    }
   }
   return (
     <div className="p-3">
@@ -37,6 +44,7 @@ export function NoteComposer({
         <RichTextEditor
           key={editorKey}
           variant="plain"
+          editable={!saving}
           ariaLabel={question ? "Write a question" : "Write a note"}
           placeholder={
             question
@@ -53,7 +61,7 @@ export function NoteComposer({
           <Kbd>⌘↵</Kbd>
           <Button
             size="sm"
-            disabled={disabled || isEmpty(draft)}
+            disabled={disabled || saving || isEmpty(draft)}
             onClick={submit}
           >
             {question ? "Ask question" : "Add note"}

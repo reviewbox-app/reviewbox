@@ -144,6 +144,7 @@ export function ReviewHistoryDialog({
                 key={change.id}
                 snapshot={past.snapshot}
                 change={change}
+                selection={null}
                 position={past.review.position}
                 onPosition={() => {}}
               />

@@ -43,12 +43,15 @@ function stepOf(
   passageId?: string | null,
   stepId?: string | null
 ) {
+  if (stepId) {
+    for (const topic of review.topics) {
+      const index = topic.steps.findIndex((step) => step.id === stepId)
+      if (index >= 0) return { topic, step: topic.steps[index], index }
+    }
+  }
   for (const topic of review.topics)
     for (const [index, step] of topic.steps.entries())
-      if (
-        step.id === stepId ||
-        step.anchors.some((a) => a.passageId === passageId)
-      )
+      if (step.anchors.some((a) => a.passageId === passageId))
         return { topic, step, index }
   return null
 }
@@ -105,11 +108,13 @@ export function ResumeReviews({
   onOpen,
   onNew,
   onError,
+  onDeleted,
 }: {
   repository: Repository
   onOpen: (id: string) => void
   onNew: () => void
   onError: (error: string) => void
+  onDeleted: (id: string) => void
 }) {
   const [reviews, setReviews] = useState<Review[]>([])
   const [coverage, setCoverage] = useState<Record<string, Coverage>>({})
@@ -366,40 +371,43 @@ export function ResumeReviews({
           </article>
         )}
       </main>
-      <AlertDialog
-        open={!!deleting}
-        onOpenChange={(v) => {
-          if (!v) setDeleting(null)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete “{deleting?.title}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This removes the review, its notes and its decisions from
-              ReviewBox. Your repository is never touched.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel variant="secondary">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (!deleting) return
-                reviewCommands
-                  .delete(deleting.id)
-                  .then(() => {
-                    setReviews(reviews.filter((r) => r.id !== deleting.id))
-                    setDeleting(null)
-                  })
-                  .catch((e) => onError(errorMessage(e)))
-              }}
-            >
-              Delete review
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleting && (
+        <AlertDialog
+          open
+          onOpenChange={(v) => {
+            if (!v) setDeleting(null)
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete “{deleting.title}”?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This removes the shared review, its notes and its decisions from
+                .reviewbox. Your source files remain unchanged.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel variant="secondary">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  if (!deleting) return
+                  reviewCommands
+                    .delete(deleting.id)
+                    .then(() => {
+                      setReviews(reviews.filter((r) => r.id !== deleting.id))
+                      onDeleted(deleting.id)
+                      setDeleting(null)
+                    })
+                    .catch((e) => onError(errorMessage(e)))
+                }}
+              >
+                Delete review
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   )
 }

@@ -29,6 +29,7 @@ import type {
   Snapshot,
   FileContent,
   ReadingPosition,
+  CodeAnchor,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
 import {
@@ -61,6 +62,7 @@ export function ReviewCodePane({
   snapshot,
   change,
   passage,
+  selection,
   stepLabel,
   position,
   onPosition,
@@ -68,6 +70,8 @@ export function ReviewCodePane({
   snapshot: Snapshot
   change: Change
   passage?: Passage
+  /** Changes only for deliberate navigation, not saved/reloaded review data. */
+  selection: CodeAnchor | null
   /** "Step 2 · lines 18–34" when the passage belongs to the reading path. */
   stepLabel?: string
   position: ReadingPosition
@@ -87,7 +91,8 @@ export function ReviewCodePane({
   const { split, setSplit } = useReviewWorkspaceStore()
   const instance = useRef<editor.IStandaloneDiffEditor | null>(null)
   const cleanup = useRef<(() => void) | null>(null)
-  const selectedRef = useRef({ passage, split })
+  const selectedRef = useRef({ passage, split, selection })
+  const revealedSelection = useRef<CodeAnchor | null>(null)
   const marks = useRef<{
     before: editor.IEditorDecorationsCollection
     after: editor.IEditorDecorationsCollection
@@ -97,8 +102,8 @@ export function ReviewCodePane({
   useEffect(() => {
     save.current = onPosition
     positionRef.current = position
-    selectedRef.current = { passage, split }
-  }, [onPosition, position, passage, split])
+    selectedRef.current = { passage, split, selection }
+  }, [onPosition, position, passage, split, selection])
   useEffect(() => {
     let alive = true
     reviewCommands
@@ -117,9 +122,12 @@ export function ReviewCodePane({
     }
   }, [snapshot.id, change.id])
   useEffect(() => {
-    if (!passage || !instance.current) return
+    // Saving scroll position returns fresh passage objects. That is not navigation.
+    if (!instance.current || revealedSelection.current === selection) return
+    revealedSelection.current = selection
     marks.current?.before.clear()
     marks.current?.after.clear()
+    if (!passage) return
     const side = passage.newLines ? marks.current?.after : marks.current?.before
     side?.set([passageDecoration(passage)])
     const target = passage.newLines
@@ -128,21 +136,21 @@ export function ReviewCodePane({
     target.revealLineInCenter(
       passage.newLines ? passage.newStart : passage.oldStart
     )
-  }, [passage])
+  }, [passage, selection])
   const folder = folderOf(change.path)
   return (
     <section
       className="relative flex min-w-0 flex-1 flex-col overflow-hidden"
       aria-label="Code diff"
     >
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b pr-3 pl-4">
+      <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
         <HugeiconsIcon
           icon={FileEditIcon}
           size={16}
           className="shrink-0 text-muted-foreground"
         />
         <span
-          className="min-w-0 truncate text-sm"
+          className="min-w-0 flex-1 basis-20 truncate text-sm"
           title={
             change.previousPath
               ? `${change.previousPath} → ${change.path}`
@@ -276,6 +284,9 @@ export function ReviewCodePane({
             }}
             onMount={(mounted) => {
               instance.current = mounted
+              const { passage, selection } = selectedRef.current
+              const position = positionRef.current
+              revealedSelection.current = selection
               const modified = mounted.getModifiedEditor()
               const original = mounted.getOriginalEditor()
               const beforeMarks = original.createDecorationsCollection()
@@ -285,7 +296,11 @@ export function ReviewCodePane({
                 (passage.newLines ? afterMarks : beforeMarks).set([
                   passageDecoration(passage),
                 ])
-              if (position.changeId === change.id && position.line > 0) {
+              if (
+                position.changeId === change.id &&
+                (!passage || position.passageId === passage.id) &&
+                position.line > 0
+              ) {
                 modified.setPosition({ lineNumber: position.line, column: 1 })
                 modified.setScrollTop(position.scrollTop)
               } else if (passage) {

@@ -37,7 +37,7 @@ export function DecisionBar({
 }) {
   return (
     <div className="space-y-2.5 p-3">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {validated ? (
           <Button
             variant="secondary"

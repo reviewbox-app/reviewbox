@@ -14,6 +14,27 @@ export function anchorFor(
 ): CodeAnchor {
   return { snapshotId: snapshot.id, changeId, passageId: passage.id }
 }
+/** Several reading steps may deliberately discuss the same source passage. */
+export function readingStep(
+  review: Pick<Review, "topics" | "position">,
+  anchor: CodeAnchor | null
+) {
+  const matches = review.topics.flatMap((topic) =>
+    topic.steps.flatMap((step, index) =>
+      step.anchors.some(
+        (a) =>
+          a.passageId === anchor?.passageId &&
+          a.snapshotId === anchor.snapshotId &&
+          a.changeId === anchor.changeId
+      )
+        ? [{ topic, step, index }]
+        : []
+    )
+  )
+  return (
+    matches.find(({ step }) => step.id === review.position.stepId) ?? matches[0]
+  )
+}
 export function isValidated(
   review: Review,
   anchor: CodeAnchor,
@@ -170,4 +191,52 @@ export function plainText(body: string) {
   } catch {
     return body
   }
+}
+
+/** One row per captured path, even when staged and unstaged layers coexist. */
+export function groupFileAnchors(snapshot: Snapshot, anchors: CodeAnchor[]) {
+  const selected = new Set(
+    anchors
+      .filter((a) => a.snapshotId === snapshot.id)
+      .map((a) => `${a.changeId}/${a.passageId}`)
+  )
+  const files = new Map<
+    string,
+    { path: string; anchors: CodeAnchor[]; layers: string[]; total: number }
+  >()
+  for (const change of snapshot.changes) {
+    const group = files.get(change.path) ?? {
+      path: change.path,
+      anchors: [],
+      layers: [],
+      total: 0,
+    }
+    group.total += change.passages.length
+    for (const passage of change.passages) {
+      if (selected.has(`${change.id}/${passage.id}`)) {
+        group.anchors.push(anchorFor(snapshot, change.id, passage))
+        if (!group.layers.includes(change.layer))
+          group.layers.push(change.layer)
+      }
+    }
+    files.set(change.path, group)
+  }
+  return [...files.values()].filter((file) => file.anchors.length > 0)
+}
+
+export function outsideReviewFiles(workspace: Workspace) {
+  const covered = new Set(
+    workspace.review.topics
+      .flatMap((topic) => topic.steps.flatMap((step) => step.anchors))
+      .filter((a) => a.snapshotId === workspace.snapshot.id)
+      .map((a) => `${a.changeId}/${a.passageId}`)
+  )
+  return groupFileAnchors(
+    workspace.snapshot,
+    workspace.snapshot.changes.flatMap((change) =>
+      change.passages
+        .filter((passage) => !covered.has(`${change.id}/${passage.id}`))
+        .map((passage) => anchorFor(workspace.snapshot, change.id, passage))
+    )
+  )
 }

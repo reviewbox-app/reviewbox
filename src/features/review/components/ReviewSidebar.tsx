@@ -1,4 +1,5 @@
 "use client"
+import { outsideReviewFiles } from "../helpers/review.helpers"
 import { useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -39,6 +40,7 @@ import {
   isValidated,
   passageStatus,
   topicStatus,
+  readingStep,
 } from "../helpers/review.helpers"
 
 export function ReviewSidebar({
@@ -67,11 +69,8 @@ export function ReviewSidebar({
   onPropose: () => void
 }) {
   const { review, snapshot } = workspace
-  const current = review.topics.find((t) =>
-    t.steps.some((s) =>
-      s.anchors.some((a) => a.passageId === selected?.passageId)
-    )
-  )
+  const reading = readingStep(review, selected)
+  const current = reading?.topic
   const [open, setOpen] = useState<Set<string>>(
     () =>
       new Set(
@@ -157,7 +156,7 @@ export function ReviewSidebar({
             <p>
               No topics yet. Read the files directly or build a guided path.
             </p>
-            <div className="mt-3 flex gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" onClick={() => onTopic()}>
                 Create a topic
               </Button>
@@ -170,22 +169,27 @@ export function ReviewSidebar({
         )}
         {review.topics.map((topic) => {
           const statuses = topic.steps.map((step) =>
-            step.anchors[0]
-              ? passageStatus(workspace, step.anchors[0])
+            step.anchors.length
+              ? topicStatus(
+                  step.anchors.map((a) => passageStatus(workspace, a))
+                )
               : "Re-review"
           )
           // Progress counts human validations, even while a question is open.
-          const done = topic.steps.filter((step) => {
-            const anchor = step.anchors[0]
-            const passage = snapshot.changes
-              .find((c) => c.id === anchor?.changeId)
-              ?.passages.find((p) => p.id === anchor?.passageId)
-            return (
-              !!anchor &&
-              !!passage &&
-              isValidated(review, anchor, passage.fingerprint)
-            )
-          }).length
+          const done = topic.steps.filter(
+            (step) =>
+              step.anchors.length &&
+              step.anchors.every((anchor) => {
+                const passage = snapshot.changes
+                  .find((c) => c.id === anchor?.changeId)
+                  ?.passages.find((p) => p.id === anchor?.passageId)
+                return (
+                  !!anchor &&
+                  !!passage &&
+                  isValidated(review, anchor, passage.fingerprint)
+                )
+              })
+          ).length
           const expanded = open.has(topic.id)
           return (
             <section key={topic.id} className="group/topic">
@@ -200,7 +204,7 @@ export function ReviewSidebar({
                     size={16}
                     className="shrink-0 text-muted-foreground"
                   />
-                  <span className="min-w-0 flex-1 leading-5">
+                  <span className="min-w-0 flex-1 leading-5 wrap-anywhere">
                     {topic.title}
                   </span>
                   <span className="text-xs font-normal text-muted-foreground tabular-nums group-hover/topic:invisible">
@@ -222,7 +226,7 @@ export function ReviewSidebar({
                 <ol className="mb-1 ml-3.5 space-y-0.5">
                   {topic.steps.map((step, index) => {
                     const anchor = step.anchors[0]
-                    const active = selected?.passageId === anchor?.passageId
+                    const active = reading?.step.id === step.id
                     return (
                       <li key={step.id}>
                         <button
@@ -236,10 +240,10 @@ export function ReviewSidebar({
                           <span className="flex h-5 items-center">
                             <ReviewStatus status={statuses[index]} />
                           </span>
-                          <span className="min-w-0">
+                          <span className="min-w-0 flex-1">
                             <span
                               className={cn(
-                                "block text-sm leading-5",
+                                "block text-sm leading-5 wrap-anywhere",
                                 active && "font-medium"
                               )}
                             >
@@ -283,8 +287,8 @@ export function ReviewSidebar({
           >
             <ReviewStatus status="Uncovered" />
             <span className="flex-1">
-              {coverage?.outside ?? 0}{" "}
-              {coverage?.outside === 1 ? "change" : "changes"} outside the tour
+              {outsideReviewFiles(workspace).length} files with changes outside
+              the tour
             </span>
             <HugeiconsIcon
               icon={ArrowRight01Icon}
@@ -295,7 +299,7 @@ export function ReviewSidebar({
         </div>
       </nav>
       <footer className="space-y-2 px-3 pt-3">
-        <div className="flex justify-between text-xs">
+        <div className="flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs">
           <span className="font-medium">Coverage</span>
           <span className="text-muted-foreground tabular-nums">
             {coverage?.examined ?? 0} of {coverage?.total ?? 0} passages
