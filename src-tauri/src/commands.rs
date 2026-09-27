@@ -9,6 +9,112 @@ async fn blocking<T: Send + 'static>(
         .await
         .map_err(|_| AppError::new("task_failed", "The native operation could not finish."))?
 }
+
+#[tauri::command]
+pub async fn preview_review(
+    storage: State<'_, Storage>,
+    request: CaptureRequest,
+) -> AppResult<ReviewPreview> {
+    let s = storage.scoped(Some(&request.repository_id));
+    blocking(move || crate::review_creation::preview(&s, &request)).await
+}
+
+#[tauri::command]
+pub async fn review_references(
+    storage: State<'_, Storage>,
+    repository_id: String,
+    query: String,
+) -> AppResult<Vec<RepositoryRef>> {
+    let s = storage.inner().clone();
+    blocking(move || crate::review_creation::references(&s, &repository_id, &query)).await
+}
+
+#[tauri::command]
+pub async fn create_review_operation(
+    storage: State<'_, Storage>,
+    manager: State<'_, crate::review_creation::CaptureManager>,
+    operation_id: String,
+    request: CaptureRequest,
+    channel: tauri::ipc::Channel<CaptureProgress>,
+) -> AppResult<Workspace> {
+    let task = manager.begin(&operation_id)?;
+    let s = storage.scoped(Some(&request.repository_id));
+    let result = blocking(move || {
+        crate::review_creation::create(&s, request, task, |progress| {
+            channel
+                .send(progress)
+                .map_err(|_| AppError::new("cancelled", "The capture window was closed."))
+        })
+    })
+    .await;
+    manager.finish(&operation_id);
+    result
+}
+
+#[tauri::command]
+pub fn cancel_review_creation(
+    manager: State<'_, crate::review_creation::CaptureManager>,
+    operation_id: String,
+) -> AppResult<()> {
+    manager.cancel(&operation_id)
+}
+
+#[tauri::command]
+pub async fn choose_provider_executable() -> AppResult<Option<String>> {
+    Ok(rfd::AsyncFileDialog::new()
+        .set_title("Choose harness executable")
+        .pick_file()
+        .await
+        .map(|file| file.path().to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn install_provider(
+    app: tauri::AppHandle,
+    storage: State<'_, Storage>,
+    manager: State<'_, crate::agents::setup::SetupManager>,
+    request: ProviderSetupRequest,
+    channel: tauri::ipc::Channel<ProviderSetupEvent>,
+) -> AppResult<ProviderStatus> {
+    let result = crate::agents::setup::install(&storage, &manager, request, channel).await;
+    use tauri::Emitter;
+    let _ = app.emit("reviewbox:providers-changed", ());
+    result
+}
+
+#[tauri::command]
+pub fn cancel_provider_setup(
+    manager: State<'_, crate::agents::setup::SetupManager>,
+    operation_id: String,
+) -> AppResult<()> {
+    manager.cancel(&operation_id)
+}
+
+#[tauri::command]
+pub async fn open_provider_login(storage: State<'_, Storage>, provider: String) -> AppResult<()> {
+    crate::agents::setup::open_login(&storage, &provider).await
+}
+
+#[tauri::command]
+pub async fn agent_preparation_context(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    review_id: String,
+) -> AppResult<AgentPreparationContext> {
+    let s = storage.scoped(repository_id.as_deref());
+    blocking(move || crate::agents::preparation_context(&s, &review_id)).await
+}
+
+#[tauri::command]
+pub async fn diagnose_proposal(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    review_id: String,
+    content: ProposalContent,
+) -> AppResult<Vec<ProposalDiagnostic>> {
+    let s = storage.scoped(repository_id.as_deref());
+    blocking(move || crate::proposals::diagnostics(&s, &review_id, &content)).await
+}
 #[tauri::command]
 pub async fn list_repositories(storage: State<'_, Storage>) -> AppResult<Vec<Repository>> {
     let s = storage.inner().clone();
@@ -190,23 +296,37 @@ pub async fn save_knowledge(
     blocking(move || crate::knowledge::save(&s, knowledge)).await
 }
 #[tauri::command]
+pub async fn provider_models(
+    storage: State<'_, Storage>,
+    manager: State<'_, crate::agents::models::CatalogManager>,
+    id: String,
+    provider: String,
+) -> AppResult<Vec<ProviderModel>> {
+    let config = crate::agents::settings(storage.inner())?
+        .providers
+        .into_iter()
+        .find(|config| config.provider == provider)
+        .ok_or_else(|| AppError::new("provider", "Unknown provider."))?;
+    let cancel = manager.0.register(&id)?;
+    let result = crate::agents::models::discover(&config, cancel).await;
+    manager.0.remove(&id);
+    result
+}
+
+#[tauri::command]
+pub fn cancel_provider_models(
+    manager: State<'_, crate::agents::models::CatalogManager>,
+    id: String,
+) -> AppResult<()> {
+    manager.0.cancel(&id)
+}
+
+#[tauri::command]
 pub async fn provider_status(storage: State<'_, Storage>) -> AppResult<Vec<ProviderStatus>> {
     let configs = crate::agents::settings(storage.inner())?.providers;
     let mut statuses = vec![];
     for config in configs {
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            tokio::process::Command::new(&config.executable)
-                .arg("--version")
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await;
-        let status = match result {
-            Ok(Ok(output)) if output.status.success() => ProviderStatus { provider:config.provider,available:true,version:Some(String::from_utf8_lossy(&output.stdout).trim().chars().take(256).collect()),message:"Installed. Authentication has not been checked.".into() },
-            _ => ProviderStatus { provider:config.provider,available:false,version:None,message:"Executable unavailable or version detection timed out. Configure its full path below.".into() },
-        };
-        statuses.push(status);
+        statuses.push(crate::agents::providers::detect(&config).await);
     }
     Ok(statuses)
 }
@@ -545,16 +665,24 @@ pub async fn open_settings(app: tauri::AppHandle) -> AppResult<()> {
             .set_focus()
             .map_err(|e| AppError::new("window", e.to_string()))?;
     } else {
-        tauri::WebviewWindowBuilder::new(
-            &app,
-            "settings",
-            tauri::WebviewUrl::App("settings/index.html".into()),
-        )
-        .title("ReviewBox Settings")
-        .inner_size(1040.0, 720.0)
-        .min_inner_size(800.0, 600.0)
-        .build()
-        .map_err(|e| AppError::new("window", e.to_string()))?;
+        // Next serves the route in dev; the bundled export contains its HTML file.
+        let path = if tauri::is_dev() {
+            "settings/"
+        } else {
+            "settings/index.html"
+        };
+        let window =
+            tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App(path.into()))
+                .title("ReviewBox Settings")
+                .inner_size(1040.0, 720.0)
+                .min_inner_size(800.0, 600.0);
+        #[cfg(target_os = "macos")]
+        let window = window
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+        window
+            .build()
+            .map_err(|e| AppError::new("window", e.to_string()))?;
     }
     Ok(())
 }
@@ -606,11 +734,15 @@ pub async fn provider_settings(storage: State<'_, Storage>) -> AppResult<Provide
 }
 #[tauri::command]
 pub async fn configure_providers(
+    app: tauri::AppHandle,
     storage: State<'_, Storage>,
     settings: ProviderSettings,
 ) -> AppResult<ProviderSettings> {
     let s = storage.inner().clone();
-    blocking(move || crate::agents::configure(&s, settings)).await
+    let settings = blocking(move || crate::agents::configure(&s, settings)).await?;
+    use tauri::Emitter;
+    let _ = app.emit("reviewbox:providers-changed", ());
+    Ok(settings)
 }
 
 #[tauri::command]

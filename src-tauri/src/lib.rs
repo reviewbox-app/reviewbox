@@ -15,6 +15,7 @@ mod project_storage_tests;
 mod prompts;
 mod proposals;
 mod repositories;
+mod review_creation;
 mod reviews;
 mod snapshots;
 mod storage;
@@ -45,11 +46,24 @@ pub fn run() {
             );
             app.manage(storage);
             app.manage(agents::AgentManager::default());
+            app.manage(agents::models::CatalogManager::default());
+            app.manage(review_creation::CaptureManager::default());
+            app.manage(agents::setup::SetupManager::default());
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .state::<agents::models::CatalogManager>()
+                    .0
+                    .stop_all();
+            }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<agents::AgentManager>().stop_all();
+                window
+                    .state::<review_creation::CaptureManager>()
+                    .cancel_all();
+                window.state::<agents::setup::SetupManager>().stop_all();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,6 +74,16 @@ pub fn run() {
             commands::forget_repository,
             commands::list_reviews,
             commands::create_review,
+            commands::preview_review,
+            commands::review_references,
+            commands::create_review_operation,
+            commands::cancel_review_creation,
+            commands::choose_provider_executable,
+            commands::install_provider,
+            commands::cancel_provider_setup,
+            commands::open_provider_login,
+            commands::agent_preparation_context,
+            commands::diagnose_proposal,
             commands::load_review,
             commands::update_review,
             commands::refresh_review,
@@ -72,6 +96,8 @@ pub fn run() {
             commands::load_knowledge,
             commands::save_knowledge,
             commands::provider_status,
+            commands::provider_models,
+            commands::cancel_provider_models,
             commands::export_tour,
             commands::import_tour,
             commands::start_agent,
