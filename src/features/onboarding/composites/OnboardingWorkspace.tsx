@@ -149,6 +149,7 @@ export function OnboardingWorkspace({
           <Button
             size="icon"
             variant="secondary"
+            type="submit"
             aria-label="Create tour"
             disabled={busy || !newTitle.trim()}
           >
@@ -186,7 +187,7 @@ export function OnboardingWorkspace({
                     className="text-muted-foreground"
                   />
                 </span>
-                <span className="min-w-0">
+                <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm">{item.title}</span>
                   <span className="block text-xs text-muted-foreground">
                     {item.steps.length} steps · {visited} read
@@ -311,7 +312,7 @@ export function OnboardingWorkspace({
           )}
         </section>
         <aside className="relative flex w-[384px] shrink-0 flex-col border-l max-[1200px]:w-[320px]">
-          <div className="min-h-0 flex-1 space-y-5 overflow-auto p-5 pb-32">
+          <div className="min-h-0 flex-1 space-y-5 overflow-auto p-5 pb-32 wrap-anywhere">
             <h2 className="text-lg font-medium">
               {tour?.title ?? "Learn this project"}
             </h2>
@@ -565,6 +566,7 @@ export function OnboardingWorkspace({
                 </p>
               )}
               <Button
+                type="submit"
                 disabled={busy || !editing.title.trim() || !editing.path.trim()}
               >
                 Save current anchor

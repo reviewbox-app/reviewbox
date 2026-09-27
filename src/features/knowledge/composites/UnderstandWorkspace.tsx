@@ -335,13 +335,16 @@ export function UnderstandWorkspace({
         ) : (
           <>
             <div className="flex min-w-0 flex-1 flex-col">
-              <header className="flex h-12 shrink-0 items-center gap-3 border-b pr-3 pl-4">
+              <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
                 <HugeiconsIcon
                   icon={CodeIcon}
                   size={16}
                   className="shrink-0 text-muted-foreground"
                 />
-                <span className="min-w-0 truncate text-sm" title={path}>
+                <span
+                  className="min-w-0 flex-1 basis-20 truncate text-sm"
+                  title={path}
+                >
                   {path ? (
                     <>
                       {folder && (
@@ -476,7 +479,7 @@ export function UnderstandWorkspace({
                   </Popover>
                 )}
               </header>
-              <div className="min-h-0 flex-1 space-y-2 overflow-auto p-5">
+              <div className="min-h-0 flex-1 space-y-2 overflow-auto p-5 wrap-anywhere">
                 {document && (
                   <p className="pb-2 text-xs text-muted-foreground">
                     {path.split("/").at(-1)} · {languageName(path)} · written in{" "}
@@ -514,9 +517,9 @@ export function UnderstandWorkspace({
                         hovered === section.id && "bg-secondary"
                       )}
                     >
-                      <h3 className="mb-1.5 flex items-baseline gap-3 text-sm font-medium">
+                      <h3 className="mb-1.5 flex flex-wrap items-baseline gap-3 text-sm font-medium">
                         <button
-                          className="flex-1 text-left outline-none focus-visible:underline"
+                          className="min-w-0 flex-1 text-left outline-none focus-visible:underline"
                           onClick={() =>
                             editorRef.current?.revealLineInCenter(
                               section.startLine
@@ -605,6 +608,7 @@ export function UnderstandWorkspace({
                             Cancel
                           </Button>
                           <Button
+                            type="submit"
                             disabled={saving || !title.trim() || !body.trim()}
                           >
                             Save section

@@ -74,7 +74,11 @@ export function RepositoryHome({
               value={path}
               onChange={(e) => setPath(e.target.value)}
             />
-            <Button variant="secondary" disabled={!path.trim() || busy}>
+            <Button
+              type="submit"
+              variant="secondary"
+              disabled={!path.trim() || busy}
+            >
               Open
             </Button>
           </form>

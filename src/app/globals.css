@@ -198,3 +198,29 @@
 .review-validated {
   border-left: 2px solid var(--review-validated);
 }
+
+.custom-scrollbar {
+  scrollbar-color: hsl(var(--card) / 0.35) transparent;
+  scrollbar-width: thin;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .custom-scrollbar {
+    scrollbar-color: auto;
+    scrollbar-width: auto;
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 25px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--card) / 0.35);
+  border-radius: 50px;
+}

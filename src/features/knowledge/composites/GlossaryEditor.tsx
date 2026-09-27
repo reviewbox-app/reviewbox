@@ -123,7 +123,7 @@ export function GlossaryEditor({
           onChange={(e) => setDescription(e.target.value)}
         />
         <div className="flex gap-2">
-          <Button disabled={!name.trim() || !description.trim()}>
+          <Button type="submit" disabled={!name.trim() || !description.trim()}>
             Save meaning
           </Button>
           {senseTerm && (
