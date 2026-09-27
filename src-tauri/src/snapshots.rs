@@ -13,8 +13,8 @@ use std::{
 };
 
 pub(crate) type Tree = BTreeMap<String, BlobRef>;
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-const MAX_FILE: u64 = 64 * 1024 * 1024;
+pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+pub(crate) const MAX_FILE: u64 = 64 * 1024 * 1024;
 
 pub fn is_metadata(path: &str) -> bool {
     path == ".reviewbox" || path.starts_with(".reviewbox/")
@@ -39,6 +39,26 @@ fn utf8(bytes: &[u8]) -> AppResult<String> {
         .map_err(|_| AppError::new("unsupported_path", "A repository filename is not UTF-8."))
 }
 pub(crate) fn git_tree(storage: &Storage, root: &Path, reference: &str) -> AppResult<Tree> {
+    git_tree_observed(
+        storage,
+        root,
+        reference,
+        "copying",
+        &mut |_, _, _, _| Ok(()),
+    )
+}
+
+pub(crate) type CaptureObserver<'a> =
+    dyn FnMut(&str, u32, Option<u32>, Option<&str>) -> AppResult<()> + 'a;
+
+fn git_tree_observed(
+    storage: &Storage,
+    root: &Path,
+    reference: &str,
+    phase: &str,
+    observer: &mut CaptureObserver<'_>,
+) -> AppResult<Tree> {
+    observer(phase, 0, None, None)?;
     let data = if reference == "INDEX" {
         git(root, &["ls-files", "--stage", "-z"])?
     } else {
@@ -66,7 +86,10 @@ pub(crate) fn git_tree(storage: &Storage, root: &Path, reference: &str) -> AppRe
         );
         let mut tree = Tree::new();
         let mut sources = Vec::new();
-        for entry in data.split(|b| *b == 0).filter(|v| !v.is_empty()) {
+        let entries: Vec<_> = data.split(|b| *b == 0).filter(|v| !v.is_empty()).collect();
+        let total = entries.len() as u32;
+        for (position, entry) in entries.into_iter().enumerate() {
+            observer(phase, position as u32, Some(total), None)?;
             let separator = entry
                 .iter()
                 .position(|b| *b == b'\t')
@@ -76,16 +99,16 @@ pub(crate) fn git_tree(storage: &Storage, root: &Path, reference: &str) -> AppRe
             if fields.len() != 3 {
                 return Err(AppError::new("git", "Malformed Git entry."));
             }
+            let path = utf8(&entry[separator + 1..])?;
+            safe_path(&path)?;
+            if is_metadata(&path) {
+                continue;
+            }
             if reference == "INDEX" && fields[2] != "0" {
                 return Err(AppError::new(
                     "merge_conflict",
                     "Resolve the index conflicts before capturing a review.",
                 ));
-            }
-            let path = utf8(&entry[separator + 1..])?;
-            safe_path(&path)?;
-            if is_metadata(&path) {
-                continue;
             }
             let object = if reference == "INDEX" {
                 fields[1]
@@ -119,8 +142,10 @@ pub(crate) fn git_tree(storage: &Storage, root: &Path, reference: &str) -> AppRe
             if reference != "INDEX" && fields[0] != "160000" {
                 sources.push((blob.hash.clone(), object.to_string()));
             }
+            observer(phase, position as u32 + 1, Some(total), Some(&path))?;
             tree.insert(path, blob);
         }
+        observer(phase, total, Some(total), None)?;
         storage.record_git_blobs(root, reference, &sources)?;
         Ok(tree)
     })();
@@ -129,6 +154,24 @@ pub(crate) fn git_tree(storage: &Storage, root: &Path, reference: &str) -> AppRe
     result
 }
 fn working_tree(storage: &Storage, root: &Path, index: &Tree, untracked: bool) -> AppResult<Tree> {
+    working_tree_observed(
+        storage,
+        root,
+        index,
+        untracked,
+        "copying_worktree",
+        &mut |_, _, _, _| Ok(()),
+    )
+}
+fn working_tree_observed(
+    storage: &Storage,
+    root: &Path,
+    index: &Tree,
+    untracked: bool,
+    phase: &str,
+    observer: &mut CaptureObserver<'_>,
+) -> AppResult<Tree> {
+    observer(phase, 0, None, None)?;
     let mut paths: Vec<String> = index.keys().cloned().collect();
     if untracked {
         for path in git(root, &["ls-files", "--others", "--exclude-standard", "-z"])?
@@ -139,7 +182,9 @@ fn working_tree(storage: &Storage, root: &Path, index: &Tree, untracked: bool) -
         }
     }
     let mut tree = Tree::new();
-    for path in paths {
+    let total = paths.len() as u32;
+    for (position, path) in paths.into_iter().enumerate() {
+        observer(phase, position as u32, Some(total), Some(&path))?;
         if is_metadata(&path) {
             continue;
         }
@@ -191,6 +236,7 @@ fn working_tree(storage: &Storage, root: &Path, index: &Tree, untracked: bool) -
         };
         tree.insert(path, storage.blob(&bytes, mode)?);
     }
+    observer(phase, total, Some(total), None)?;
     Ok(tree)
 }
 fn tree_hash(tree: &Tree) -> AppResult<String> {
@@ -200,6 +246,20 @@ pub fn workspace_fingerprint(storage: &Storage, root: &Path, untracked: bool) ->
     let index = git_tree(storage, root, "INDEX")?;
     tree_hash(&working_tree(storage, root, &index, untracked)?)
 }
+pub(crate) fn content_is_binary(
+    old: &[u8],
+    new: &[u8],
+    before_mode: Option<&str>,
+    after_mode: Option<&str>,
+) -> bool {
+    old.contains(&0)
+        || new.contains(&0)
+        || std::str::from_utf8(old).is_err()
+        || std::str::from_utf8(new).is_err()
+        || before_mode == Some("160000")
+        || after_mode == Some("160000")
+}
+
 fn changed(storage: &Storage, before: &Tree, after: &Tree, layer: &str) -> AppResult<Vec<Change>> {
     let mut changes = Vec::new();
     let paths: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
@@ -217,12 +277,12 @@ fn changed(storage: &Storage, before: &Tree, after: &Tree, layer: &str) -> AppRe
             .map(|b| storage.read_blob(&b.hash))
             .transpose()?
             .unwrap_or_default();
-        let binary = old.contains(&0)
-            || new.contains(&0)
-            || std::str::from_utf8(&old).is_err()
-            || std::str::from_utf8(&new).is_err()
-            || left.is_some_and(|v| v.mode == "160000")
-            || right.is_some_and(|v| v.mode == "160000");
+        let binary = content_is_binary(
+            &old,
+            &new,
+            left.map(|v| v.mode.as_str()),
+            right.map(|v| v.mode.as_str()),
+        );
         let mut passages = Vec::new();
         if !binary {
             let old_text = std::str::from_utf8(&old)
@@ -296,41 +356,72 @@ fn changed(storage: &Storage, before: &Tree, after: &Tree, layer: &str) -> AppRe
     }
     Ok(changes)
 }
+/// Resolve one immutable comparison for both preview and capture. Reading the
+/// commit header distinguishes an actual root from a missing shallow parent.
+pub(crate) fn comparison_refs(
+    root: &Path,
+    request: &CaptureRequest,
+) -> AppResult<(String, String)> {
+    let target = resolve(root, request.target.as_deref().unwrap_or("HEAD"))?;
+    let base = if request.scope == Scope::Commit {
+        let commit = text(root, &["cat-file", "commit", &target])?;
+        match commit.split("\n\n").next().unwrap_or_default().lines().find_map(|line| line.strip_prefix("parent ")) {
+            Some(parent) => resolve(root, parent).map_err(|_| AppError::new("missing_commit", "This commit's parent is unavailable. Fetch its history before creating a review."))?,
+            None => EMPTY_TREE.into(),
+        }
+    } else {
+        resolve(root, request.base.as_deref().unwrap_or("HEAD"))?
+    };
+    Ok((base, target))
+}
+
 pub fn capture(storage: &Storage, request: CaptureRequest) -> AppResult<Snapshot> {
+    let snapshot = prepare_capture(storage, request, &mut |_, _, _, _| Ok(()))?;
+    storage.insert("snapshot", &snapshot.id, &snapshot)?;
+    Ok(snapshot)
+}
+/// Stage immutable content in the local cache; the caller owns publication.
+pub(crate) fn prepare_capture(
+    storage: &Storage,
+    request: CaptureRequest,
+    observer: &mut CaptureObserver<'_>,
+) -> AppResult<Snapshot> {
+    observer("preparing", 0, None, None)?;
     let root = root(storage, &request.repository_id)?;
     let head =
         text(&root, &["rev-parse", "--verify", "HEAD"]).unwrap_or_else(|_| EMPTY_TREE.into());
-    let head_tree = git_tree(storage, &root, &head)?;
-    let index = git_tree(storage, &root, "INDEX")?;
-    let working = working_tree(storage, &root, &index, request.include_untracked)?;
+    let head_tree = git_tree_observed(storage, &root, &head, "copying_head", observer)?;
+    let index = git_tree_observed(storage, &root, "INDEX", "copying_index", observer)?;
+    let working = working_tree_observed(
+        storage,
+        &root,
+        &index,
+        request.include_untracked,
+        "copying_worktree",
+        observer,
+    )?;
+    observer("comparing", 0, None, None)?;
     let before_hash = tree_hash(&working)?;
     let mut git_refs = vec![head.clone()];
     let (changes, files) = match request.scope {
         Scope::Local => {
-            let mut changes =
-                changed(storage, &git_tree(storage, &root, &head)?, &index, "staged")?;
+            let mut changes = changed(storage, &head_tree, &index, "staged")?;
             changes.extend(changed(storage, &index, &working, "unstaged")?);
             (changes, working)
         }
         Scope::Staged => (
-            changed(storage, &git_tree(storage, &root, &head)?, &index, "staged")?,
+            changed(storage, &head_tree, &index, "staged")?,
             index.clone(),
         ),
         Scope::Unstaged => (changed(storage, &index, &working, "unstaged")?, working),
         Scope::Commit | Scope::Range => {
-            let target = resolve(&root, request.target.as_deref().unwrap_or("HEAD"))?;
-            let base = if request.scope == Scope::Commit {
-                text(&root, &["rev-parse", "--verify", &format!("{target}^1")])
-                    .unwrap_or_else(|_| EMPTY_TREE.into())
-            } else {
-                resolve(&root, request.base.as_deref().unwrap_or("HEAD"))?
-            };
+            let (base, target) = comparison_refs(&root, &request)?;
             git_refs.extend([base.clone(), target.clone()]);
-            let after = git_tree(storage, &root, &target)?;
+            let after = git_tree_observed(storage, &root, &target, "copying_target", observer)?;
             (
                 changed(
                     storage,
-                    &git_tree(storage, &root, &base)?,
+                    &git_tree_observed(storage, &root, &base, "copying_base", observer)?,
                     &after,
                     "committed",
                 )?,
@@ -338,9 +429,23 @@ pub fn capture(storage: &Storage, request: CaptureRequest) -> AppResult<Snapshot
             )
         }
     };
+    observer("verifying", 0, None, None)?;
     if text(&root, &["rev-parse", "--verify", "HEAD"]).unwrap_or_else(|_| EMPTY_TREE.into()) != head
-        || tree_hash(&git_tree(storage, &root, "INDEX")?)? != tree_hash(&index)?
-        || workspace_fingerprint(storage, &root, request.include_untracked)? != before_hash
+        || tree_hash(&git_tree_observed(
+            storage,
+            &root,
+            "INDEX",
+            "verifying",
+            observer,
+        )?)? != tree_hash(&index)?
+        || tree_hash(&working_tree_observed(
+            storage,
+            &root,
+            &index,
+            request.include_untracked,
+            "verifying",
+            observer,
+        )?)? != before_hash
     {
         return Err(AppError::new(
             "capture_changed",
@@ -363,7 +468,7 @@ pub fn capture(storage: &Storage, request: CaptureRequest) -> AppResult<Snapshot
             .map(|(path, content)| SnapshotFile { path, content })
             .collect(),
     };
-    storage.insert("snapshot", &snapshot.id, &snapshot)?;
+    observer("verifying", 1, Some(1), None)?;
     Ok(snapshot)
 }
 pub fn content(storage: &Storage, snapshot_id: &str, change_id: &str) -> AppResult<FileContent> {

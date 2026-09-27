@@ -2,7 +2,10 @@ use crate::{contracts::*, snapshots, storage::Storage};
 use std::collections::HashSet;
 
 pub fn create(storage: &Storage, request: CaptureRequest) -> AppResult<Workspace> {
-    let snapshot = snapshots::capture(storage, request)?;
+    let snapshot = snapshots::prepare_capture(storage, request, &mut |_, _, _, _| Ok(()))?;
+    publish_creation(storage, snapshot)
+}
+pub(crate) fn publish_creation(storage: &Storage, snapshot: Snapshot) -> AppResult<Workspace> {
     let review = Review {
         id: id(),
         title: match snapshot.request.scope {
@@ -25,7 +28,15 @@ pub fn create(storage: &Storage, request: CaptureRequest) -> AppResult<Workspace
         created_at: now(),
         updated_at: now(),
     };
-    storage.insert("review", &review.id, &review)?;
+    storage.write_batch(vec![
+        (
+            "snapshot",
+            &snapshot.id,
+            None,
+            serde_json::to_value(&snapshot)?,
+        ),
+        ("review", &review.id, None, serde_json::to_value(&review)?),
+    ])?;
     Ok(Workspace { review, snapshot })
 }
 pub fn load(storage: &Storage, id: &str) -> AppResult<Workspace> {
