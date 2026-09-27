@@ -264,52 +264,37 @@ fn settings_and_reading_are_separate_and_missing_git_has_no_fallback() {
     assert_eq!(error.code, "missing_git_object");
 }
 #[test]
-fn legacy_migration_preserves_ids_private_state_and_original_database() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("repo");
-    fs::create_dir(&root).unwrap();
-    git(&root, &["init", "-q"]);
-    fs::write(root.join("a.ts"), "legacy\n").unwrap();
-    let s = Storage::open(dir.path().join("app")).unwrap();
-    let path = root.canonicalize().unwrap().to_str().unwrap().to_string();
-    let r = Repository {
-        id: fingerprint(path.as_bytes()),
-        path,
-        name: "legacy".into(),
-        branch: "main".into(),
-        opened_at: now(),
-    };
-    s.insert("repository", &r.id, &r).unwrap();
+fn legacy_rows_are_never_read_or_imported() {
+    let (dir, s, r) = fixture();
     let w = capture(&s, &r);
-    let mut review = w.review.clone();
-    review.position.line = 12;
-    s.replace("review", &review.id, 0, &review).unwrap();
-    repositories::open(&s, &r.path).unwrap();
-    assert_eq!(
-        reviews::load(&s, &review.id).unwrap().review.position.line,
-        12
-    );
-    assert!(
-        root.join(format!(".reviewbox/reviews/{}/review.json", review.id))
-            .exists()
-    );
-    assert_eq!(
-        fs::read_dir(dir.path().join("app/backups"))
-            .unwrap()
-            .count(),
-        1
-    );
-    assert!(s.local_get::<Review>("review", &review.id).is_ok());
+    let db = rusqlite::Connection::open(dir.path().join("app/reviewbox.sqlite3")).unwrap();
+    db.execute(
+        "INSERT INTO documents(kind,id,revision,body) VALUES('review',?1,0,?2)",
+        rusqlite::params![w.review.id, serde_json::to_string(&w.review).unwrap()],
+    )
+    .unwrap();
+    drop(db);
     drop(s);
+    fs::remove_dir_all(Path::new(&r.path).join(".reviewbox")).unwrap();
     let s = Storage::open(dir.path().join("app")).unwrap();
+    assert!(s.get::<Review>("review", &w.review.id).is_err());
+    assert!(s.list::<Review>("review").unwrap().is_empty());
     repositories::open(&s, &r.path).unwrap();
-    assert_eq!(s.list::<Review>("review").unwrap().len(), 1);
-    assert_eq!(
-        fs::read_dir(dir.path().join("app/backups"))
-            .unwrap()
-            .count(),
-        1
-    );
+    assert!(s.list::<Review>("review").unwrap().is_empty());
+    assert!(s.local_get::<Review>("review", &w.review.id).is_ok());
+    assert!(!dir.path().join("app/backups").exists());
+}
+#[test]
+fn v1_is_rejected_without_creating_lock_or_recovering_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join(".reviewbox");
+    fs::create_dir_all(&project).unwrap();
+    let original = b"{\"format\":\"reviewbox\",\"version\":1,\"projectId\":\"old\"}";
+    fs::write(project.join("project.json"), original).unwrap();
+    let error = Project::open(dir.path(), "repo").err().unwrap();
+    assert_eq!(error.code, "project_version");
+    assert_eq!(fs::read(project.join("project.json")).unwrap(), original);
+    assert_eq!(fs::read_dir(&project).unwrap().count(), 1);
 }
 #[test]
 fn interrupted_transaction_recovers_and_refuses_foreign_changes() {
@@ -505,34 +490,167 @@ fn uncommitted_content_never_references_an_unrelated_repository_commit() {
         .unwrap()
         .content
         .hash;
-    let portable = read(&root.join(format!(".reviewbox/content/{hash}.json")));
-    assert!(portable["gitOid"].is_null());
-    assert!(portable["baseOid"].is_string());
+    let snapshot = read(&root.join(format!(".reviewbox/snapshots/{}.json", w.snapshot.id)));
+    let source = &snapshot["data"]["sourceIndex"][hash];
+    assert_eq!(source["kind"], "pack");
+    let pack = read(
+        &root
+            .join(".reviewbox")
+            .join(source["path"].as_str().unwrap()),
+    );
+    assert!(pack["entries"][hash]["baseOid"].is_string());
 }
 
 #[test]
-fn removing_shared_data_does_not_resurrect_retired_sqlite_rows() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("repo");
-    fs::create_dir(&root).unwrap();
-    git(&root, &["init", "-q"]);
-    fs::write(root.join("a.ts"), "legacy").unwrap();
-    let s = Storage::open(dir.path().join("app")).unwrap();
-    let path = root.canonicalize().unwrap().to_string_lossy().into_owned();
-    let r = Repository {
-        id: fingerprint(path.as_bytes()),
-        path,
-        name: "fixture".into(),
-        branch: "main".into(),
-        opened_at: now(),
-    };
-    s.insert("repository", &r.id, &r).unwrap();
+fn background_refresh_and_writes_share_the_same_lock_order() {
+    let (_dir, s, r) = fixture();
     let w = capture(&s, &r);
-    repositories::open(&s, &r.path).unwrap();
-    assert!(reviews::load(&s, &w.review.id).is_ok());
-    drop(s);
-    fs::remove_dir_all(root.join(".reviewbox")).unwrap();
-    let s = Storage::open(dir.path().join("app")).unwrap();
-    repositories::open(&s, &r.path).unwrap();
-    assert!(s.list::<Review>("review").unwrap().is_empty());
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            for _ in 0..150 {
+                reviews::load(&s, &w.review.id).unwrap();
+                std::thread::yield_now();
+            }
+        });
+        for n in 0..30 {
+            let current = reviews::load(&s, &w.review.id).unwrap();
+            reviews::apply(
+                &s,
+                &w.review.id,
+                current.review.revision,
+                ReviewAction::Rename {
+                    title: format!("Concurrent read {n}"),
+                },
+            )
+            .unwrap();
+        }
+        reader.join().unwrap();
+    });
+    assert_eq!(
+        reviews::load(&s, &w.review.id).unwrap().review.title,
+        "Concurrent read 29"
+    );
+}
+
+#[test]
+fn five_captures_of_235_files_write_five_packs_not_per_blob_files() {
+    let (_dir, s, r) = fixture();
+    let root = Path::new(&r.path);
+    for n in 0..233 {
+        fs::write(root.join(format!("file-{n}.txt")), format!("file {n}\n")).unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "235 project files"]);
+    let committed = capture(&s, &r);
+    assert_eq!(committed.snapshot.files.len(), 235);
+    assert!(!root.join(".reviewbox/content").exists());
+    for n in 0..5 {
+        fs::write(root.join("a.ts"), format!("change {n}\r\n")).unwrap();
+        let w = capture(&s, &r);
+        let snapshot = read(&root.join(format!(".reviewbox/snapshots/{}.json", w.snapshot.id)));
+        assert_eq!(snapshot["version"], 2);
+        let dir = root.join(format!(".reviewbox/content/{}", w.snapshot.id));
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        assert!(dir.join("0001.json").exists());
+        let sources = snapshot["data"]["sourceIndex"].as_object().unwrap();
+        assert_eq!(sources.values().filter(|v| v["kind"] == "pack").count(), 1);
+    }
+    assert_eq!(
+        fs::read_dir(root.join(".reviewbox/content"))
+            .unwrap()
+            .count(),
+        5
+    );
+}
+
+#[test]
+fn missing_corrupt_and_foreign_packs_never_use_the_working_tree() {
+    let (dir, s, r) = fixture();
+    let root = Path::new(&r.path);
+    fs::write(root.join("a.ts"), "captured source").unwrap();
+    let w = capture(&s, &r);
+    let blob = &w
+        .snapshot
+        .files
+        .iter()
+        .find(|f| f.path == "a.ts")
+        .unwrap()
+        .content;
+    let path = root.join(format!(".reviewbox/content/{}/0001.json", w.snapshot.id));
+    let original = fs::read(&path).unwrap();
+    fs::write(root.join("a.ts"), "wrong current source").unwrap();
+    let error = |name: &str| {
+        let fresh = Storage::open(dir.path().join(name)).unwrap();
+        repositories::open(&fresh, &r.path).unwrap();
+        fresh.read_blob(&blob.hash).unwrap_err()
+    };
+    fs::remove_file(&path).unwrap();
+    assert_eq!(error("missing").code, "missing_content");
+    fs::write(&path, &original).unwrap();
+    let mut pack = read(&path);
+    pack["entries"][&blob.hash]["text"] = json!("corrupted");
+    write(&path, &pack);
+    assert_eq!(error("corrupt").code, "corrupt_content");
+    fs::write(&path, &original).unwrap();
+    let mut pack = read(&path);
+    pack["snapshotId"] = json!("foreign");
+    write(&path, &pack);
+    assert_eq!(error("foreign").code, "invalid_content");
+    fs::write(&path, &original).unwrap();
+    let fresh = Storage::open(dir.path().join("restored")).unwrap();
+    repositories::open(&fresh, &r.path).unwrap();
+    assert_eq!(fresh.read_blob(&blob.hash).unwrap(), b"captured source");
+}
+
+#[test]
+fn interrupted_pack_publication_recovers_and_checks_all_targets_first() {
+    let (_dir, s, r) = fixture();
+    let root = Path::new(&r.path);
+    fs::write(root.join("a.ts"), "pending capture").unwrap();
+    let w = capture(&s, &r);
+    let project = Project::open(root, &r.id).unwrap();
+    let pack_path = format!("content/{}/0001.json", w.snapshot.id);
+    let snapshot_path = format!("snapshots/{}.json", w.snapshot.id);
+    let pack = fs::read_to_string(project.root.join(&pack_path)).unwrap();
+    let snapshot = fs::read_to_string(project.root.join(&snapshot_path)).unwrap();
+    let journal = project.root.join(".local/transaction.json");
+    let changes = json!([
+        {"path":pack_path,"before":null,"after":pack},
+        {"path":snapshot_path,"before":null,"after":snapshot}
+    ]);
+    fs::remove_file(project.root.join(&snapshot_path)).unwrap();
+    write(&journal, &changes);
+    s.mount(&r).unwrap();
+    assert!(project.root.join(&snapshot_path).exists());
+    assert!(!journal.exists());
+    fs::remove_file(project.root.join(&snapshot_path)).unwrap();
+    fs::write(project.root.join(&pack_path), "external edit").unwrap();
+    write(&journal, &changes);
+    assert_eq!(s.mount(&r).unwrap_err().code, "project_conflict");
+    assert!(journal.exists());
+    assert!(!project.root.join(&snapshot_path).exists());
+    assert_eq!(
+        fs::read_to_string(project.root.join(&pack_path)).unwrap(),
+        "external edit"
+    );
+}
+
+#[test]
+fn deleted_and_renamed_files_reconstruct_with_no_local_cache() {
+    let (dir, s, r) = fixture();
+    let root = Path::new(&r.path);
+    git(root, &["mv", "a.ts", "renamed.ts"]);
+    fs::remove_file(root.join("image.bin")).unwrap();
+    let w = capture(&s, &r);
+    let fresh = Storage::open(dir.path().join("fresh")).unwrap();
+    repositories::open(&fresh, &r.path).unwrap();
+    for c in &w.snapshot.changes {
+        for b in [&c.before, &c.after].into_iter().flatten() {
+            assert_eq!(
+                s.read_blob(&b.hash).unwrap(),
+                fresh.read_blob(&b.hash).unwrap()
+            );
+        }
+    }
+    assert!(!root.join(".reviewbox/content").exists());
 }

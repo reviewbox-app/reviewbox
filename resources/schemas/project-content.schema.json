@@ -1,18 +1,41 @@
 {
+  "$defs": {
+    "ByteDelta": {
+      "oneOf": [
+        {
+          "properties": { "text": { "type": "string" } },
+          "required": ["text"],
+          "type": "object"
+        },
+        {
+          "properties": { "hex": { "type": "string" } },
+          "required": ["hex"],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "baseOid": { "type": ["string", "null"] },
+        "prefix": { "format": "uint", "minimum": 0, "type": "integer" },
+        "size": { "format": "uint32", "minimum": 0, "type": "integer" },
+        "suffix": { "format": "uint", "minimum": 0, "type": "integer" }
+      },
+      "required": ["size", "prefix", "suffix"],
+      "type": "object",
+      "unevaluatedProperties": false
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "baseOid": { "type": ["string", "null"] },
-    "gitOid": { "type": ["string", "null"] },
-    "hash": { "type": "string" },
-    "hex": { "type": ["string", "null"] },
-    "prefix": { "format": "uint", "minimum": 0, "type": "integer" },
-    "size": { "format": "uint32", "minimum": 0, "type": "integer" },
-    "suffix": { "format": "uint", "minimum": 0, "type": "integer" },
-    "text": { "type": ["string", "null"] },
-    "version": { "const": 1 }
+    "entries": {
+      "additionalProperties": { "$ref": "#/$defs/ByteDelta" },
+      "type": "object"
+    },
+    "format": { "const": "reviewbox" },
+    "snapshotId": { "type": "string" },
+    "version": { "const": 2 }
   },
-  "required": ["version", "hash", "size", "prefix", "suffix"],
-  "title": "PortableContent",
+  "required": ["format", "version", "snapshotId", "entries"],
+  "title": "ContentPack",
   "type": "object"
 }

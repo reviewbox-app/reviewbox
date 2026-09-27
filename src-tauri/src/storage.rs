@@ -89,7 +89,7 @@ impl Storage {
         Ok(db)
     }
     pub fn get<T: DeserializeOwned>(&self, kind: &str, id: &str) -> AppResult<T> {
-        if project_storage::KINDS.contains(&kind) && !self.projects.lock().unwrap().is_empty() {
+        if project_storage::KINDS.contains(&kind) {
             self.sync_projects(false)?;
             let mut values = self
                 .project_values(kind)?
@@ -130,7 +130,7 @@ impl Storage {
         .map_err(Into::into)
     }
     pub fn list<T: DeserializeOwned>(&self, kind: &str) -> AppResult<Vec<T>> {
-        if project_storage::KINDS.contains(&kind) && !self.projects.lock().unwrap().is_empty() {
+        if project_storage::KINDS.contains(&kind) {
             self.sync_projects(false)?;
             return self
                 .project_values(kind)?
@@ -157,7 +157,7 @@ impl Storage {
             .collect()
     }
     pub fn insert<T: Serialize>(&self, kind: &str, id: &str, value: &T) -> AppResult<()> {
-        if project_storage::KINDS.contains(&kind) && !self.projects.lock().unwrap().is_empty() {
+        if project_storage::KINDS.contains(&kind) {
             return self.write_batch(vec![(kind, id, None, serde_json::to_value(value)?)]);
         }
         self.connection()?.execute(
@@ -173,7 +173,7 @@ impl Storage {
         revision: u32,
         value: &T,
     ) -> AppResult<()> {
-        if project_storage::KINDS.contains(&kind) && !self.projects.lock().unwrap().is_empty() {
+        if project_storage::KINDS.contains(&kind) {
             return self.write_batch(vec![(
                 kind,
                 id,
@@ -198,7 +198,6 @@ impl Storage {
         if writes
             .iter()
             .any(|(kind, _, _, _)| project_storage::KINDS.contains(kind))
-            && !self.projects.lock().unwrap().is_empty()
         {
             return self.project_write(writes);
         }
@@ -221,7 +220,7 @@ impl Storage {
         Ok(())
     }
     pub fn remove(&self, kind: &str, id: &str) -> AppResult<()> {
-        if project_storage::KINDS.contains(&kind) && !self.projects.lock().unwrap().is_empty() {
+        if project_storage::KINDS.contains(&kind) {
             self.sync_projects(true)?;
             let _write = self.writes.lock().unwrap();
             let mut mounted = self.projects.lock().unwrap();
@@ -316,7 +315,7 @@ impl Storage {
         }
         Err(AppError::new(
             "missing_content",
-            "Snapshot content is unavailable. Restore the project's .reviewbox/content files.",
+            "Snapshot content is unavailable. Restore the project's snapshot and content pack files.",
         ))
     }
     pub(crate) fn cached_blob(&self, hash: &str) -> AppResult<Vec<u8>> {
@@ -436,94 +435,6 @@ impl Storage {
         let project = Project::open(std::path::Path::new(&repo.path), &repo.id)?;
         let _lock = project.lock()?;
         let mut documents = project.read()?;
-        let mut migration = Documents::new();
-        for kind in project_storage::KINDS {
-            if *kind == "project_settings" {
-                continue;
-            }
-            for value in self.local_list::<Value>(kind)? {
-                let belongs = value["repositoryId"] == repo.id
-                    || (*kind == "proposal"
-                        && self
-                            .local_get::<Review>(
-                                "review",
-                                value["reviewId"].as_str().unwrap_or_default(),
-                            )
-                            .is_ok_and(|r| r.repository_id == repo.id));
-                if !belongs {
-                    continue;
-                }
-                let key = if *kind == "knowledge" {
-                    repo.id.clone()
-                } else if *kind == "review_history" {
-                    format!(
-                        "{}@{}",
-                        value["id"].as_str().unwrap_or_default(),
-                        value["revision"].as_u64().unwrap_or_default()
-                    )
-                } else {
-                    value["id"].as_str().unwrap_or_default().to_string()
-                };
-                migration.insert((kind.to_string(), key), value);
-            }
-        }
-        let marker = format!("{}:{}", repo.id, project.project_id);
-        let migrated = self
-            .local_get::<String>("migrated_repository", &repo.id)
-            .is_ok()
-            || self
-                .local_get::<bool>("project_migration", &marker)
-                .unwrap_or(false);
-        if !migrated && !migration.is_empty() {
-            let receipt = project_storage::checked(&project.root, ".local/migration.json")?;
-            let source_hash = fingerprint(&serde_json::to_vec(&project.encode(&migration)?)?);
-            let resume = fs::read(&receipt)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-                .is_some_and(|v| v["sourceHash"] == source_hash);
-            let mut migrated_docs = documents.clone();
-            migrated_docs.remove(&("project_settings".into(), repo.id.clone()));
-            let already_written =
-                resume && project.encode(&migrated_docs)? == project.encode(&migration)?;
-            if !documents.is_empty() && !already_written {
-                return Err(AppError::new(
-                    "migration_conflict",
-                    "This .reviewbox already contains data. The legacy database is preserved; no files were overwritten.",
-                ));
-            }
-            if !resume {
-                let backup = self.root.join("backups");
-                fs::create_dir_all(&backup)?;
-                let dest = backup.join(format!("legacy-{}.sqlite3", id()));
-                self.connection()?
-                    .execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])?;
-                project_storage::atomic(
-                    &receipt,
-                    &serde_json::to_vec(&json!({"sourceHash":source_hash}))?,
-                )?;
-            }
-            for ((kind, _), value) in &migration {
-                if kind == "review" {
-                    self.save_reading(&serde_json::from_value(value.clone())?)?;
-                }
-                if kind == "snapshot" {
-                    let snapshot: Snapshot = serde_json::from_value(value.clone())?;
-                    let _ = crate::snapshots::git_tree(
-                        self,
-                        std::path::Path::new(&repo.path),
-                        &snapshot.head,
-                    );
-                    project_storage::export_content(self, &project, &snapshot)?;
-                }
-                if kind == "onboarding" {
-                    self.save_visits(&serde_json::from_value(value.clone())?)?;
-                }
-            }
-            if !already_written {
-                project.commit(&documents, &migration)?;
-                documents = migration;
-            }
-        }
         if !documents.contains_key(&("project_settings".into(), repo.id.clone())) {
             let mut next = documents.clone();
             let mut settings = ProjectSettings::default();
@@ -537,8 +448,6 @@ impl Storage {
             project.commit(&documents, &next)?;
             documents = next;
         }
-        self.connection()?.execute("INSERT OR REPLACE INTO documents(kind,id,revision,body) VALUES('project_migration',?1,0,'true')",[marker])?;
-        self.connection()?.execute("INSERT OR REPLACE INTO documents(kind,id,revision,body) VALUES('migrated_repository',?1,0,?2)",params![repo.id,serde_json::to_string(&project.project_id)?])?;
         self.index(&project, &documents)?;
         let dirty = Arc::new(AtomicBool::new(false));
         let flag = dirty.clone();
@@ -569,6 +478,7 @@ impl Storage {
         Ok(())
     }
     fn index(&self, project: &Project, docs: &Documents) -> AppResult<()> {
+        project.index_sources(docs)?;
         let mut db = self.connection()?;
         let tx = db.transaction()?;
         let mut existing = BTreeMap::new();
@@ -703,10 +613,11 @@ impl Storage {
                 "This operation belongs to a different checkout.",
             ));
         }
-        let project = self
-            .projects
-            .lock()
-            .unwrap()
+        // All readers and writers acquire the registry before the file lock.
+        // Reversing that order lets a refresh hold the registry while waiting
+        // for a writer that needs it to finish, producing spurious busy errors.
+        let mut mounted = self.projects.lock().unwrap();
+        let project = mounted
             .get(&repository_id)
             .map(|m| m.project.clone())
             .ok_or_else(|| AppError::new("project", "Open this project first."))?;
@@ -715,6 +626,7 @@ impl Storage {
         let old = project.read()?;
         self.index(&project, &old)?;
         let mut next = old.clone();
+        let mut packs = BTreeMap::new();
         for (kind, key, expected, value) in &writes {
             if !project_storage::KINDS.contains(kind) {
                 return Err(AppError::new(
@@ -729,12 +641,15 @@ impl Storage {
                     "This item changed. Reload before saving.",
                 ));
             }
+            let mut value = value.clone();
             if *kind == "snapshot" {
-                project_storage::export_content(
+                let (sources, content) = project_storage::prepare_content(
                     self,
                     &project,
                     &serde_json::from_value(value.clone())?,
                 )?;
+                value["sourceIndex"] = serde_json::to_value(sources)?;
+                packs.extend(content);
             }
             if *kind == "review" {
                 self.save_reading(&serde_json::from_value(value.clone())?)?;
@@ -752,10 +667,16 @@ impl Storage {
             }
             next.insert((kind.to_string(), key.to_string()), value.clone());
         }
-        project.commit(&old, &next)?;
-        self.index(&project, &next)?;
-        if let Some(m) = self.projects.lock().unwrap().get_mut(&repository_id) {
+        // A successful commit includes publication of every document and journal
+        // cleanup. Keep those failures visible; only the disposable cache update
+        // below is allowed to fail after the authoritative write has succeeded.
+        project.commit_with_content(&old, &next, packs)?;
+        let _index_result = self.index(&project, &next);
+        if let Some(m) = mounted.get_mut(&repository_id) {
             m.documents = next;
+            // Reconcile on the next read, including when the cache could not be
+            // updated. Persistent index failures still surface from sync_projects;
+            // they must not turn a saved review into a failed, duplicateable write.
             m.dirty.store(true, Ordering::Release);
         }
         Ok(())
@@ -801,8 +722,7 @@ impl Storage {
         self.write_batch(writes)?;
         Ok(settings)
     }
-    #[cfg(test)]
-    pub fn root(&self) -> &std::path::Path {
+    pub(crate) fn root(&self) -> &std::path::Path {
         &self.root
     }
 }

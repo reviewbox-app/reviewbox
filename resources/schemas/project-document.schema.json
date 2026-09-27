@@ -70,6 +70,30 @@
       "required": ["snapshotId", "changeId", "passageId"],
       "type": "object"
     },
+    "ContentSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "git", "type": "string" },
+            "oid": { "type": "string" },
+            "size": { "format": "uint32", "minimum": 0, "type": "integer" }
+          },
+          "required": ["kind", "oid", "size"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "pack", "type": "string" },
+            "path": { "type": "string" },
+            "size": { "format": "uint32", "minimum": 0, "type": "integer" }
+          },
+          "required": ["kind", "path", "size"],
+          "type": "object"
+        }
+      ]
+    },
     "Decision": {
       "properties": {
         "anchor": { "$ref": "#/$defs/CodeAnchor" },
@@ -177,6 +201,7 @@
       ],
       "type": "object"
     },
+    "PreparationMode": { "enum": ["rev", "manual"], "type": "string" },
     "ProposalContent": {
       "oneOf": [
         {
@@ -353,7 +378,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "review" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -419,7 +444,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "review_history" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -449,6 +474,10 @@
             "indexFingerprint": { "default": "", "type": "string" },
             "repositoryId": { "type": "string" },
             "request": { "$ref": "#/$defs/CaptureRequest" },
+            "sourceIndex": {
+              "additionalProperties": { "$ref": "#/$defs/ContentSource" },
+              "type": "object"
+            },
             "workspaceFingerprint": { "type": "string" }
           },
           "required": [
@@ -459,15 +488,16 @@
             "head",
             "workspaceFingerprint",
             "files",
-            "changes"
+            "changes",
+            "sourceIndex"
           ],
-          "title": "Snapshot",
+          "title": "StoredSnapshot",
           "type": "object"
         },
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "snapshot" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -504,7 +534,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "knowledge" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -530,7 +560,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "onboarding" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -564,7 +594,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "proposal" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -575,6 +605,10 @@
         "data": {
           "additionalProperties": false,
           "properties": {
+            "defaultPreparation": {
+              "$ref": "#/$defs/PreparationMode",
+              "default": "rev"
+            },
             "defaultScope": { "$ref": "#/$defs/Scope" },
             "includeUntracked": { "type": "boolean" },
             "language": { "type": "string" },
@@ -594,7 +628,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "project_settings" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -616,7 +650,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "topics" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -651,7 +685,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "annotations" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -674,7 +708,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "decisions" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -697,7 +731,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "terms" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -740,11 +774,11 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "documents" },
-        "version": { "const": 1 }
+        "version": { "const": 2 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
     }
   ],
-  "title": "ReviewBox project document v1"
+  "title": "ReviewBox project document v2"
 }

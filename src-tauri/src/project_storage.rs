@@ -1,5 +1,5 @@
 //! Portable documents. Only this module writes .reviewbox; SQLite is a disposable index.
-use crate::{contracts::*, storage::Storage};
+use crate::contracts::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -10,6 +10,10 @@ use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
 };
+
+mod content;
+pub use content::{prepare_content, restore_content};
+const VERSION: u32 = 2;
 
 pub struct FileLock(pub fs::File);
 impl Drop for FileLock {
@@ -36,6 +40,7 @@ pub struct Project {
     pub repository_id: String,
     pub project_id: String,
     cache: Arc<Mutex<BTreeMap<String, CachedDocument>>>,
+    sources: Arc<Mutex<BTreeMap<String, content::LocatedSource>>>,
 }
 struct CachedDocument {
     modified: SystemTime,
@@ -120,18 +125,29 @@ pub fn atomic(path: &Path, content: &[u8]) -> AppResult<()> {
 impl Project {
     pub fn open(root: &Path, repository_id: &str) -> AppResult<Self> {
         let directory = checked(root, ".reviewbox")?;
+        let existing_manifest = checked(&directory, "project.json")?;
+        if existing_manifest.exists() {
+            let manifest: Manifest = serde_json::from_slice(&fs::read(existing_manifest)?)?;
+            if manifest.format != "reviewbox" || manifest.version != VERSION {
+                return Err(AppError::new(
+                    "project_version",
+                    "This project uses an unsupported ReviewBox format. Version 2 is required; no files were changed.",
+                ));
+            }
+        }
         fs::create_dir_all(&directory)?;
         let provisional = Self {
             root: directory,
             repository_id: repository_id.into(),
             project_id: String::new(),
             cache: Arc::default(),
+            sources: Arc::default(),
         };
         let _lock = provisional.lock()?;
         let path = checked(&provisional.root, "project.json")?;
         let manifest = if path.exists() {
             let m: Manifest = serde_json::from_slice(&fs::read(&path)?)?;
-            if m.format != "reviewbox" || m.version != 1 {
+            if m.format != "reviewbox" || m.version != VERSION {
                 return Err(AppError::new(
                     "project_version",
                     "Unsupported ReviewBox project format. No files were changed.",
@@ -154,7 +170,7 @@ impl Project {
             }
             let m = Manifest {
                 format: "reviewbox".into(),
-                version: 1,
+                version: VERSION,
                 project_id: id(),
             };
             atomic(&path, &bytes(&m)?)?;
@@ -199,6 +215,14 @@ impl Project {
         Ok(FileLock(file))
     }
     fn recover(&self) -> AppResult<()> {
+        let manifest: Manifest =
+            serde_json::from_slice(&fs::read(checked(&self.root, "project.json")?)?)?;
+        if manifest.format != "reviewbox" || manifest.version != VERSION {
+            return Err(AppError::new(
+                "project_version",
+                "Version 2 is required; no files were changed.",
+            ));
+        }
         let journal = checked(&self.root, ".local/transaction.json")?;
         if !journal.exists() {
             return Ok(());
@@ -240,8 +264,30 @@ impl Project {
         self.recover()
     }
     pub fn commit(&self, old: &Documents, next: &Documents) -> AppResult<()> {
-        let before = self.encode(old)?;
-        let after = self.encode(next)?;
+        self.commit_with_content(old, next, Files::new())
+    }
+    pub(crate) fn commit_with_content(
+        &self,
+        old: &Documents,
+        next: &Documents,
+        packs: Files,
+    ) -> AppResult<()> {
+        let mut before = self.encode(old)?;
+        let mut after = self.encode(next)?;
+        for (path, bytes) in packs {
+            let dest = checked(&self.root, &path)?;
+            if dest.exists() {
+                let existing = fs::read(dest)?;
+                if existing != bytes {
+                    return Err(AppError::new(
+                        "conflict",
+                        "An immutable content pack already exists with different bytes.",
+                    ));
+                }
+                before.insert(path.clone(), existing);
+            }
+            after.insert(path, bytes);
+        }
         let mut changes = Vec::new();
         for path in before
             .keys()
@@ -279,6 +325,8 @@ impl Project {
                     .map_err(|_| AppError::new("encoding", "Project document must be UTF-8."))?,
             });
         }
+        // Publish immutable source packs before documents that reference them.
+        changes.sort_by_key(|change| (!change.path.starts_with("content/"), change.path.clone()));
         if changes.is_empty() {
             return Ok(());
         }
@@ -381,7 +429,7 @@ impl Project {
                             child,
                             bytes(&Document {
                                 format: "reviewbox".into(),
-                                version: 1,
+                                version: VERSION,
                                 kind: field.to_string(),
                                 id: id.into(),
                                 data: entry,
@@ -395,7 +443,7 @@ impl Project {
                 path,
                 bytes(&Document {
                     format: "reviewbox".into(),
-                    version: 1,
+                    version: VERSION,
                     kind: kind.clone(),
                     id: key.into(),
                     data,
@@ -414,7 +462,7 @@ impl Project {
         let manifest: Manifest =
             serde_json::from_slice(&fs::read(checked(&self.root, "project.json")?)?)?;
         if manifest.format != "reviewbox"
-            || manifest.version != 1
+            || manifest.version != VERSION
             || manifest.project_id != self.project_id
         {
             return Err(AppError::new(
@@ -466,7 +514,7 @@ impl Project {
                     }
                     let doc: Document = serde_json::from_slice(&fs::read(path)?)
                         .map_err(|e| AppError::new("invalid_project", format!("{rel}: {e}")))?;
-                    if doc.format != "reviewbox" || doc.version != 1 {
+                    if doc.format != "reviewbox" || doc.version != VERSION {
                         return Err(AppError::new(
                             "project_version",
                             format!("Unsupported document: {rel}"),
@@ -573,7 +621,12 @@ impl Project {
                 "Unexpected or unreferenced project document. Check the documented layout.",
             ));
         }
+        self.index_sources(&docs)?;
         Ok(docs)
+    }
+    pub(crate) fn index_sources(&self, docs: &Documents) -> AppResult<()> {
+        *self.sources.lock().unwrap() = content::index_sources(docs)?;
+        Ok(())
     }
 }
 fn validate(kind: &str, data: &Value) -> AppResult<()> {
@@ -584,7 +637,9 @@ fn validate(kind: &str, data: &Value) -> AppResult<()> {
     }
     match kind {
         "review" | "review_history" => check!(Review),
-        "snapshot" => check!(Snapshot),
+        "snapshot" => {
+            content::snapshot_sources(data)?;
+        }
         "knowledge" => check!(ProjectKnowledge),
         "onboarding" => check!(OnboardingTour),
         "proposal" => check!(Proposal),
@@ -633,191 +688,13 @@ fn validate(kind: &str, data: &Value) -> AppResult<()> {
     paths(data)
 }
 
-// A byte delta keeps binary files, line endings and missing final newlines exact.
-#[derive(Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PortableContent {
-    version: u32,
-    hash: String,
-    size: u32,
-    git_oid: Option<String>,
-    base_oid: Option<String>,
-    prefix: usize,
-    suffix: usize,
-    text: Option<String>,
-    hex: Option<String>,
-}
-fn git_bytes(root: &Path, oid: &str) -> AppResult<Vec<u8>> {
-    if ![40, 64].contains(&oid.len()) || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(AppError::new(
-            "invalid_oid",
-            "Invalid Git object identifier.",
-        ));
-    }
-    let size = crate::repositories::text(root, &["cat-file", "-s", oid])
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok());
-    if size.is_some_and(|n| n > 64 * 1024 * 1024) {
-        return Err(AppError::new(
-            "content_limit",
-            "Git source exceeds the 64 MiB content limit.",
-        ));
-    }
-    crate::repositories::git(root, &["cat-file", "blob", oid]).map_err(|_| AppError::new("missing_git_object", format!("Git object {oid} is unavailable. Fetch the review's base commit; current code was not substituted.")))
-}
-pub fn export_content(storage: &Storage, project: &Project, snapshot: &Snapshot) -> AppResult<()> {
-    let repository_root = project.root.parent().unwrap();
-    let references = if snapshot.git_refs.is_empty() {
-        vec![snapshot.head.clone()]
-    } else {
-        snapshot.git_refs.clone()
-    };
-    let sources = storage.git_sources(repository_root, &references)?;
-    let mut blobs: BTreeMap<String, (BlobRef, Option<String>)> = BTreeMap::new();
-    for f in &snapshot.files {
-        blobs.insert(f.content.hash.clone(), (f.content.clone(), None));
-    }
-    for c in &snapshot.changes {
-        if let Some(b) = &c.before {
-            blobs.insert(b.hash.clone(), (b.clone(), None));
-        }
-        if let Some(b) = &c.after {
-            blobs.insert(
-                b.hash.clone(),
-                (b.clone(), c.before.as_ref().map(|p| p.hash.clone())),
-            );
-        }
-    }
-    for (hash, (blob, base_oid)) in blobs {
-        let path = checked(&project.root, &format!("content/{hash}.json"))?;
-        if path.exists() {
-            continue;
-        }
-        let content = storage.cached_blob(&hash)?;
-        // Only objects read from this snapshot's committed trees are portable Git references.
-        let git_oid = sources.get(&hash).cloned();
-        let base = base_oid
-            .as_ref()
-            .filter(|hash| sources.contains_key(*hash))
-            .map(|hash| storage.cached_blob(hash))
-            .transpose()?;
-        let base_oid = base_oid.and_then(|hash| sources.get(&hash).cloned());
-        let (mut prefix, mut suffix) = (0, 0);
-        if let Some(base) = &base {
-            prefix = base
-                .iter()
-                .zip(&content)
-                .take_while(|(a, b)| a == b)
-                .count();
-            suffix = base[prefix..]
-                .iter()
-                .rev()
-                .zip(content[prefix..].iter().rev())
-                .take_while(|(a, b)| a == b)
-                .count();
-        }
-        let replacement = if git_oid.is_some() {
-            &[][..]
-        } else {
-            &content[prefix..content.len() - suffix]
-        };
-        let (text, hex) = match std::str::from_utf8(replacement) {
-            Ok(s) => (Some(s.into()), None),
-            Err(_) => (
-                None,
-                Some(replacement.iter().map(|b| format!("{b:02x}")).collect()),
-            ),
-        };
-        let portable = PortableContent {
-            version: 1,
-            hash,
-            size: blob.size,
-            git_oid,
-            base_oid,
-            prefix,
-            suffix,
-            text,
-            hex,
-        };
-        atomic(&path, &bytes(&portable)?)?;
-    }
-    Ok(())
-}
-pub fn restore_content(project: &Project, hash: &str) -> AppResult<Option<Vec<u8>>> {
-    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(AppError::new("invalid_hash", "Invalid content hash."));
-    }
-    let path = checked(&project.root, &format!("content/{hash}.json"))?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    if path.metadata()?.len() > 140 * 1024 * 1024 {
-        return Err(AppError::new(
-            "content_limit",
-            "Portable content is too large.",
-        ));
-    }
-    let p: PortableContent = serde_json::from_slice(&fs::read(path)?)?;
-    if p.version != 1 || p.hash != hash || p.size > 64 * 1024 * 1024 {
-        return Err(AppError::new(
-            "invalid_content",
-            "Invalid portable content metadata.",
-        ));
-    }
-    let root = project.root.parent().unwrap();
-    let result = if let Some(oid) = p.git_oid {
-        git_bytes(root, &oid)?
-    } else {
-        let base = p
-            .base_oid
-            .map(|oid| git_bytes(root, &oid))
-            .transpose()?
-            .unwrap_or_default();
-        if p.prefix > base.len() || p.suffix > base.len() - p.prefix {
-            return Err(AppError::new("invalid_delta", "Invalid byte delta bounds."));
-        }
-        let replacement = if let Some(text) = p.text {
-            text.into_bytes()
-        } else if let Some(hex) = p.hex {
-            if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(AppError::new(
-                    "invalid_delta",
-                    "Invalid hexadecimal replacement.",
-                ));
-            }
-            (0..hex.len())
-                .step_by(2)
-                .map(|i| {
-                    u8::from_str_radix(&hex[i..i + 2], 16)
-                        .map_err(|_| AppError::new("invalid_delta", "Invalid byte."))
-                })
-                .collect::<AppResult<Vec<_>>>()?
-        } else {
-            return Err(AppError::new("invalid_delta", "Missing replacement."));
-        };
-        [
-            base[..p.prefix].to_vec(),
-            replacement,
-            base[base.len() - p.suffix..].to_vec(),
-        ]
-        .concat()
-    };
-    if result.len() != p.size as usize || fingerprint(&result) != hash {
-        return Err(AppError::new(
-            "corrupt_content",
-            "Reconstructed content failed its integrity check.",
-        ));
-    }
-    Ok(Some(result))
-}
-
 pub fn schemas() -> Value {
     let mut definitions = serde_json::Map::new();
     let mut variants = Vec::new();
     let entries = [
         ("review", schemars::schema_for!(Review)),
         ("review_history", schemars::schema_for!(Review)),
-        ("snapshot", schemars::schema_for!(Snapshot)),
+        ("snapshot", schemars::schema_for!(content::StoredSnapshot)),
         ("knowledge", schemars::schema_for!(ProjectKnowledge)),
         ("onboarding", schemars::schema_for!(OnboardingTour)),
         ("proposal", schemars::schema_for!(Proposal)),
@@ -846,15 +723,16 @@ pub fn schemas() -> Value {
                     json!({"type":"array","items":{"type":"string"},"uniqueItems":true});
             }
         }
-        variants.push(json!({"type":"object","additionalProperties":false,"required":["format","version","kind","id","data"],"properties":{"format":{"const":"reviewbox"},"version":{"const":1},"kind":{"const":kind},"id":{"type":"string","pattern":"^[a-zA-Z0-9_@-]{1,160}$"},"data":data}}));
+        variants.push(json!({"type":"object","additionalProperties":false,"required":["format","version","kind","id","data"],"properties":{"format":{"const":"reviewbox"},"version":{"const":2},"kind":{"const":kind},"id":{"type":"string","pattern":"^[a-zA-Z0-9_@-]{1,160}$"},"data":data}}));
     }
     let mut manifest = serde_json::to_value(schemars::schema_for!(Manifest)).unwrap();
     manifest["properties"]["format"] = json!({"const":"reviewbox"});
-    manifest["properties"]["version"] = json!({"const":1});
-    let mut content = serde_json::to_value(schemars::schema_for!(PortableContent)).unwrap();
-    content["properties"]["version"] = json!({"const":1});
+    manifest["properties"]["version"] = json!({"const":2});
+    let mut content = serde_json::to_value(schemars::schema_for!(content::ContentPack)).unwrap();
+    content["properties"]["format"] = json!({"const":"reviewbox"});
+    content["properties"]["version"] = json!({"const":2});
     json!({
-        "project-document.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ReviewBox project document v1","oneOf":variants,"$defs":definitions},
+        "project-document.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ReviewBox project document v2","oneOf":variants,"$defs":definitions},
         "project-manifest.schema.json":manifest,
         "project-content.schema.json":content
     })
