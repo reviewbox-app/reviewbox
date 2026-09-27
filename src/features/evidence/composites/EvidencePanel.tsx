@@ -1,27 +1,15 @@
 "use client"
-import { useEffect, useRef, useState } from "react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogTrigger,
+  DialogTitle,
 } from "@/components/ui/dialog"
-import type { TestRun } from "@/lib/desktop/contracts.generated"
-import { errorMessage } from "@/lib/desktop/review.commands"
-import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowReloadHorizontalIcon,
-  InformationCircleIcon,
-  TestTube01Icon,
-} from "@hugeicons/core-free-icons"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,8 +18,18 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
+import type { TestRun } from "@/lib/desktop/contracts.generated"
+import { errorMessage } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
+import {
+  ArrowReloadHorizontalIcon,
+  InformationCircleIcon,
+  TestTube01Icon,
+} from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { useEffect, useRef, useState } from "react"
 import { evidenceCommands } from "../services/evidence.commands"
 
 /** RB/Evidence outcome: what was observed, never more. */
@@ -77,6 +75,7 @@ function evidenceOutcome(run: TestRun, snapshotId: string) {
     return { label: "Stopped", className: "text-review-attention", detail }
   return { label: "Could not run", className: "text-destructive", detail }
 }
+
 export function EvidencePanel({
   reviewId,
   snapshotId,
@@ -216,8 +215,8 @@ export function EvidencePanel({
       {runs.map((run) => {
         const outcome = evidenceOutcome(run, snapshotId)
         return (
-          <Collapsible key={run.id}>
-            <CollapsibleTrigger className="flex w-full items-start gap-2.5 rounded-2xl border bg-card px-3 py-2.5 text-left outline-none hover:bg-accent/40 focus-visible:ring-3 focus-visible:ring-ring/30">
+          <Dialog key={run.id}>
+            <DialogTrigger className="flex w-full items-start gap-2.5 rounded-2xl border bg-card px-3 py-2.5 text-left outline-none hover:bg-accent/40 focus-visible:ring-3 focus-visible:ring-ring/30">
               <HugeiconsIcon
                 icon={
                   outcome.outdated ? ArrowReloadHorizontalIcon : TestTube01Icon
@@ -245,13 +244,22 @@ export function EvidencePanel({
                   {outcome.detail}
                 </span>
               </span>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="px-3 pt-2">
-              <pre className="max-h-64 overflow-auto font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
+            </DialogTrigger>
+            <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-2xl">
+              <DialogHeader className="shrink-0 pr-8">
+                <DialogTitle className="wrap-anywhere">
+                  {run.command.join(" ")}
+                </DialogTitle>
+                <DialogDescription>
+                  {outcome.label} · {outcome.detail}
+                </DialogDescription>
+              </DialogHeader>
+              <Separator />
+              <pre className="min-h-0 overflow-auto font-mono text-xs wrap-anywhere whitespace-pre-wrap opacity-60">
                 {run.output || "No command output."}
               </pre>
-            </CollapsibleContent>
-          </Collapsible>
+            </DialogContent>
+          </Dialog>
         )
       })}
       <Dialog
