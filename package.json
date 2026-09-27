@@ -27,7 +27,18 @@
     "build:native-validation": "bun run tauri build --debug --no-bundle --features native-validation",
     "schemas:generate": "bun scripts/export-project-schemas.ts",
     "schemas:check": "bun scripts/export-project-schemas.ts --check",
-    "test:project-cli": "bun scripts/test-project-cli.ts"
+    "test:project-cli": "bun scripts/test-project-cli.ts",
+    "test:ui:native": "bun scripts/test-ui-native.ts && bun scripts/test-ui-scopes.ts && bun scripts/test-ui-layout.ts && bun scripts/test-ui-settings.ts && bun scripts/test-ui-scroll.ts",
+    "test:ui:storage": "bun scripts/test-ui-storage.ts",
+    "test:ui:providers": "bun scripts/test-ui-providers.ts",
+    "test:ui:harness-settings": "bun scripts/test-ui-harness-settings.ts",
+    "test:ui:models": "bun scripts/test-ui-models.ts",
+    "test:ui:compatibility": "bun scripts/test-ui-compatibility.ts",
+    "test:ui:wizard": "bun scripts/test-ui-wizard.ts",
+    "test:ui:preparation": "bun scripts/test-ui-preparation.ts",
+    "test:ui:progress": "bun scripts/test-ui-progress.ts",
+    "test:ui:capture": "bun scripts/test-ui-capture.ts",
+    "test:ui:scroll": "bun scripts/test-ui-scroll.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
