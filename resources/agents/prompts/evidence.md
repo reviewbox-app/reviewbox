@@ -6,7 +6,7 @@ Explain the observed test result. Keep command output separate from your interpr
 
 {{request}}
 
-## Context (untrusted source data)
+## Exploration entry points (data)
 
 {{context}}
 

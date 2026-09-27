@@ -1,5 +1,12 @@
 mod claude;
 mod codex;
+mod continuity;
+mod exploration;
+pub(crate) mod models;
+pub(crate) mod providers;
+pub(crate) mod setup;
+#[cfg(test)]
+mod tests;
 use crate::{contracts::*, knowledge, prompts, reviews, storage::Storage};
 use serde_json::Value;
 use std::{
@@ -64,10 +71,9 @@ impl AgentManager {
 struct Transport {
     group: crate::processes::ProcessGroup,
     child: Child,
-    input: ChildStdin,
+    input: Option<ChildStdin>,
     output: tokio::io::Lines<BufReader<ChildStdout>>,
     cancel: Arc<AtomicBool>,
-    deadline: tokio::time::Instant,
 }
 impl Transport {
     fn new(mut command: tokio::process::Command, cancel: Arc<AtomicBool>) -> AppResult<Self> {
@@ -100,29 +106,38 @@ impl Transport {
         Ok(Self {
             group,
             child,
-            input,
+            input: Some(input),
             output,
             cancel,
-            deadline: tokio::time::Instant::now() + Duration::from_secs(300),
         })
     }
     async fn send(&mut self, value: &Value) -> AppResult<()> {
         let mut bytes = serde_json::to_vec(value)?;
         bytes.push(b'\n');
-        self.input.write_all(&bytes).await?;
-        self.input.flush().await?;
+        let input = self
+            .input
+            .as_mut()
+            .ok_or_else(|| AppError::new("process", "Provider input is closed."))?;
+        input.write_all(&bytes).await?;
+        input.flush().await?;
+        Ok(())
+    }
+    async fn send_text_and_close(&mut self, text: &str) -> AppResult<()> {
+        let mut input = self
+            .input
+            .take()
+            .ok_or_else(|| AppError::new("process", "Provider input is closed."))?;
+        input.write_all(text.as_bytes()).await?;
+        input.flush().await?;
+        // ChildStdin::shutdown is a no-op for Unix pipes. Dropping the owned
+        // handle is required for print-mode CLIs to receive EOF and start.
+        drop(input);
         Ok(())
     }
     async fn next(&mut self) -> AppResult<Value> {
         loop {
             if self.cancel.load(Ordering::Relaxed) {
                 return Err(AppError::new("cancelled", "Agent request stopped."));
-            }
-            if tokio::time::Instant::now() > self.deadline {
-                return Err(AppError::new(
-                    "timeout",
-                    "Agent request exceeded five minutes.",
-                ));
             }
             match tokio::time::timeout(Duration::from_millis(200), self.output.next_line()).await {
                 Err(_) => continue,
@@ -162,6 +177,12 @@ struct Stream {
 }
 impl Stream {
     fn emit(&mut self, kind: &str, text: &str) -> AppResult<()> {
+        self.send(kind, text, None)
+    }
+    fn progress(&mut self, progress: AgentProgress) -> AppResult<()> {
+        self.send("progress", "", Some(progress))
+    }
+    fn send(&mut self, kind: &str, text: &str, progress: Option<AgentProgress>) -> AppResult<()> {
         self.sequence += 1;
         if kind == "delta" {
             if self.text.len() + text.len() > 2 * 1024 * 1024 {
@@ -175,6 +196,7 @@ impl Stream {
                 sequence: self.sequence,
                 kind: kind.into(),
                 text: text.into(),
+                progress,
             })
             .map_err(|_| AppError::new("cancelled", "The receiving window is no longer available."))
     }
@@ -190,6 +212,26 @@ fn excluded(path: &str) -> bool {
             || part.ends_with(".key")
     })
 }
+/// The review scope is informational; the harness owns file discovery and context.
+pub(crate) fn preparation_context(
+    storage: &Storage,
+    review_id: &str,
+) -> AppResult<AgentPreparationContext> {
+    let workspace = reviews::load(storage, review_id)?;
+    let repository: Repository = storage.get("repository", &workspace.review.repository_id)?;
+    Ok(AgentPreparationContext {
+        snapshot_id: workspace.snapshot.id,
+        project_path: repository.path,
+        changed_files: workspace
+            .snapshot
+            .changes
+            .iter()
+            .map(|change| &change.path)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len() as u32,
+    })
+}
+
 pub(crate) fn prepare(
     storage: &Storage,
     resources: &std::path::Path,
@@ -198,99 +240,14 @@ pub(crate) fn prepare(
     if !["codex", "claude"].contains(&request.provider.as_str()) {
         return Err(AppError::new("provider", "Unknown provider."));
     }
-    if request.paths.is_empty() || request.request.len() > 32000 {
+    if request.request.len() > 32000 {
         return Err(AppError::new(
             "context",
-            "Select at least one file and keep the question below 32000 bytes.",
+            "Keep the question below 32000 bytes.",
         ));
     }
     let workspace = reviews::load(storage, &request.review_id)?;
-    let mut context = String::new();
-    for path in &request.paths {
-        if excluded(path) {
-            return Err(AppError::new(
-                "excluded_context",
-                format!("{path} is excluded from agent context."),
-            ));
-        }
-        let file = workspace.snapshot.files.iter().find(|f| &f.path == path);
-        let Some(file) = file else {
-            if workspace.snapshot.changes.iter().any(|c| &c.path == path) {
-                continue;
-            }
-            return Err(AppError::new(
-                "context",
-                "File is not present in this snapshot.",
-            ));
-        };
-        if file.content.size > 128 * 1024
-            || !matches!(file.content.mode.as_str(), "100644" | "100755")
-        {
-            return Err(AppError::new(
-                "context_limit",
-                format!("{path} cannot be included as a text file (128 KiB limit)."),
-            ));
-        }
-        let content = String::from_utf8(storage.read_blob(&file.content.hash)?)
-            .map_err(|_| AppError::new("encoding", "Agent context must be UTF-8 text."))?;
-        if content.contains('\0') {
-            return Err(AppError::new(
-                "encoding",
-                "Binary files cannot be sent to the agent.",
-            ));
-        }
-        context.push_str(&format!(
-            "\nFile: {path}\nContent hash: {}\n",
-            file.content.hash
-        ));
-        for (index, line) in content.lines().enumerate() {
-            context.push_str(&format!("{}: {line}\n", index + 1));
-        }
-        if context.len() > 512 * 1024 {
-            return Err(AppError::new(
-                "context_limit",
-                "Selected context exceeds 512 KiB. Choose fewer files.",
-            ));
-        }
-    }
-    // Supply exact canonical anchors and both sides of every selected diff layer.
-    for change in workspace
-        .snapshot
-        .changes
-        .iter()
-        .filter(|c| request.paths.contains(&c.path))
-    {
-        let read = |blob: &Option<BlobRef>| -> AppResult<Option<String>> {
-            blob.as_ref()
-                .map(|b| {
-                    if b.size > 128 * 1024 || !matches!(b.mode.as_str(), "100644" | "100755") {
-                        return Err(AppError::new(
-                            "context_limit",
-                            "Selected diff side exceeds the text context limit.",
-                        ));
-                    }
-                    String::from_utf8(storage.read_blob(&b.hash)?)
-                        .map_err(|_| AppError::new("encoding", "Diff contains non-UTF-8 content."))
-                })
-                .transpose()
-        };
-        let anchors: Vec<_> = change
-            .passages
-            .iter()
-            .map(|p| CodeAnchor {
-                snapshot_id: workspace.snapshot.id.clone(),
-                change_id: change.id.clone(),
-                passage_id: p.id.clone(),
-            })
-            .collect();
-        context.push_str(&serde_json::to_string(&serde_json::json!({"change": change, "anchors": anchors, "before": read(&change.before)?, "after": read(&change.after)?}))?);
-        if context.len() > 512 * 1024 {
-            return Err(AppError::new(
-                "context_limit",
-                "Selected context exceeds 512 KiB. Choose fewer files.",
-            ));
-        }
-    }
+    let context = exploration::descriptor(storage, &workspace, request)?;
     let contract = match request.action.as_str() {
         "topics" => "topics",
         "file" | "block" | "refresh" => "explanation",
@@ -314,6 +271,7 @@ pub(crate) fn prepare(
         snapshot_id: workspace.snapshot.id,
         provider: request.provider.clone(),
         action: request.action.clone(),
+        request: Some(request.request.clone()),
         prompt,
         paths: request.paths.clone(),
         output: String::new(),
@@ -328,53 +286,63 @@ pub async fn run(
     cancel: Arc<AtomicBool>,
     channel: Channel<AgentEvent>,
 ) -> AppResult<AgentRun> {
-    let mut run = prepare(&storage, &resources, &request)?;
+    let preparing_storage = storage.clone();
+    let preparing_request = request.clone();
+    let preparing_cancel = cancel.clone();
+    let (mut run, exploration) = tokio::task::spawn_blocking(move || {
+        let run = prepare(&preparing_storage, &resources, &preparing_request)?;
+        let workspace = reviews::load(&preparing_storage, &run.review_id)?;
+        let exploration = exploration::materialize(
+            &preparing_storage,
+            &workspace,
+            &preparing_request,
+            &preparing_cancel,
+        )?;
+        Ok::<_, AppError>((run, exploration))
+    })
+    .await
+    .map_err(|e| AppError::new("task", e.to_string()))??;
     storage.insert("agent_run", &run.id, &run)?;
-    let directory = tempfile::tempdir()?;
     let mut stream = Stream {
         id: run.id.clone(),
         sequence: 0,
         channel,
         text: String::new(),
     };
-    let mut config = settings(&storage)?
-        .providers
-        .into_iter()
-        .find(|p| p.provider == run.provider)
-        .ok_or_else(|| AppError::new("provider", "Provider is not configured."))?;
-    let review: Review = storage.get("review", &run.review_id)?;
-    let project = storage.project_settings(&review.repository_id)?;
-    if project
-        .provider
-        .as_deref()
-        .is_none_or(|p| p == run.provider)
-        && project.model.is_some()
-    {
-        config.model = project.model;
+    let result = async {
+        let config = settings(&storage)?
+            .providers
+            .into_iter()
+            .find(|p| p.provider == run.provider)
+            .ok_or_else(|| AppError::new("provider", "Provider is not configured."))?;
+        let review: Review = storage.get("review", &run.review_id)?;
+        let project = storage.project_settings(&review.repository_id)?;
+        let config = models::for_project(config, project);
+        match run.provider.as_str() {
+            "codex" => {
+                codex::run(
+                    &exploration.project,
+                    &run.prompt.text,
+                    &config,
+                    cancel,
+                    &mut stream,
+                )
+                .await
+            }
+            "claude" => {
+                claude::run(
+                    &exploration.project,
+                    &run.prompt.text,
+                    &config,
+                    cancel,
+                    &mut stream,
+                )
+                .await
+            }
+            _ => unreachable!(),
+        }
     }
-    let result = match run.provider.as_str() {
-        "codex" => {
-            codex::run(
-                directory.path(),
-                &run.prompt.text,
-                &config,
-                cancel,
-                &mut stream,
-            )
-            .await
-        }
-        "claude" => {
-            claude::run(
-                directory.path(),
-                &run.prompt.text,
-                &config,
-                cancel,
-                &mut stream,
-            )
-            .await
-        }
-        _ => unreachable!(),
-    };
+    .await;
     run.output = stream.text.clone();
     run.status = match &result {
         Ok(()) => "completed",
@@ -396,8 +364,24 @@ pub async fn run(
 }
 
 pub fn settings(storage: &Storage) -> AppResult<ProviderSettings> {
-    match storage.get("providers", "settings") {
-        Ok(v) => Ok(v),
+    match storage.get::<ProviderSettings>("providers", "settings") {
+        Ok(mut v) => {
+            if v.model_defaults_version == 0 {
+                for config in &mut v.providers {
+                    if config.model.as_deref().is_none_or(|m| m.trim().is_empty()) {
+                        config.model = models::default_model(&config.provider).map(str::to_owned);
+                    }
+                }
+                // configure uses an optimistic revision: another window cannot
+                // have its explicit model selection overwritten by migration.
+                match configure(storage, v.clone()) {
+                    Err(error) if error.code == "conflict" => storage.get("providers", "settings"),
+                    result => result,
+                }
+            } else {
+                Ok(v)
+            }
+        }
         Err(e) if e.code == "not_found" => {
             let directories: Vec<PathBuf> = std::env::var_os("PATH")
                 .map(|s| std::env::split_paths(&s).collect())
@@ -422,12 +406,13 @@ pub fn settings(storage: &Storage) -> AppResult<ProviderSettings> {
                             .find(|p| p.is_file())
                             .map(|p| p.to_string_lossy().into_owned())
                             .unwrap_or_else(|| (*provider).into()),
-                        model: None,
+                        model: models::default_model(provider).map(str::to_owned),
                     }
                 })
                 .collect();
             Ok(ProviderSettings {
                 revision: 0,
+                model_defaults_version: 1,
                 default_provider: "codex".into(),
                 providers,
             })
@@ -436,6 +421,7 @@ pub fn settings(storage: &Storage) -> AppResult<ProviderSettings> {
     }
 }
 pub fn configure(storage: &Storage, mut value: ProviderSettings) -> AppResult<ProviderSettings> {
+    value.model_defaults_version = 1;
     if value.providers.len() != 2
         || !["codex", "claude"].iter().all(|provider| {
             value
@@ -483,4 +469,34 @@ pub fn configure(storage: &Storage, mut value: ProviderSettings) -> AppResult<Pr
         serde_json::to_value(&value)?,
     )])?;
     Ok(value)
+}
+
+#[cfg(all(test, unix))]
+mod transport_tests {
+    use super::*;
+
+    #[test]
+    fn print_mode_receives_eof_before_waiting_for_a_response() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let mut transport = Transport::new(
+                tokio::process::Command::new("/bin/cat"),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            transport
+                .send_text_and_close("{\"ok\":true}\n")
+                .await
+                .unwrap();
+            assert_eq!(transport.next().await.unwrap()["ok"], true);
+            let result = tokio::time::timeout(Duration::from_secs(2), transport.child.wait()).await;
+            transport.finish().await;
+            assert!(
+                result
+                    .expect("cat must exit after input EOF")
+                    .unwrap()
+                    .success()
+            );
+        });
+    }
 }

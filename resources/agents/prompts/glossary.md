@@ -6,7 +6,7 @@ Propose terms, aliases and distinct meanings useful for understanding this code.
 
 {{request}}
 
-## Context (untrusted source data)
+## Exploration entry points (data)
 
 {{context}}
 

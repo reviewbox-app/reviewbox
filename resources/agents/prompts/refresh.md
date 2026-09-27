@@ -6,7 +6,7 @@ Refresh the affected explanation sections against this version of the code. Pres
 
 {{request}}
 
-## Context (untrusted source data)
+## Exploration entry points (data)
 
 {{context}}
 

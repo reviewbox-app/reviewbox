@@ -6,7 +6,7 @@ Explain the selected function, variable, type or block. Link each claim to sourc
 
 {{request}}
 
-## Context (untrusted source data)
+## Exploration entry points (data)
 
 {{context}}
 

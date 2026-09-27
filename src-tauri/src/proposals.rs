@@ -55,6 +55,84 @@ fn validate(storage: &Storage, workspace: &Workspace, content: &ProposalContent)
     }
     Ok(())
 }
+/// A draft may contain an unresolved anchor so that the user can repair it.
+/// Shape errors remain rejected before persisting untrusted model output.
+fn validate_draft(
+    storage: &Storage,
+    workspace: &Workspace,
+    content: &ProposalContent,
+) -> AppResult<()> {
+    if serde_json::to_vec(content)?.len() > 512 * 1024 {
+        return Err(AppError::new("proposal_limit", "Proposal exceeds 512 KiB."));
+    }
+    let ProposalContent::Topics { topics } = content else {
+        return validate(storage, workspace, content);
+    };
+    if topics.is_empty() || topics.len() > 64 {
+        return Err(AppError::new(
+            "invalid_proposal",
+            "Propose between 1 and 64 topics.",
+        ));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for topic in topics {
+        if topic.title.trim().is_empty()
+            || !ids.insert(&topic.id)
+            || topic.steps.is_empty()
+            || topic.steps.len() > 512
+        {
+            return Err(AppError::new(
+                "invalid_topic",
+                "Topics need unique IDs, titles and 1–512 steps.",
+            ));
+        }
+        for step in &topic.steps {
+            if step.title.trim().is_empty() || !ids.insert(&step.id) || step.anchors.len() > 512 {
+                return Err(AppError::new(
+                    "invalid_step",
+                    "Steps need unique IDs, titles and at most 512 anchors.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn diagnostics(
+    storage: &Storage,
+    review_id: &str,
+    content: &ProposalContent,
+) -> AppResult<Vec<ProposalDiagnostic>> {
+    let workspace = reviews::load(storage, review_id)?;
+    validate_draft(storage, &workspace, content)?;
+    let mut diagnostics = vec![];
+    if let ProposalContent::Topics { topics } = content {
+        for (topic_index, topic) in topics.iter().enumerate() {
+            for (step_index, step) in topic.steps.iter().enumerate() {
+                if step.anchors.is_empty() {
+                    diagnostics.push(ProposalDiagnostic {
+                        topic_index: topic_index as u32,
+                        step_index: step_index as u32,
+                        anchor_index: None,
+                        message: "Choose at least one frozen passage for this step.".into(),
+                    });
+                }
+                for (anchor_index, anchor) in step.anchors.iter().enumerate() {
+                    if let Err(error) = reviews::passage(&workspace.snapshot, anchor) {
+                        diagnostics.push(ProposalDiagnostic {
+                            topic_index: topic_index as u32,
+                            step_index: step_index as u32,
+                            anchor_index: Some(anchor_index as u32),
+                            message: error.message,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(diagnostics)
+}
+
 fn document(
     workspace: &Workspace,
     path: &str,
@@ -141,7 +219,7 @@ pub fn parse(
             ));
         }
     }
-    validate(storage, &workspace, &content)?;
+    validate_draft(storage, &workspace, &content)?;
     let proposal = Proposal {
         id: id(),
         review_id: review_id.into(),
@@ -254,3 +332,6 @@ pub fn answer(
     }
     Ok(proposal)
 }
+
+#[cfg(test)]
+mod tests;

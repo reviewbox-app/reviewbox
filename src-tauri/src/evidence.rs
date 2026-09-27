@@ -188,6 +188,7 @@ async fn execute(
                         sequence,
                         kind: "delta".into(),
                         text: chunk,
+                        progress: None,
                     })
                     .is_err()
                 {
