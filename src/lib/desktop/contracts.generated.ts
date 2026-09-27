@@ -4,9 +4,84 @@ export type ProjectSettings = {
   revision: number
   language: string
   defaultScope: Scope
+  defaultPreparation: PreparationMode
   includeUntracked: boolean
   provider: string | null
   model: string | null
+}
+export type PreparationMode = "rev" | "manual"
+export type ReviewPreview = {
+  scopes: Array<ScopePreview>
+  untrackedFiles: number
+}
+export type ScopePreview = {
+  scope: Scope
+  files: number
+  additions: number
+  deletions: number
+  binaryFiles: number
+  partiallyStagedFiles: number
+  commitCount: number | null
+  base: string | null
+  target: string | null
+  error: string | null
+}
+export type RepositoryRef = {
+  name: string
+  oid: string
+  /**
+   * branch, tag, or commit
+   */
+  kind: string
+  summary: string | null
+}
+export type CaptureProgress = {
+  operationId: string
+  /**
+   * preparing, copying_head, copying_index, copying_worktree, copying_base,
+   * copying_target, comparing, verifying, publishing, or completed.
+   */
+  phase: string
+  completed: number
+  total: number | null
+  path: string | null
+}
+export type ProviderAuthentication =
+  "authenticated" | "signedOut" | "unknown" | "unavailable"
+export type ProviderInstallationMethod =
+  "native" | "npm" | "homebrew" | "unsupported"
+export type ProviderInstallation = {
+  method: ProviderInstallationMethod
+  command: string | null
+  canRun: boolean
+  isUpdate: boolean
+  message: string
+}
+export type ProviderSetupRequest = { operationId: string; provider: string }
+export type ProviderSetupEvent = {
+  operationId: string
+  provider: string
+  phase: ProviderSetupPhase
+  message: string
+}
+export type ProviderSetupPhase =
+  | "checking"
+  | "downloading"
+  | "installing"
+  | "detecting"
+  | "complete"
+  | "cancelled"
+  | "failed"
+export type AgentPreparationContext = {
+  snapshotId: string
+  projectPath: string
+  changedFiles: number
+}
+export type ProposalDiagnostic = {
+  topicIndex: number
+  stepIndex: number
+  anchorIndex: number | null
+  message: string
 }
 export type Repository = {
   id: string
@@ -186,7 +261,18 @@ export type ProjectKnowledge = {
   documents: Array<ExplanationDocument>
   revision: number
 }
+export type ProviderCompatibility =
+  "compatible" | "outdated" | "unknown" | "unavailable"
 export type ProviderStatus = {
+  authentication: ProviderAuthentication
+  ready: boolean
+  installation: ProviderInstallation
+  loginCommand: string | null
+  compatibility: ProviderCompatibility
+  minimumVersion: string | null
+  executable: string
+  updateCommand: string | null
+  updateInstructions: string | null
   provider: string
   available: boolean
   version: string | null
@@ -211,13 +297,42 @@ export type AgentEvent = {
   sequence: number
   kind: string
   text: string
+  progress?: AgentProgress
 }
+export type AgentProgress =
+  | { type: "draft"; characters: number; topics: Array<string> }
+  | { type: "plan"; steps: Array<AgentPlanStep> }
+  | {
+      type: "activity"
+      id: string
+      category: AgentActivityKind
+      status: AgentActivityStatus
+    }
+  | { type: "message"; id: string; text: string }
+export type AgentPlanStep = { text: string; status: AgentPlanStatus }
+export type AgentPlanStatus = "pending" | "inProgress" | "completed"
+export type AgentActivityKind =
+  | "read"
+  | "search"
+  | "listFiles"
+  | "command"
+  | "tool"
+  | "fileChange"
+  | "webSearch"
+  | "compaction"
+  | "draft"
+export type AgentActivityStatus =
+  "inProgress" | "completed" | "failed" | "interrupted"
 export type AgentRun = {
   id: string
   reviewId: string
   snapshotId: string
   provider: string
   action: string
+  /**
+   * Older local runs only stored the rendered prompt.
+   */
+  request: string | null
   prompt: PromptPreview
   paths: Array<string>
   output: string
@@ -295,8 +410,16 @@ export type ProviderConfig = {
   executable: string
   model: string | null
 }
+export type ProviderModel = {
+  id: string
+  resolvedModel: string | null
+  name: string
+  description: string
+  supportedEfforts: Array<string>
+}
 export type ProviderSettings = {
   revision: number
+  modelDefaultsVersion: number
   defaultProvider: string
   providers: Array<ProviderConfig>
 }

@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod creation;
+mod preparation;
+mod provider_setup;
+pub use creation::*;
+pub use preparation::*;
+pub use provider_setup::*;
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AppError {
@@ -310,9 +317,26 @@ pub struct ProjectKnowledge {
     pub documents: Vec<ExplanationDocument>,
     pub revision: u32,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderCompatibility {
+    Compatible,
+    Outdated,
+    Unknown,
+    Unavailable,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatus {
+    pub authentication: ProviderAuthentication,
+    pub ready: bool,
+    pub installation: ProviderInstallation,
+    pub login_command: Option<String>,
+    pub compatibility: ProviderCompatibility,
+    pub minimum_version: Option<String>,
+    pub executable: String,
+    pub update_command: Option<String>,
+    pub update_instructions: Option<String>,
     pub provider: String,
     pub available: bool,
     pub version: Option<String>,
@@ -337,6 +361,8 @@ pub struct ProjectSettings {
     pub revision: u32,
     pub language: String,
     pub default_scope: Scope,
+    #[serde(default)]
+    pub default_preparation: PreparationMode,
     pub include_untracked: bool,
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -347,11 +373,22 @@ impl Default for ProjectSettings {
             revision: 0,
             language: "French".into(),
             default_scope: Scope::Local,
-            include_untracked: false,
+            default_preparation: PreparationMode::Rev,
+            include_untracked: true,
             provider: None,
             model: None,
         }
     }
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, TS,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparationMode {
+    #[default]
+    Rev,
+    Manual,
 }
 
 pub fn id() -> String {
@@ -377,6 +414,19 @@ pub fn typescript() -> String {
     let declarations = [
         AppError::decl(&cfg),
         ProjectSettings::decl(&cfg),
+        PreparationMode::decl(&cfg),
+        ReviewPreview::decl(&cfg),
+        ScopePreview::decl(&cfg),
+        RepositoryRef::decl(&cfg),
+        CaptureProgress::decl(&cfg),
+        ProviderAuthentication::decl(&cfg),
+        ProviderInstallationMethod::decl(&cfg),
+        ProviderInstallation::decl(&cfg),
+        ProviderSetupRequest::decl(&cfg),
+        ProviderSetupEvent::decl(&cfg),
+        ProviderSetupPhase::decl(&cfg),
+        AgentPreparationContext::decl(&cfg),
+        ProposalDiagnostic::decl(&cfg),
         Repository::decl(&cfg),
         Scope::decl(&cfg),
         CaptureRequest::decl(&cfg),
@@ -402,10 +452,16 @@ pub fn typescript() -> String {
         TermOccurrence::decl(&cfg),
         ExplanationDocument::decl(&cfg),
         ProjectKnowledge::decl(&cfg),
+        ProviderCompatibility::decl(&cfg),
         ProviderStatus::decl(&cfg),
         PromptPreview::decl(&cfg),
         AgentRequest::decl(&cfg),
         AgentEvent::decl(&cfg),
+        AgentProgress::decl(&cfg),
+        AgentPlanStep::decl(&cfg),
+        AgentPlanStatus::decl(&cfg),
+        AgentActivityKind::decl(&cfg),
+        AgentActivityStatus::decl(&cfg),
         AgentRun::decl(&cfg),
         TestRun::decl(&cfg),
         LanguageServerConfig::decl(&cfg),
@@ -418,6 +474,7 @@ pub fn typescript() -> String {
         CurrentTourStep::decl(&cfg),
         TourImportReport::decl(&cfg),
         ProviderConfig::decl(&cfg),
+        ProviderModel::decl(&cfg),
         ProviderSettings::decl(&cfg),
     ];
     format!(
@@ -447,6 +504,63 @@ pub struct AgentEvent {
     pub sequence: u32,
     pub kind: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub progress: Option<AgentProgress>,
+}
+/// Transient presentation events, never included in the provider's final output.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AgentProgress {
+    Draft {
+        characters: u32,
+        topics: Vec<String>,
+    },
+    Plan {
+        steps: Vec<AgentPlanStep>,
+    },
+    Activity {
+        id: String,
+        category: AgentActivityKind,
+        status: AgentActivityStatus,
+    },
+    Message {
+        id: String,
+        text: String,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+pub struct AgentPlanStep {
+    pub text: String,
+    pub status: AgentPlanStatus,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentPlanStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentActivityKind {
+    Read,
+    Search,
+    ListFiles,
+    Command,
+    Tool,
+    FileChange,
+    WebSearch,
+    Compaction,
+    Draft,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentActivityStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Interrupted,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -456,6 +570,9 @@ pub struct AgentRun {
     pub snapshot_id: String,
     pub provider: String,
     pub action: String,
+    /// Older local runs only stored the rendered prompt.
+    #[serde(default)]
+    pub request: Option<String>,
     pub prompt: PromptPreview,
     pub paths: Vec<String>,
     pub output: String,
@@ -576,10 +693,21 @@ pub struct ProviderConfig {
     pub executable: String,
     pub model: Option<String>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModel {
+    pub id: String,
+    pub resolved_model: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub supported_efforts: Vec<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettings {
     pub revision: u32,
+    #[serde(default)]
+    pub model_defaults_version: u32,
     pub default_provider: String,
     pub providers: Vec<ProviderConfig>,
 }
