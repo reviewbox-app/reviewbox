@@ -4,32 +4,21 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   AiMagicIcon,
   ArrowRight01Icon,
-  Cancel01Icon,
   Copy01Icon,
   GitCommitIcon,
   NoteEditIcon,
-  SecurityCheckIcon,
   SentIcon,
   StopIcon,
-  ViewIcon,
 } from "@hugeicons/core-free-icons"
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { Kbd } from "@/components/ui/kbd"
-import { Label } from "@/components/ui/label"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
@@ -38,13 +27,13 @@ import type {
   AgentRequest,
   Snapshot,
   AgentRun,
-  PromptPreview,
   Proposal,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
 import { ProposalDialog } from "./ProposalDialog"
 import { agentCommands } from "../services/agent.commands"
+import { useProviderStatus } from "../hooks/useProviderStatus"
 import { harnessNames } from "../hooks/useRevStatus"
 
 const actionLabels: Record<string, string> = {
@@ -71,7 +60,7 @@ function RevHeader({ time }: { time?: string }) {
   )
 }
 
-/** Ask Rev: explicit context, streamed answer, and a composer. Answers stay suggestions. */
+/** Ask Rev from the current reading position; the harness explores as needed. */
 export function AgentConversation({
   reviewId,
   snapshot,
@@ -92,15 +81,19 @@ export function AgentConversation({
   onApplied?: () => void
   className?: string
 }) {
-  const [preview, setPreview] = useState<PromptPreview | null>(null)
   const [error, setError] = useState("")
   const [provider, setProvider] = useState("codex")
+  const providerStatus = useProviderStatus()
+  const selectedStatus = providerStatus.providers.find(
+    (p) => p.provider === provider
+  )
+  const providerReady =
+    !providerStatus.checking && selectedStatus?.ready === true
   const [action, setAction] = useState(actions[0])
   const [completed, setCompleted] = useState<AgentRun | null>(null)
   const [history, setHistory] = useState<AgentRun[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [proposal, setProposal] = useState<Proposal | null>(null)
-  const [choosing, setChoosing] = useState(false)
   useEffect(() => {
     let alive = true
     void Promise.all([
@@ -132,7 +125,7 @@ export function AgentConversation({
   }, [reviewId, snapshot.repositoryId])
   const [question, setQuestion] = useState("")
   const [asked, setAsked] = useState("")
-  const [paths, setPaths] = useState<string[]>(initialPath ? [initialPath] : [])
+  const paths = initialPath ? [initialPath] : []
   const [output, setOutput] = useState("")
   const [status, setStatus] = useState("")
   const [active, setActive] = useState(false)
@@ -161,7 +154,7 @@ export function AgentConversation({
     paths,
   })
   const canSend =
-    !active && (action !== "ask" || !!question.trim()) && paths.length > 0
+    providerReady && !active && (action !== "ask" || !!question.trim())
   const start = async () => {
     if (running.current || !canSend) return
     const id = crypto.randomUUID()
@@ -179,11 +172,12 @@ export function AgentConversation({
         return
       sequence.current = event.sequence
       if (event.kind === "delta") setOutput((text) => text + event.text)
-      else setStatus(event.text || event.kind)
+      else if (event.kind !== "progress") setStatus(event.text || event.kind)
     }
     try {
       const run = await agentCommands.start(request(id), onEvent)
       if (running.current === id) {
+        setOutput(run.output)
         setCompleted(run)
         setHistory((items) => [run, ...items])
         if (action !== "ask") {
@@ -201,12 +195,6 @@ export function AgentConversation({
       }
     }
   }
-  const files = [
-    ...new Set([
-      ...snapshot.changes.map((c) => c.path),
-      ...snapshot.files.map((f) => f.path),
-    ]),
-  ]
   const pending = proposals.filter((p) => p.status === "pending")
   return (
     <div
@@ -220,78 +208,19 @@ export function AgentConversation({
     >
       <div className="min-h-0 flex-1 space-y-5 overflow-auto px-5 pt-5 pb-44">
         <section className="space-y-2.5 rounded-2xl bg-muted/60 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-xs font-medium">Context sent to Rev</h3>
-            <Button
-              size="xs"
-              variant="ghost"
-              className="-my-1 text-muted-foreground"
-              disabled={active || !paths.length}
-              onClick={() =>
-                void agentCommands
-                  .preview(request(crypto.randomUUID()))
-                  .then(setPreview)
-                  .catch((e) => setError(errorMessage(e)))
-              }
-            >
-              <HugeiconsIcon icon={ViewIcon} />
-              Preview
-            </Button>
-          </div>
+          <h3 className="text-xs font-medium">Review context</h3>
           <div className="flex flex-wrap gap-1.5">
             {contextLabel && <Badge variant="secondary">{contextLabel}</Badge>}
             {paths.map((path) => (
               <Badge key={path} variant="secondary" title={path}>
                 {path.split("/").at(-1)}
-                <button
-                  type="button"
-                  aria-label={`Remove ${path} from context`}
-                  disabled={active}
-                  className="-mr-0.5 rounded-full text-muted-foreground hover:text-foreground"
-                  onClick={() => setPaths(paths.filter((p) => p !== path))}
-                >
-                  <HugeiconsIcon icon={Cancel01Icon} size={10} />
-                </button>
               </Badge>
             ))}
             <Badge variant="secondary">
               <HugeiconsIcon icon={GitCommitIcon} />
               snapshot {snapshot.id.slice(0, 6)}
             </Badge>
-            <Button
-              size="xs"
-              variant="ghost"
-              className="h-5 px-2"
-              disabled={active}
-              onClick={() => setChoosing(!choosing)}
-            >
-              {choosing ? "Done" : "Add files…"}
-            </Button>
           </div>
-          {choosing && (
-            <div className="max-h-36 space-y-1.5 overflow-auto rounded-xl bg-background/60 p-2">
-              {files.map((path) => (
-                <Label key={path} className="text-xs font-normal">
-                  <Checkbox
-                    disabled={active}
-                    checked={paths.includes(path)}
-                    onCheckedChange={(checked) =>
-                      setPaths(
-                        checked
-                          ? [...paths, path]
-                          : paths.filter((p) => p !== path)
-                      )
-                    }
-                  />
-                  <span className="truncate font-mono">{path}</span>
-                </Label>
-              ))}
-            </div>
-          )}
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <HugeiconsIcon icon={SecurityCheckIcon} size={12} />
-            Only frozen file contents are sent. Excluded: .env, private keys.
-          </p>
         </section>
         {asked && (
           <article className="space-y-1">
@@ -370,6 +299,18 @@ export function AgentConversation({
           <p className="text-sm leading-6 text-muted-foreground">
             Ask Rev about the code in context. Rev explains and suggests; it
             never validates a passage or resolves a question.
+          </p>
+        )}
+        {!providerReady && (
+          <p
+            role="status"
+            className="rounded-2xl bg-muted p-3 text-sm wrap-anywhere text-muted-foreground"
+          >
+            {providerStatus.checking
+              ? "Checking the harness version…"
+              : (selectedStatus?.message ??
+                (providerStatus.error ||
+                  "Harness unavailable. Check Settings > Rev."))}
           </p>
         )}
         {error && (
@@ -498,20 +439,6 @@ export function AgentConversation({
           Answers are suggestions — never validations.
         </p>
       </footer>
-      <Dialog
-        open={!!preview}
-        onOpenChange={(v) => {
-          if (!v) setPreview(null)
-        }}
-      >
-        <DialogContent className="max-h-[85vh] overflow-auto sm:max-w-3xl">
-          <DialogTitle>Context sent to Rev</DialogTitle>
-          <DialogDescription>{preview?.sources.join(" · ")}</DialogDescription>
-          <pre className="font-mono text-xs whitespace-pre-wrap">
-            {preview?.text}
-          </pre>
-        </DialogContent>
-      </Dialog>
       {proposal && (
         <ProposalDialog
           key={proposal.id}
