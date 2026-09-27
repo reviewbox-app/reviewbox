@@ -1,5 +1,5 @@
 "use client"
-import { useCallback, useEffect, useState } from "react"
+import { useState } from "react"
 import { useTheme } from "next-themes"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -24,12 +24,9 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Kbd } from "@/components/ui/kbd"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { HarnessCard } from "@/features/agents/components/HarnessCard"
 import { ProviderSettingsPanel } from "@/features/agents/composites/ProviderSettingsPanel"
 import { LanguageServerSettingsPanel } from "@/features/language-servers/composites/LanguageServerSettingsPanel"
-import { agentCommands } from "@/features/agents/services/agent.commands"
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
-import type { ProviderStatus } from "@/lib/desktop/contracts.generated"
 import { cn } from "@/lib/utils"
 import { SettingRow } from "../components/SettingRow"
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel"
@@ -65,7 +62,7 @@ const shortcuts = [
 
 const intro: Record<Section, string> = {
   General: "Appearance and language of ReviewBox on this Mac.",
-  Rev: "Rev is ReviewBox’s review agent. It runs on a harness launched by the Rust backend; each provider handles its own sign-in — ReviewBox never sees your credentials.",
+  Rev: "Rev helps you review and understand code using your chosen harness. Sign-in stays with the provider; ReviewBox has no account of its own.",
   Permissions: "What Rev and the commands you run are allowed to do.",
   "Context sent": "What leaves ReviewBox when you ask Rev something.",
   Integrations:
@@ -89,28 +86,7 @@ export function SettingsDialog({
 }) {
   const { theme, setTheme } = useTheme()
   const [section, setSection] = useState<Section>("General")
-  const [providers, setProviders] = useState<ProviderStatus[]>([])
-  const [defaultProvider, setDefaultProvider] = useState("codex")
-  const [detecting, setDetecting] = useState(false)
   const [error, setError] = useState("")
-  const load = useCallback(
-    () =>
-      Promise.all([reviewCommands.providers(), agentCommands.settings()])
-        .then(([value, settings]) => {
-          setProviders(value)
-          setDefaultProvider(settings.defaultProvider)
-          setError("")
-        })
-        .catch((e) => setError(errorMessage(e))),
-    []
-  )
-  const detect = () => {
-    setDetecting(true)
-    void load().finally(() => setDetecting(false))
-  }
-  useEffect(() => {
-    if (open) void load()
-  }, [open, load])
   return (
     <Dialog
       open={open}
@@ -126,6 +102,13 @@ export function SettingsDialog({
             : "h-[min(720px,85vh)] sm:max-w-[1040px]"
         )}
       >
+        {standalone && (
+          <div
+            aria-hidden
+            data-tauri-drag-region
+            className="absolute top-0 left-0 h-10 w-[228px]"
+          />
+        )}
         <nav
           aria-label="Settings sections"
           className={cn(
@@ -154,12 +137,22 @@ export function SettingsDialog({
             </button>
           ))}
         </nav>
-        <section className="min-w-0 flex-1 overflow-auto rounded-panel border bg-card p-8 text-sm">
+        <section
+          className={cn(
+            "min-w-0 flex-1 overflow-auto rounded-panel border bg-card p-8 text-sm",
+            section === "Rev" && "py-6"
+          )}
+        >
           <h2 className="text-xl font-medium">{section}</h2>
-          <p className="mt-2 max-w-2xl leading-6 text-muted-foreground">
+          <p
+            className={cn(
+              "mt-2 max-w-2xl leading-6 text-muted-foreground",
+              section === "Rev" && "mt-1.5 leading-5"
+            )}
+          >
             {intro[section]}
           </p>
-          <div className="mt-6 space-y-5">
+          <div className={cn("mt-6 space-y-5", section === "Rev" && "mt-5")}>
             {section === "General" && (
               <div className="rounded-3xl border px-5">
                 <SettingRow
@@ -185,29 +178,7 @@ export function SettingsDialog({
                 </SettingRow>
               </div>
             )}
-            {section === "Rev" && (
-              <>
-                {error && (
-                  <p role="alert" className="text-destructive">
-                    {error}
-                  </p>
-                )}
-                {providers.map((provider) => (
-                  <HarnessCard
-                    key={provider.provider}
-                    status={provider}
-                    isDefault={provider.provider === defaultProvider}
-                    busy={detecting}
-                    onDetect={detect}
-                  />
-                ))}
-                <ProviderSettingsPanel onSaved={detect} />
-                <p className="text-xs text-muted-foreground">
-                  Opening settings never starts a session. Rev starts on your
-                  first request.
-                </p>
-              </>
-            )}
+            {section === "Rev" && <ProviderSettingsPanel />}
             {section === "Permissions" && (
               <div className="rounded-3xl border px-5">
                 <SettingRow

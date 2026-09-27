@@ -23,7 +23,9 @@ export function RevStatusBadge({
         className={cn(
           "size-1.5 rounded-full",
           status.state === "ready" && "bg-review-validated",
-          status.state === "unavailable" && "bg-review-attention",
+          status.state !== "ready" &&
+            status.state !== "checking" &&
+            "bg-review-attention",
           status.state === "checking" && "bg-muted-foreground"
         )}
       />
