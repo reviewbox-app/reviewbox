@@ -8,7 +8,7 @@ mod tests;
 #[derive(Default)]
 pub struct CatalogManager(pub AgentManager);
 
-pub(super) fn for_project(mut config: ProviderConfig, project: ProjectSettings) -> ProviderConfig {
+pub(crate) fn for_project(mut config: ProviderConfig, project: ProjectSettings) -> ProviderConfig {
     if project
         .provider
         .as_deref()

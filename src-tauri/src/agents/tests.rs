@@ -58,7 +58,7 @@ fn fixture() -> (
         id: id(),
         review_id: workspace.review.id.clone(),
         provider: "codex".into(),
-        action: "topics".into(),
+        action: "file".into(),
         request: String::new(),
         paths: vec![],
     };
@@ -75,6 +75,19 @@ fn manifest(run: &AgentRun) -> PathBuf {
         .find(|line| line.trim().starts_with("\"reviewManifest\":"))
         .unwrap();
     serde_json::from_str(line.split_once(':').unwrap().1.trim().trim_end_matches(',')).unwrap()
+}
+
+#[test]
+fn removed_actions_cannot_start_through_the_generic_agent_entrypoint() {
+    let (_directory, storage, _repository, _workspace, mut request) = fixture();
+    for action in ["ask", "evidence", "topics", "answer"] {
+        request.action = action.into();
+        assert_eq!(
+            prepare(&storage, &resources(), &request).unwrap_err().code,
+            "unknown_action"
+        );
+    }
+    assert!(storage.list::<AgentRun>("agent_run").unwrap().is_empty());
 }
 
 #[test]
@@ -294,7 +307,7 @@ fn claude_disables_session_persistence_and_receives_reconstructed_context() {
     use std::os::unix::fs::PermissionsExt;
     let (directory, storage, _repository, _workspace, mut request) = fixture();
     request.provider = "claude".into();
-    request.action = "ask".into();
+    request.action = "file".into();
     request.request = "Initial Claude question".into();
     let executable = directory.path().join("claude");
     fs::write(
@@ -381,6 +394,9 @@ if 'generate-json-schema' in args:
 assert args == ['app-server','--listen','stdio://'], args
 
 def send(value):
+    if 'method' in value and 'params' in value:
+        value['params'].update({'threadId':'review-thread','turnId':'turn'})
+        if 'turn' in value['params']: value['params']['turn']['id']='turn'
     print(json.dumps(value), flush=True)
 for line in sys.stdin:
     value = json.loads(line)
@@ -414,7 +430,7 @@ for line in sys.stdin:
         change = next(item for item in manifest['changes'] if item['layer'] == 'staged')
         metadata = json.loads(pathlib.Path(change['metadata']).read_text())
         assert pathlib.Path(metadata['after']['path']).read_text().endswith('2;\n')
-        send({'id':3,'result':{}})
+        send({'id':3,'result':{'turn':{'id':'turn'}}})
         send({'method':'item/started','params':{'item':{'type':'commandExecution','id':'tool'}}})
         send({'method':'item/commandExecution/requestApproval','id':99,'params':{}})
     elif value.get('id') == 99:
@@ -472,7 +488,7 @@ for line in sys.stdin:
     assert!(!path.exists());
     assert!(!Path::new(&repository.path).join("protocol").exists());
     request.id = id();
-    request.action = "ask".into();
+    request.action = "file".into();
     request.request = "Follow up on our earlier answer".into();
     let mut configuration = settings(&storage).unwrap();
     configuration.providers.iter_mut().find(|p| p.provider == "codex").unwrap().model = None;

@@ -200,6 +200,7 @@ impl NpmFixture {
         let initial = crate::agents::configure(
             &storage,
             ProviderSettings {
+                helper_model: "gpt-6-luna".into(),
                 revision: 0,
                 model_defaults_version: 1,
                 default_provider: "codex".into(),

@@ -220,6 +220,7 @@ impl Messages {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn finish(self) -> AppResult<String> {
         self.final_text
             .or(self.last_completed)
@@ -229,32 +230,44 @@ impl Messages {
     }
 }
 
-pub(super) async fn run(
-    root: &std::path::Path,
-    prompt: &str,
+mod session;
+pub(super) use session::Session;
+#[derive(Clone)]
+pub(super) struct Prepared {
+    pub effort: Option<String>,
+    pub translation_effort: Option<String>,
+    pub helper: Option<String>,
+}
+pub(super) async fn prepare(
     config: &ProviderConfig,
     cancel: Arc<AtomicBool>,
-    stream: &mut Stream,
-) -> AppResult<()> {
+    helper: Option<String>,
+) -> AppResult<Prepared> {
     providers::require_codex_version(config).await?;
-    let effort = models::effort(config, cancel.clone()).await?;
+
     // Protocol inspection never writes generated files into the user's project.
     let protocol = tempfile::tempdir()?;
-    let generated = tokio::time::timeout(
-        Duration::from_secs(15),
-        tokio::process::Command::new(providers::resolve_executable(&config.executable))
-            .args([
-                "app-server",
-                "generate-json-schema",
-                "--experimental",
-                "--out",
-            ])
-            .arg(protocol.path())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| AppError::new("timeout", "Codex capability detection timed out."))??;
+    let mut command =
+        tokio::process::Command::new(providers::resolve_executable(&config.executable));
+    command
+        .args([
+            "app-server",
+            "generate-json-schema",
+            "--experimental",
+            "--out",
+        ])
+        .arg(protocol.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command.spawn()?;
+    let group = child.id().map(crate::processes::ProcessGroup::new);
+    let generated = tokio::time::timeout(Duration::from_secs(15), child.wait_with_output())
+        .await
+        .map_err(|_| AppError::new("timeout", "Codex capability detection timed out."))??;
+    drop(group);
     if !generated.status.success() {
         return Err(AppError::new(
             "incompatible_provider",
@@ -284,50 +297,63 @@ pub(super) async fn run(
             "This Codex executable does not support ephemeral sessions. Update it in Settings > Rev.",
         ));
     }
-    let mut command =
-        tokio::process::Command::new(providers::resolve_executable(&config.executable));
-    command
-        .args(["app-server", "--listen", "stdio://"])
-        .current_dir(root);
-    let mut transport = Transport::new(command, cancel)?;
-    let result = async {
-        transport.send(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"reviewbox","title":"ReviewBox","version":env!("CARGO_PKG_VERSION")}}})).await?;
-        response(&mut transport, 1).await?;
-        transport.send(&json!({"method":"initialized","params":{}})).await?;
-        transport.send(&json!({"id":2,"method":"thread/start","params":{
-            "cwd":root,"approvalPolicy":"never","sandbox":"danger-full-access",
-            "serviceName":"reviewbox","model":config.model,"ephemeral":true
-        }})).await?;
-        let started = response(&mut transport, 2).await?;
-        if started["thread"]["ephemeral"] != true {
-            return Err(AppError::new("incompatible_provider", "Codex did not confirm an ephemeral session. The review request was not sent."));
+
+    let mut translation_effort = None;
+    let effort = if let Some(helper) = &helper {
+        let catalog = models::discover(config, cancel.clone()).await?;
+        let translator = catalog.iter().find(|model| model.id == "gpt-6-luna")
+            .ok_or_else(|| AppError::new("translation_model", "The translation model gpt-6-luna is unavailable. No alternative model was selected."))?;
+        translation_effort = ["medium", "high"]
+            .into_iter()
+            .find(|effort| {
+                translator
+                    .supported_efforts
+                    .iter()
+                    .any(|value| value == effort)
+            })
+            .map(str::to_owned);
+        let child = catalog.iter().find(|model| &model.id == helper).ok_or_else(|| AppError::new("helper_model", "The selected helper model is unavailable. Choose another helper in Settings > Rev."))?;
+        if !child
+            .supported_efforts
+            .iter()
+            .any(|effort| effort == "high")
+        {
+            return Err(AppError::new(
+                "helper_model",
+                "The helper model must support high reasoning effort. Choose another helper in Settings > Rev.",
+            ));
         }
-        let thread = started["thread"]["id"].as_str().ok_or_else(|| AppError::new("protocol", "Codex did not provide a thread ID."))?;
-        stream.emit("status", "Codex is exploring the project…")?;
-        let mut turn = json!({"id":3,"method":"turn/start","params":{
-            "threadId":thread,"input":[{"type":"text","text":prompt}],
-            "approvalPolicy":"never","sandboxPolicy":{"type":"dangerFullAccess"}
-        }});
-        if let Some(effort) = effort { turn["params"]["effort"] = json!(effort); }
-        transport.send(&turn).await?;
-        let mut messages = Messages::default();
-        loop {
-            let value = transport.next().await?;
-            handle_request(&mut transport, &value).await?;
-            if value.get("error").is_some() {
-                return Err(AppError::new("provider_error", "Codex rejected the review request."));
-            }
-            messages.receive(&value, stream)?;
-            if value["method"] == "turn/completed" {
-                if value["params"]["turn"]["status"] != "completed" {
-                    return Err(AppError::new("provider_error", "Codex did not complete this turn."));
-                }
-                stream.emit("delta", &messages.finish()?)?;
-                return Ok(());
-            }
-        }
-    }.await;
-    transport.finish().await;
+        config
+            .model
+            .as_ref()
+            .and_then(|selected| catalog.iter().find(|model| &model.id == selected))
+            .filter(|model| {
+                model
+                    .supported_efforts
+                    .iter()
+                    .any(|effort| effort == "medium")
+            })
+            .map(|_| "medium".to_owned())
+    } else {
+        models::effort(config, cancel).await?.map(str::to_owned)
+    };
+    Ok(Prepared {
+        effort,
+        translation_effort,
+        helper,
+    })
+}
+pub(super) async fn run(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+) -> AppResult<()> {
+    let prepared = prepare(config, cancel.clone(), None).await?;
+    let mut session = Session::start(root, config, prepared, cancel).await?;
+    let result = session.run(prompt, None, stream).await;
+    session.finish().await;
     result
 }
 

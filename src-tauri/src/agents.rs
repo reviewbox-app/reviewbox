@@ -2,6 +2,8 @@ mod claude;
 mod codex;
 mod continuity;
 mod exploration;
+mod preparation;
+pub(crate) use preparation::PreparationRuntime;
 pub(crate) mod models;
 pub(crate) mod providers;
 pub(crate) mod setup;
@@ -192,6 +194,7 @@ impl Stream {
         }
         self.channel
             .send(AgentEvent {
+                batch_id: None,
                 run_id: self.id.clone(),
                 sequence: self.sequence,
                 kind: kind.into(),
@@ -243,16 +246,15 @@ pub(crate) fn prepare(
     if request.request.len() > 32000 {
         return Err(AppError::new(
             "context",
-            "Keep the question below 32000 bytes.",
+            "Keep the request below 32000 bytes.",
         ));
     }
     let workspace = reviews::load(storage, &request.review_id)?;
     let context = exploration::descriptor(storage, &workspace, request)?;
     let contract = match request.action.as_str() {
-        "topics" => "topics",
         "file" | "block" | "refresh" => "explanation",
         "glossary" => "glossary",
-        _ => "answer",
+        _ => return Err(AppError::new("unknown_action", "Unknown agent action.")),
     };
     let schema = std::fs::read_to_string(resources.join(format!("contracts/{contract}.md")))?;
     let language = knowledge::load(storage, &workspace.review.repository_id)?.language;
@@ -411,6 +413,7 @@ pub fn settings(storage: &Storage) -> AppResult<ProviderSettings> {
                 })
                 .collect();
             Ok(ProviderSettings {
+                helper_model: "gpt-6-luna".into(),
                 revision: 0,
                 model_defaults_version: 1,
                 default_provider: "codex".into(),
@@ -422,7 +425,10 @@ pub fn settings(storage: &Storage) -> AppResult<ProviderSettings> {
 }
 pub fn configure(storage: &Storage, mut value: ProviderSettings) -> AppResult<ProviderSettings> {
     value.model_defaults_version = 1;
-    if value.providers.len() != 2
+    if value.helper_model.trim().is_empty()
+        || value.helper_model.len() > 256
+        || value.helper_model.contains('\0')
+        || value.providers.len() != 2
         || !["codex", "claude"].iter().all(|provider| {
             value
                 .providers
