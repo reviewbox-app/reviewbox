@@ -35,7 +35,6 @@ pub fn load(
     vars: &BTreeMap<String, String>,
 ) -> AppResult<PromptPreview> {
     let skill = match action {
-        "topics" | "ask" | "evidence" => "review",
         "file" | "block" | "glossary" | "refresh" => "explain",
         _ => return Err(AppError::new("unknown_action", "Unknown agent action.")),
     };
@@ -88,9 +87,7 @@ mod resource_tests {
             ("context".into(), "let text = '{{unexpanded}}';".into()),
             ("schema".into(), "{}".into()),
         ]);
-        for action in [
-            "ask", "topics", "file", "block", "glossary", "refresh", "evidence",
-        ] {
+        for action in ["file", "block", "glossary", "refresh"] {
             let preview = load(&root, action, &variables).unwrap();
             assert_eq!(preview.sources.len(), 3);
             assert!(preview.text.contains("{{unexpanded}}"));
