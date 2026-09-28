@@ -98,31 +98,9 @@ pub(crate) fn dispatch(storage: &Storage, request: Value) -> AppResult<Value> {
                 true,
             )?)?)
         }
-        "annotate" => {
-            let anchor: CodeAnchor = serde_json::from_value(request["anchor"].clone())?;
-            let body = request["body"]
-                .as_str()
-                .ok_or_else(|| AppError::new("arguments", "A comment body is required."))?
-                .to_string();
-            let mut next = reviews::prepare_action(
-                storage,
-                workspace,
-                review.revision,
-                ReviewAction::AddAnnotation {
-                    anchor,
-                    body,
-                    question: request["question"].as_bool().unwrap_or(false),
-                },
-            )?;
-            if let Some(note) = next.review.annotations.last_mut() {
-                note.author = "agent:external".into();
-            }
-            storage.replace("review", &review.id, review.revision, &next.review)?;
-            Ok(serde_json::to_value(next.review)?)
-        }
         _ => Err(AppError::new(
             "method",
-            "Unsupported agent action. Validation and question resolution are human actions.",
+            "Unsupported agent action. Validation is a human action.",
         )),
     }
 }
@@ -293,14 +271,12 @@ fn agent_tools() -> Vec<Value> {
         ("create","Capture a new review without changing Git.",vec![]),
         ("propose","Submit content for human acceptance.",vec!["snapshotId","content"]),
         ("enrich","Add topics, explanations or glossary entries directly.",vec!["snapshotId","content"]),
-        ("annotate","Add a comment or an open question.",vec!["snapshotId","anchor","body"]),
         ("tour","Create or update an onboarding tour.",vec!["content"]),
     ].into_iter().map(|(name,description,required)| {
         let mut properties=json!({"repo":{"type":"string"},"reviewId":{"type":"string"}});
         match name {
             "create" => { properties["scope"]=json!({"enum":["local","staged","unstaged","commit","range"]}); properties["base"]=json!({"type":"string"}); properties["target"]=json!({"type":"string"}); properties["includeUntracked"]=json!({"type":"boolean"}); },
             "propose"|"enrich" => { properties["snapshotId"]=json!({"type":"string"}); properties["content"]=json!({"type":"object"}); },
-            "annotate" => { properties["snapshotId"]=json!({"type":"string"}); properties["anchor"]=json!({"type":"object"}); properties["body"]=json!({"type":"string"}); properties["question"]=json!({"type":"boolean"}); },
             "tour" => properties["content"]=json!({"type":"object"}), _ => {},
         }
         let mut fields=vec!["repo"]; fields.extend(required);

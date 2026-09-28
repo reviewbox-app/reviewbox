@@ -332,43 +332,6 @@ pub async fn provider_status(storage: State<'_, Storage>) -> AppResult<Vec<Provi
 }
 
 #[tauri::command]
-pub async fn export_tour(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    id: String,
-) -> AppResult<bool> {
-    let s = storage.scoped(repository_id.as_deref());
-    let text = blocking(move || crate::tours::export(&s, &id)).await?;
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .set_file_name("review.reviewbox-tour.json")
-        .save_file()
-        .await
-    else {
-        return Ok(false);
-    };
-    file.write(text.as_bytes()).await?;
-    Ok(true)
-}
-#[tauri::command]
-pub async fn import_tour(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    id: String,
-    revision: u32,
-) -> AppResult<Option<Workspace>> {
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("ReviewBox tour", &["json"])
-        .pick_file()
-        .await
-    else {
-        return Ok(None);
-    };
-    let text = String::from_utf8(file.read().await)
-        .map_err(|_| AppError::new("encoding", "Tour must be UTF-8."))?;
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || crate::tours::import(&s, &id, revision, &text).map(Some)).await
-}
-#[tauri::command]
 pub async fn start_agent(
     app: tauri::AppHandle,
     storage: State<'_, Storage>,
@@ -414,59 +377,6 @@ pub async fn list_agent_runs(
     .await
 }
 #[tauri::command]
-pub async fn prepare_test(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    review_id: String,
-    command: Vec<String>,
-) -> AppResult<TestRun> {
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || crate::evidence::prepare(&s, &review_id, command)).await
-}
-#[tauri::command]
-pub async fn answer_test_permission(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    manager: State<'_, crate::agents::AgentManager>,
-    id: String,
-    approved: bool,
-    channel: tauri::ipc::Channel<AgentEvent>,
-) -> AppResult<TestRun> {
-    let cancel = manager.register(&id)?;
-    let result = crate::evidence::run(
-        storage.scoped(repository_id.as_deref()),
-        id.clone(),
-        approved,
-        cancel,
-        channel,
-    )
-    .await;
-    manager.remove(&id);
-    result
-}
-#[tauri::command]
-pub async fn cancel_test(
-    manager: State<'_, crate::agents::AgentManager>,
-    id: String,
-) -> AppResult<()> {
-    crate::evidence::cancel(&manager, &id)
-}
-#[tauri::command]
-pub async fn list_test_runs(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    review_id: String,
-) -> AppResult<Vec<TestRun>> {
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || {
-        Ok(s.list::<TestRun>("test_run")?
-            .into_iter()
-            .filter(|r| r.review_id == review_id)
-            .collect())
-    })
-    .await
-}
-#[tauri::command]
 pub async fn language_server_settings(
     storage: State<'_, Storage>,
 ) -> AppResult<LanguageServerSettings> {
@@ -475,15 +385,28 @@ pub async fn language_server_settings(
 }
 #[tauri::command]
 pub async fn configure_language_servers(
+    app: tauri::AppHandle,
     storage: State<'_, Storage>,
+    manager: State<'_, crate::language_servers::LanguageServers>,
     settings: LanguageServerSettings,
 ) -> AppResult<LanguageServerSettings> {
     let s = storage.inner().clone();
-    blocking(move || crate::language_servers::configure(&s, settings)).await
+    let (previous, result) = blocking(move || {
+        let previous = crate::language_servers::settings(&s)?;
+        Ok((previous, crate::language_servers::configure(&s, settings)?))
+    })
+    .await?;
+    for server in previous.servers.iter().chain(&result.servers) {
+        manager.stop_server(&server.id);
+    }
+    use tauri::Emitter;
+    let _ = app.emit("reviewbox:language-servers-changed", ());
+    Ok(result)
 }
 #[tauri::command]
 pub async fn find_definition(
     storage: State<'_, Storage>,
+    manager: State<'_, crate::language_servers::LanguageServers>,
     repository_id: Option<String>,
     snapshot_id: String,
     path: String,
@@ -491,12 +414,83 @@ pub async fn find_definition(
     column: u32,
 ) -> AppResult<Vec<CodeLocation>> {
     crate::language_servers::definition(
+        &manager,
         storage.scoped(repository_id.as_deref()),
         snapshot_id,
         path,
         line,
         column,
     )
+    .await
+}
+
+#[tauri::command]
+pub async fn language_request(
+    storage: State<'_, Storage>,
+    manager: State<'_, crate::language_servers::LanguageServers>,
+    repository_id: Option<String>,
+    request: LanguageRequest,
+) -> AppResult<LanguageResponse> {
+    manager
+        .request(storage.scoped(repository_id.as_deref()), request)
+        .await
+}
+
+#[tauri::command]
+pub fn cancel_language_request(
+    manager: State<'_, crate::language_servers::LanguageServers>,
+    request_id: String,
+) {
+    manager.cancel(&request_id);
+}
+
+#[tauri::command]
+pub async fn read_language_source(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    document: LanguageDocument,
+) -> AppResult<String> {
+    let storage = storage.scoped(repository_id.as_deref());
+    blocking(move || crate::language_servers::read_source(&storage, &document)).await
+}
+
+#[tauri::command]
+pub fn release_language_snapshot(
+    manager: State<'_, crate::language_servers::LanguageServers>,
+    snapshot_id: String,
+) {
+    manager.release_snapshot(&snapshot_id);
+}
+
+#[tauri::command]
+pub async fn language_repository_paths(
+    storage: State<'_, Storage>,
+    repository_id: String,
+) -> AppResult<Vec<String>> {
+    let storage = storage.inner().clone();
+    blocking(move || {
+        let root = repositories::root(&storage, &repository_id)?;
+        let paths = repositories::git(
+            &root,
+            &[
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+        )?;
+        let mut paths = paths
+            .split(|b| *b == 0)
+            .filter(|v| !v.is_empty())
+            .filter_map(|v| std::str::from_utf8(v).ok())
+            .filter(|v| !snapshots::is_metadata(v))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    })
     .await
 }
 
@@ -766,4 +760,98 @@ pub async fn configure_project(
 ) -> AppResult<ProjectSettings> {
     let s = storage.scoped(Some(repository_id.as_str()));
     blocking(move || s.save_project_settings(&repository_id, settings)).await
+}
+
+#[tauri::command]
+pub async fn read_review_source(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    snapshot_id: String,
+    source_id: String,
+) -> AppResult<FrozenSource> {
+    let s = storage.scoped(repository_id.as_deref());
+    blocking(move || {
+        let snapshot = s.get("snapshot", &snapshot_id)?;
+        crate::reader::source(&s, &snapshot, &source_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn read_review_file(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    review_id: String,
+    file_id: String,
+) -> AppResult<ReviewFileContent> {
+    let s = storage.scoped(repository_id.as_deref());
+    blocking(move || crate::reader::read_file(&s, &review_id, &file_id)).await
+}
+#[tauri::command]
+pub async fn export_review_summary(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    id: String,
+    level: ReadingLevel,
+) -> AppResult<bool> {
+    let s = storage.scoped(repository_id.as_deref());
+    let text =
+        blocking(move || reviews::load(&s, &id).map(|w| crate::reader::summary(&w, level))).await?;
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .set_file_name("review-summary.md")
+        .save_file()
+        .await
+    else {
+        return Ok(false);
+    };
+    file.write(text.as_bytes()).await?;
+    Ok(true)
+}
+#[tauri::command]
+pub async fn start_review_preparation(
+    app: tauri::AppHandle,
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    manager: State<'_, crate::preparation::PreparationManager>,
+    request: PreparationRequest,
+) -> AppResult<PreparationState> {
+    let storage = storage.scoped(repository_id.as_deref());
+    let manager = manager.inner().clone();
+    let resources = resource_root(&app)?;
+    blocking(move || manager.start(storage, resources, request)).await
+}
+#[tauri::command]
+pub async fn get_review_preparation(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    manager: State<'_, crate::preparation::PreparationManager>,
+    review_id: String,
+    after_sequence: Option<u32>,
+) -> AppResult<Option<PreparationState>> {
+    let storage = storage.scoped(repository_id.as_deref());
+    let manager = manager.inner().clone();
+    blocking(move || manager.get(&storage, &review_id, after_sequence)).await
+}
+#[tauri::command]
+pub async fn resume_review_preparation(
+    app: tauri::AppHandle,
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    manager: State<'_, crate::preparation::PreparationManager>,
+    review_id: String,
+) -> AppResult<PreparationState> {
+    let storage = storage.scoped(repository_id.as_deref());
+    let manager = manager.inner().clone();
+    let resources = resource_root(&app)?;
+    blocking(move || manager.resume(storage, resources, &review_id)).await
+}
+#[tauri::command]
+pub async fn cancel_review_preparation(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    manager: State<'_, crate::preparation::PreparationManager>,
+    review_id: String,
+) -> AppResult<()> {
+    let storage = storage.scoped(repository_id.as_deref());
+    let manager = manager.inner().clone();
+    blocking(move || manager.cancel(&storage, &review_id)).await
 }

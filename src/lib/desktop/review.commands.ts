@@ -1,15 +1,15 @@
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import type {
-  ProjectSettings,
   CaptureRequest,
   Coverage,
   FileContent,
+  ProjectKnowledge,
+  ProjectSettings,
+  ProviderStatus,
   Repository,
   Review,
   ReviewAction,
   Workspace,
-  ProjectKnowledge,
-  ProviderStatus,
 } from "./contracts.generated"
 
 let activeRepositoryId: string | null = null
@@ -74,7 +74,4 @@ export const reviewCommands = {
   saveKnowledge: (knowledge: ProjectKnowledge) =>
     call<ProjectKnowledge>("save_knowledge", { knowledge }),
   providers: () => call<ProviderStatus[]>("provider_status"),
-  exportTour: (id: string) => call<boolean>("export_tour", { id }),
-  importTour: (id: string, revision: number) =>
-    call<Workspace | null>("import_tour", { id, revision }),
 }
