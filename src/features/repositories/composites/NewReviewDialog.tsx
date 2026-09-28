@@ -198,6 +198,10 @@ function NewReviewWizard({ repository, onCreated, onClose }: Props) {
                 />
               ) : (
                 <PreparationStep
+                  readingLevel={
+                    wizard.askReadingLevel ? wizard.readingLevel : undefined
+                  }
+                  onReadingLevelChange={wizard.setReadingLevel}
                   mode={wizard.mode}
                   ready={wizard.ready}
                   scope={wizard.request.scope}

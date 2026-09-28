@@ -60,9 +60,9 @@ export function WorkspaceTitleBar({
           onValueChange={(value) => setSpace(value as typeof space)}
         >
           <TabsList>
-            <TabsTrigger value="understand">Understand</TabsTrigger>
+            <TabsTrigger value="resume">Home</TabsTrigger>
             <TabsTrigger value="review">Review</TabsTrigger>
-            <TabsTrigger value="resume">Resume</TabsTrigger>
+            <TabsTrigger value="understand">Code Explain</TabsTrigger>
           </TabsList>
         </Tabs>
       ) : (

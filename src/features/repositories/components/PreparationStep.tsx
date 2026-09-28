@@ -3,10 +3,12 @@ import { AiMagicIcon, Route01Icon } from "@hugeicons/core-free-icons"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Button } from "@/components/ui/button"
 import type {
+  ReadingLevel,
   PreparationMode,
   Scope,
   ScopePreview,
 } from "@/lib/desktop/contracts.generated"
+import { ReadingLevelChoice } from "@/features/settings/components/ReadingSettings"
 import { cn } from "@/lib/utils"
 import { scopeTitles } from "./ReviewScopeStep"
 import { ReviewStats } from "./ReviewExplanation"
@@ -18,7 +20,11 @@ export function PreparationStep({
   stats,
   onChange,
   onBack,
+  readingLevel,
+  onReadingLevelChange,
 }: {
+  readingLevel?: ReadingLevel
+  onReadingLevelChange?: (level: ReadingLevel) => void
   mode: PreparationMode
   ready: boolean
   scope: Scope
@@ -34,7 +40,9 @@ export function PreparationStep({
       <RadioGroup
         value={mode}
         aria-label="Review preparation"
-        onValueChange={(value) => onChange(value as PreparationMode)}
+        onValueChange={(value) => {
+          if (value === "rev" || value === "manual") onChange(value)
+        }}
         className="gap-2"
       >
         {(["rev", "manual"] as const).map((value) => (
@@ -63,15 +71,21 @@ export function PreparationStep({
               </span>
               <span className="mt-0.5 block text-xs text-muted-foreground">
                 {value === "manual"
-                  ? "Start with an empty tour and create topics as you read."
+                  ? "Review captured files directly in Developer mode."
                   : ready
-                    ? "Rev suggests topics and steps. You stay in control of each one."
+                    ? "Rev prepares a guided review in all three reading levels."
                     : "Rev is not set up yet · Settings › Rev"}
               </span>
             </span>
           </label>
         ))}
       </RadioGroup>
+      {mode === "rev" && readingLevel && onReadingLevelChange && (
+        <ReadingLevelChoice
+          level={readingLevel}
+          onChange={onReadingLevelChange}
+        />
+      )}
       <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-secondary px-4 py-3.5">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-muted-foreground">You will review</p>

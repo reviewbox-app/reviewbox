@@ -4,6 +4,7 @@ import { useProviderStatus } from "@/features/agents/hooks/useProviderStatus"
 import { agentCommands } from "@/features/agents/services/agent.commands"
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
 import type {
+  ReadingLevel,
   CaptureProgress,
   CaptureRequest,
   PreparationMode,
@@ -12,6 +13,7 @@ import type {
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 import type { WizardStep } from "../components/NewReviewStepper"
+import { useReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 import { creationCommands } from "../services/creation.commands"
 
 export interface CreatedReview {
@@ -19,6 +21,7 @@ export interface CreatedReview {
   preparation: PreparationMode
   provider: string
   warning: string
+  readingLevel: ReadingLevel
 }
 
 /** One mounted instance owns a draft and any capture it starts. */
@@ -27,6 +30,10 @@ export function useNewReviewWizard(
   onCreated: (result: CreatedReview) => void,
   onClose: () => void
 ) {
+  const preferences = useReadingPreferences()
+  const [readingLevel, setReadingLevel] = useState<ReadingLevel>(
+    preferences.level
+  )
   const providers = useProviderStatus()
   const [settings, setSettings] = useState<ProjectSettings | null>(null)
   const [request, setRequest] = useState<CaptureRequest>({
@@ -190,7 +197,18 @@ export function useNewReviewWizard(
         }
       }
       if (!disposed.current)
-        onCreated({ workspace, preparation: effectiveMode, provider, warning })
+        onCreated({
+          workspace,
+          preparation: effectiveMode,
+          provider,
+          warning,
+          readingLevel:
+            effectiveMode === "manual"
+              ? "developer"
+              : preferences.askEachReview
+                ? readingLevel
+                : preferences.level,
+        })
     } catch (e) {
       if (!disposed.current) {
         if (
@@ -264,6 +282,9 @@ export function useNewReviewWizard(
     }
   }, [onClose])
   return {
+    readingLevel,
+    setReadingLevel,
+    askReadingLevel: preferences.askEachReview,
     request,
     change,
     step,

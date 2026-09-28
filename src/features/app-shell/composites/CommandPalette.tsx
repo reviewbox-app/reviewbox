@@ -2,18 +2,13 @@
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
-  AiMagicIcon,
   ArrowDown01Icon,
   ArrowUp01Icon,
   BookOpen01Icon,
   Clock01Icon,
-  DashedLine01Icon,
-  File01Icon,
+  CodeIcon,
   Folder01Icon,
-  NoteEditIcon,
-  Quiz02Icon,
   Settings01Icon,
-  Tick02Icon,
 } from "@hugeicons/core-free-icons"
 import {
   Command,
@@ -25,22 +20,22 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
+import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
+import { FileIcon } from "@/features/file-icons/components/FileIcon"
 import type { Workspace } from "@/lib/desktop/contracts.generated"
 
 export interface PaletteActions {
   step: (direction: number) => void
-  validate: () => void
-  comment: (kind: "note" | "question") => void
+  /** Switches the review between the document and the code. */
+  view: () => void
   openChange: (changeId: string) => void
   space: (space: "understand" | "review" | "resume") => void
-  coverage: () => void
-  askRev: () => void
   newReview: () => void
   openRepository: () => void
   settings: () => void
 }
 
-/** ⌘K: every reading action with its shortcut, plus files of the frozen snapshot. */
+/** ⌘K: reading actions with their shortcuts, plus the review files. */
 export function CommandPalette({
   open,
   onOpenChange,
@@ -52,6 +47,7 @@ export function CommandPalette({
   workspace: Workspace | null
   actions: PaletteActions
 }) {
+  const level = useReviewWorkspaceStore((state) => state.readerLevel)
   const run = (action: () => void) => () => {
     onOpenChange(false)
     action()
@@ -61,7 +57,7 @@ export function CommandPalette({
       open={open}
       onOpenChange={onOpenChange}
       title="Command palette"
-      description="Run a reading action or open a file of the snapshot."
+      description="Run a reading action or open a review file."
       className="sm:max-w-xl"
     >
       <Command className="bg-transparent">
@@ -80,36 +76,24 @@ export function CommandPalette({
                 Previous step
                 <CommandShortcut>K</CommandShortcut>
               </CommandItem>
-              <CommandItem onSelect={run(actions.validate)}>
-                <HugeiconsIcon icon={Tick02Icon} />
-                Validate passage
-                <CommandShortcut>V</CommandShortcut>
-              </CommandItem>
-              <CommandItem onSelect={run(() => actions.comment("question"))}>
-                <HugeiconsIcon icon={Quiz02Icon} />
-                Ask a question
-                <CommandShortcut>Q</CommandShortcut>
-              </CommandItem>
-              <CommandItem onSelect={run(() => actions.comment("note"))}>
-                <HugeiconsIcon icon={NoteEditIcon} />
-                Add a note
-                <CommandShortcut>N</CommandShortcut>
-              </CommandItem>
-              <CommandItem onSelect={run(actions.coverage)}>
-                <HugeiconsIcon icon={DashedLine01Icon} />
-                Coverage and changes outside the tour
-              </CommandItem>
+              {level !== "beginner" && (
+                <CommandItem onSelect={run(actions.view)}>
+                  <HugeiconsIcon icon={CodeIcon} />
+                  Switch document / code
+                  <CommandShortcut>D</CommandShortcut>
+                </CommandItem>
+              )}
             </CommandGroup>
           )}
-          {workspace && (
+          {workspace && level !== "beginner" && (
             <CommandGroup heading="Go to">
-              {workspace.snapshot.changes.map((change) => (
+              {workspace.review.files.map((change) => (
                 <CommandItem
                   key={change.id}
                   value={change.path}
-                  onSelect={run(() => actions.openChange(change.id))}
+                  onSelect={run(() => actions.openChange(change.changeIds[0]))}
                 >
-                  <HugeiconsIcon icon={File01Icon} />
+                  <FileIcon path={change.path} />
                   <span className="truncate">
                     {change.path.split("/").at(-1)}
                   </span>
@@ -120,22 +104,17 @@ export function CommandPalette({
               ))}
             </CommandGroup>
           )}
-          <CommandGroup heading="Review & agent">
+          <CommandGroup heading="ReviewBox">
             {workspace && (
               <>
-                <CommandItem onSelect={run(actions.askRev)}>
-                  <HugeiconsIcon icon={AiMagicIcon} />
-                  Ask Rev about this passage
-                  <CommandShortcut>⌘L</CommandShortcut>
+                <CommandItem onSelect={run(() => actions.space("resume"))}>
+                  <HugeiconsIcon icon={Clock01Icon} />
+                  Home
+                  <CommandShortcut>⌘1</CommandShortcut>
                 </CommandItem>
                 <CommandItem onSelect={run(() => actions.space("understand"))}>
                   <HugeiconsIcon icon={BookOpen01Icon} />
-                  Understand
-                  <CommandShortcut>⌘1</CommandShortcut>
-                </CommandItem>
-                <CommandItem onSelect={run(() => actions.space("resume"))}>
-                  <HugeiconsIcon icon={Clock01Icon} />
-                  Resume
+                  Code Explain
                   <CommandShortcut>⌘3</CommandShortcut>
                 </CommandItem>
               </>

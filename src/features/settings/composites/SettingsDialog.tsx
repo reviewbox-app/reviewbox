@@ -29,15 +29,18 @@ import { LanguageServerSettingsPanel } from "@/features/language-servers/composi
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
 import { SettingRow } from "../components/SettingRow"
+import { CodeAppearanceSettings } from "../components/CodeAppearanceSettings"
+import { ReadingSettings } from "../components/ReadingSettings"
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel"
 
 const sections = [
   { id: "General", icon: Settings01Icon },
+  { id: "Reading", icon: CodeIcon },
   { id: "Rev", icon: AiMagicIcon },
   { id: "Permissions", icon: SecurityCheckIcon },
   { id: "Context sent", icon: Attachment01Icon },
   { id: "Integrations", icon: PlugSocketIcon },
-  { id: "Language servers", icon: CodeIcon },
+  { id: "Languages", icon: CodeIcon },
   { id: "Storage", icon: Database01Icon },
   { id: "Shortcuts", icon: KeyboardIcon },
   { id: "Project", icon: Folder01Icon },
@@ -45,30 +48,29 @@ const sections = [
 type Section = (typeof sections)[number]["id"]
 
 const shortcuts = [
-  ["Next / previous step", ["J", "K"]],
+  ["Next / previous step or file", ["J", "K"]],
   ["Next / previous topic", ["]", "["]],
-  ["Validate passage", ["V"]],
-  ["Ask a question", ["Q"]],
-  ["Add a note", ["N"]],
-  ["Back to the step", ["Esc"]],
+  ["Validate the step", ["V"]],
+  ["Switch document / code", ["D"]],
   ["Command palette", ["⌘K"]],
-  ["Open a file of the snapshot", ["⌘P"]],
-  ["Understand · Review · Resume", ["⌘1", "⌘2", "⌘3"]],
-  ["Ask Rev about the selection", ["⌘L"]],
+  ["Open a review file", ["⌘P"]],
+  ["Home · Review · Code Explain", ["⌘1", "⌘2", "⌘3"]],
   ["Side-by-side diff", ["⌘\\"]],
   ["New review / open repository", ["⌘N", "⌘O"]],
-  ["Confirm (forms, notes)", ["⌘↵"]],
+  ["Confirm (forms)", ["⌘↵"]],
 ] as const
 
 const intro: Record<Section, string> = {
   General: "Appearance and language of ReviewBox on this Mac.",
+  Reading:
+    "Choose how Rev explains changes. Your reading level stays on this Mac.",
   Rev: "Rev helps you review and understand code using your chosen harness. Sign-in stays with the provider; ReviewBox has no account of its own.",
   Permissions: "What Rev and the commands you run are allowed to do.",
-  "Context sent": "What leaves ReviewBox when you ask Rev something.",
+  "Context sent": "Context used to prepare review explanations.",
   Integrations:
     "Enrich project reviews from other tools, with the app open or closed.",
-  "Language servers":
-    "Servers already installed on your Mac. They run on a copy of the frozen source files; ReviewBox installs nothing.",
+  Languages:
+    "Install and manage language tools for richer code reading. Servers work with the captured source files.",
   Storage: "Where reviews, tours and explanations are saved.",
   Shortcuts: "Every reading action has a shortcut.",
   Project:
@@ -98,7 +100,7 @@ export function SettingsDialog({
         className={cn(
           "flex gap-2 overflow-hidden p-2",
           standalone
-            ? "inset-0 h-full w-full max-w-none translate-x-0 translate-y-0 rounded-none border-0 bg-background before:hidden sm:max-w-none"
+            ? "inset-0 h-full w-full max-w-none translate-x-0 translate-y-0 rounded-none border-0 bg-background backdrop-filter-none sm:max-w-none"
             : "h-[min(720px,85vh)] sm:max-w-[1040px]"
         )}
       >
@@ -155,6 +157,7 @@ export function SettingsDialog({
           <div className={cn("mt-6 space-y-5", section === "Rev" && "mt-5")}>
             {section === "General" && (
               <div className="rounded-3xl border px-5">
+                <CodeAppearanceSettings />
                 <SettingRow
                   title="Appearance"
                   description="ReviewBox is designed dark first; light stays available."
@@ -178,6 +181,7 @@ export function SettingsDialog({
                 </SettingRow>
               </div>
             )}
+            {section === "Reading" && <ReadingSettings />}
             {section === "Rev" && <ProviderSettingsPanel />}
             {section === "Permissions" && (
               <div className="rounded-3xl border px-5">
@@ -194,14 +198,8 @@ export function SettingsDialog({
                   <Badge variant="secondary">Never</Badge>
                 </SettingRow>
                 <SettingRow
-                  title="Run commands"
-                  description="Each command shows its exact text and folder, and runs once. Approvals expire when the app closes."
-                >
-                  <Badge variant="secondary">Ask every time</Badge>
-                </SettingRow>
-                <SettingRow
-                  title="Validate or resolve"
-                  description="Only you validate passages and resolve questions."
+                  title="Validate a review"
+                  description="Only you validate steps and files. Rev does not make reading decisions."
                 >
                   <Badge variant="secondary">Never</Badge>
                 </SettingRow>
@@ -220,12 +218,6 @@ export function SettingsDialog({
                   <span className="font-mono text-xs text-muted-foreground">
                     .env, *.pem, id_*
                   </span>
-                </SettingRow>
-                <SettingRow
-                  title="Show the context before each request"
-                  description="Ask Rev lists the context as badges; Preview shows the exact prompt."
-                >
-                  <Badge variant="secondary">Always</Badge>
                 </SettingRow>
               </div>
             )}
@@ -250,16 +242,16 @@ export function SettingsDialog({
                 </article>
               </>
             )}
-            {section === "Language servers" && <LanguageServerSettingsPanel />}
+            {section === "Languages" && <LanguageServerSettingsPanel />}
             {section === "Storage" && (
               <div className="rounded-3xl border px-5">
                 <SettingRow
                   title="Project content"
-                  description="Reviews, tours, explanations, comments and attributed decisions live in each project’s .reviewbox folder. Commit it to share them."
+                  description="Reviews, tours, explanations and attributed decisions live in each project’s .reviewbox folder. Commit it to share them."
                 />
                 <SettingRow
                   title="On this Mac"
-                  description="Preferences, raw agent conversations and caches. SQLite indexes project files locally."
+                  description="Preferences, resumable preparation tasks and caches. SQLite indexes project files locally."
                 >
                   <Button
                     variant="secondary"

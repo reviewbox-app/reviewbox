@@ -1,10 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -21,53 +16,54 @@ import { WorkspaceTitleBar } from "../components/WorkspaceTitleBar"
 import { CommandPalette } from "./CommandPalette"
 import { RepositoryHome } from "@/features/repositories/composites/RepositoryHome"
 import { NewReviewDialog } from "@/features/repositories/composites/NewReviewDialog"
+import { preparationCommands } from "@/features/agents/services/preparation.commands"
 import { PreparingReview } from "@/features/agents/composites/PreparingReview"
-import { ReviewHistoryDialog } from "@/features/review/composites/ReviewHistoryDialog"
-import { ReviewSidebar } from "@/features/review/components/ReviewSidebar"
-import { ReviewCodePane } from "@/features/review/composites/ReviewCodePane"
-import { ReviewInspector } from "@/features/review/composites/ReviewInspector"
-import { CoveragePanel } from "@/features/review/composites/CoveragePanel"
-import { TopicEditorDialog } from "@/features/review/composites/TopicEditorDialog"
+import { ReviewReader } from "@/features/review/composites/ReviewReader"
 import { ResumeReviews } from "@/features/review/composites/ResumeReviews"
 import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
 import { UnderstandWorkspace } from "@/features/knowledge/composites/UnderstandWorkspace"
+import { getReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
+import { useAppearancePreferences } from "@/features/settings/hooks/useAppearancePreferences"
 import { useReviewSession } from "@/features/review/hooks/useReviewSession"
 import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
 import {
-  anchorFor,
-  linesLabel,
-  readingStep,
+  readerIdentity,
+  readingUnits,
 } from "@/features/review/helpers/review.helpers"
 import {
   desktopAvailable,
   errorMessage,
   reviewCommands,
 } from "@/lib/desktop/review.commands"
-import type { Topic } from "@/lib/desktop/contracts.generated"
+import type { ReadingLevel, Workspace } from "@/lib/desktop/contracts.generated"
 
 export function ReviewBoxApp() {
+  useAppearancePreferences()
   const session = useReviewSession()
   const rev = useRevStatus()
   const {
     space,
     setSpace,
-    coverage,
-    setCoverage,
+    view,
+    setView,
+    setReaderLevel,
+    setCodeMode,
     settings,
     setSettings,
     palette,
     setPalette,
-    setInspector,
-    setNoteKind,
     split,
     setSplit,
   } = useReviewWorkspaceStore()
-  const [historyOpen, setHistoryOpen] = useState(false)
+  const initialLevels = useRef(new Map<string, ReadingLevel>())
+  const dismissedPreparations = useRef(new Set<string>())
+  const initializedReview = useRef<string | null>(null)
   const [preparing, setPreparing] = useState<{
+    repositoryId: string
     reviewId: string
+    snapshotId: string
     provider: string
   } | null>(null)
-  const [topic, setTopic] = useState<Topic | null | undefined>(undefined)
   const {
     workspace,
     selected,
@@ -79,17 +75,13 @@ export function ReviewBoxApp() {
     choose,
     setNewReview,
   } = session
-  const change = workspace?.snapshot.changes.find(
-    (c) => c.id === selected?.changeId
-  )
-  const passage = change?.passages.find((p) => p.id === selected?.passageId)
-  const stepIndex = workspace
-    ? readingStep(workspace.review, selected)?.index
-    : undefined
-  const stepLabel =
-    passage && stepIndex !== undefined
-      ? `Step ${stepIndex + 1} · ${linesLabel(passage)}`
-      : undefined
+  /** Opens the first step of a review Rev has just written. */
+  const startReading = (value: Workspace) => {
+    const first = readingUnits(value)[0]
+    if (first) session.selectStep(first.step.step.id)
+    setView("document")
+    setSpace("review")
+  }
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null
@@ -104,14 +96,7 @@ export function ReviewBoxApp() {
         void choose()
         return
       }
-      if (
-        settings ||
-        palette ||
-        topic !== undefined ||
-        session.newReview ||
-        preparing
-      )
-        return
+      if (settings || palette || session.newReview || preparing) return
       if (meta && event.key.toLowerCase() === "n" && repository) {
         event.preventDefault()
         setNewReview(true)
@@ -125,29 +110,26 @@ export function ReviewBoxApp() {
         event.preventDefault()
         setSpace(
           event.key === "1"
-            ? "understand"
+            ? "resume"
             : event.key === "2"
               ? "review"
-              : "resume"
+              : "understand"
         )
-      } else if (meta && event.key.toLowerCase() === "l") {
-        event.preventDefault()
-        setInspector("ask")
       } else if (meta && event.key === "\\") {
         event.preventDefault()
         setSplit(!split)
-      } else if (!typing && !meta && space === "review") {
+      } else if (
+        !typing &&
+        !meta &&
+        space === "review" &&
+        !target?.closest(".monaco-editor")
+      ) {
         if (event.key === "j") next(1)
         if (event.key === "k") next(-1)
         if (event.key === "]") nextTopic(1)
         if (event.key === "[") nextTopic(-1)
-        if (event.key === "v" && selected)
-          void action({ kind: "validate", anchor: selected })
-        if (event.key === "n" || event.key === "q") {
-          setNoteKind(event.key === "q" ? "question" : "note")
-          setInspector("notes")
-        }
-        if (event.key === "Escape") setCoverage(false)
+        if (event.key === "d")
+          setView(view === "document" ? "code" : "document")
       }
     }
     // Capture phase: Monaco claims ⌘K as a chord prefix once the code has focus.
@@ -160,20 +142,83 @@ export function ReviewBoxApp() {
     setPalette,
     setSpace,
     next,
-    selected,
-    action,
-    setInspector,
-    setNoteKind,
     split,
     setSplit,
-    setCoverage,
+    view,
+    setView,
+    setReaderLevel,
+    setCodeMode,
     settings,
     palette,
-    topic,
     session.newReview,
     preparing,
     space,
     nextTopic,
+  ])
+  // A review Rev has written opens on its document; one without a tour
+  // (prepared by the reader) has nothing to read yet, so it opens on the code.
+  const openedReview = workspace?.review.id
+  const readingIdentity = workspace ? readerIdentity(workspace) : null
+  const written =
+    workspace?.review.mode === "guided" &&
+    !!workspace.review.topics.some((t) => t.steps.length)
+  useEffect(() => {
+    if (readingIdentity && initializedReview.current !== readingIdentity) {
+      initializedReview.current = readingIdentity
+      setView(written ? "document" : "code")
+      if (!written) setCodeMode("real")
+      setReaderLevel(
+        initialLevels.current.get(readingIdentity) ??
+          (written ? getReadingPreferences().level : "developer")
+      )
+    }
+  }, [readingIdentity, written, setView, setReaderLevel, setCodeMode])
+  if (
+    preparing &&
+    workspace &&
+    (preparing.repositoryId !== workspace.review.repositoryId ||
+      preparing.reviewId !== workspace.review.id ||
+      preparing.snapshotId !== workspace.snapshot.id)
+  )
+    setPreparing(null)
+  const preparationRepositoryId = workspace?.review.repositoryId
+  const preparationSnapshotId = workspace?.snapshot.id
+  const preparationStepId = workspace?.review.position.stepId
+  const preparationError = session.setError
+  useEffect(() => {
+    if (
+      !openedReview ||
+      !preparationRepositoryId ||
+      !readingIdentity ||
+      space !== "review" ||
+      dismissedPreparations.current.has(readingIdentity)
+    )
+      return
+    let alive = true
+    void preparationCommands
+      .get(openedReview)
+      .then((job) => {
+        if (!alive || !job || job.snapshotId !== preparationSnapshotId) return
+        if (job.status !== "ready" || !preparationStepId)
+          setPreparing({
+            repositoryId: preparationRepositoryId,
+            reviewId: openedReview,
+            snapshotId: job.snapshotId,
+            provider: job.provider,
+          })
+      })
+      .catch((cause) => preparationError(errorMessage(cause)))
+    return () => {
+      alive = false
+    }
+  }, [
+    openedReview,
+    preparationStepId,
+    preparationSnapshotId,
+    preparationRepositoryId,
+    readingIdentity,
+    space,
+    preparationError,
   ])
   const { open: openRepository, setError: reportError } = session
   useEffect(() => {
@@ -257,15 +302,29 @@ export function ReviewBoxApp() {
           onChoose={() => void choose()}
           onForget={(id) => void session.forget(id)}
         />
-      ) : workspace && preparing?.reviewId === workspace.review.id ? (
+      ) : workspace &&
+        preparing?.repositoryId === workspace.review.repositoryId &&
+        preparing?.reviewId === workspace.review.id &&
+        preparing?.snapshotId === workspace.snapshot.id ? (
         <PreparingReview
-          key={`${workspace.review.id}/${workspace.snapshot.id}/${preparing.provider}`}
+          key={`${readingIdentity}/${preparing.provider}`}
           workspace={workspace}
           provider={preparing.provider}
-          onDone={() => setPreparing(null)}
           onApplied={() =>
-            reviewCommands.load(workspace.review.id).then(session.accept)
+            reviewCommands.load(workspace.review.id).then((value) => {
+              if (readerIdentity(value) === readerIdentity(workspace))
+                session.acceptCurrent(value)
+            })
           }
+          onStart={() => {
+            dismissedPreparations.current.add(readerIdentity(workspace))
+            setPreparing(null)
+            startReading(workspace)
+          }}
+          onLeave={() => {
+            setPreparing(null)
+            setSpace("resume")
+          }}
         />
       ) : space === "resume" ? (
         <ResumeReviews
@@ -283,114 +342,37 @@ export function ReviewBoxApp() {
           onApplied={() =>
             void reviewCommands
               .load(workspace.review.id)
-              .then(session.accept)
+              .then((value) => {
+                if (readerIdentity(value) === readerIdentity(workspace))
+                  session.acceptCurrent(value)
+              })
               .catch((e) => session.setError(errorMessage(e)))
           }
           onError={session.setError}
         />
       ) : workspace ? (
-        <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
-          <ReviewSidebar
+        <div className="flex min-h-0 flex-1 px-2 pb-2">
+          <ReviewReader
+            key={readingIdentity}
             workspace={workspace}
-            coverage={session.coverage}
             selected={selected}
+            busy={busy}
             onSelect={session.select}
-            onTopic={(t) => setTopic(t ?? null)}
-            onCoverage={() => setCoverage(true)}
-            onNew={() => setNewReview(true)}
-            onHistory={() => setHistoryOpen(true)}
-            onPropose={() => setInspector("ask")}
-            onExport={() =>
-              void reviewCommands
-                .exportTour(workspace.review.id)
-                .catch((e) => session.setError(errorMessage(e)))
-            }
-            onImport={() =>
-              void reviewCommands
-                .importTour(workspace.review.id, workspace.review.revision)
-                .then((value) => {
-                  if (value) session.install(value)
-                })
-                .catch((e) => session.setError(errorMessage(e)))
-            }
+            onSelectStep={session.selectStep}
+            onSelectFile={session.selectFile}
+            onAction={action}
+            isCurrentCursor={session.isCurrentCursor}
+            onStep={next}
+            onPrepare={() => {
+              dismissedPreparations.current.delete(readerIdentity(workspace))
+              setPreparing({
+                repositoryId: workspace.review.repositoryId,
+                reviewId: workspace.review.id,
+                snapshotId: workspace.snapshot.id,
+                provider: rev.harness?.provider ?? "codex",
+              })
+            }}
           />
-          <main className="flex min-w-0 flex-1 overflow-hidden rounded-panel border bg-card">
-            <ResizablePanelGroup orientation="horizontal">
-              <ResizablePanel
-                id="code"
-                minSize="240px"
-                className="flex min-h-0"
-              >
-                {coverage ? (
-                  <CoveragePanel
-                    workspace={workspace}
-                    coverage={session.coverage}
-                    onSelect={session.select}
-                    onClose={() => setCoverage(false)}
-                  />
-                ) : change ? (
-                  <ReviewCodePane
-                    key={`${workspace.snapshot.id}/${change.id}`}
-                    snapshot={workspace.snapshot}
-                    change={change}
-                    passage={passage}
-                    selection={selected}
-                    stepLabel={stepLabel}
-                    position={workspace.review.position}
-                    onPosition={(position) =>
-                      void action({ kind: "savePosition", position })
-                    }
-                  />
-                ) : (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-                    <h2 className="text-lg font-medium">
-                      {selected
-                        ? "This passage needs a new anchor"
-                        : "No changes in this snapshot"}
-                    </h2>
-                    <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-                      {selected
-                        ? "The old reading step stays in your history. Select a current passage or edit its topic."
-                        : "Choose a different scope or use Understand to explore the captured source files."}
-                    </p>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setNewReview(true)}
-                    >
-                      Choose changes
-                    </Button>
-                  </div>
-                )}
-              </ResizablePanel>
-              {!coverage && (
-                <>
-                  <ResizableHandle />
-                  <ResizablePanel
-                    id="inspector"
-                    defaultSize="384px"
-                    minSize="260px"
-                    maxSize="60%"
-                    className="flex min-h-0"
-                  >
-                    <ReviewInspector
-                      key={selected?.passageId ?? "empty"}
-                      workspace={workspace}
-                      anchor={selected}
-                      busy={busy}
-                      onAction={action}
-                      onNext={next}
-                      onApplied={() =>
-                        void reviewCommands
-                          .load(workspace.review.id)
-                          .then(session.accept)
-                          .catch((e) => session.setError(errorMessage(e)))
-                      }
-                    />
-                  </ResizablePanel>
-                </>
-              )}
-            </ResizablePanelGroup>
-          </main>
         </div>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
@@ -433,41 +415,24 @@ export function ReviewBoxApp() {
             preparation,
             provider,
             warning,
+            readingLevel,
           }) => {
+            initialLevels.current.set(readerIdentity(created), readingLevel)
             session.install(created)
+            setReaderLevel(readingLevel)
             session.setError(warning)
             setPreparing(
               preparation === "rev"
-                ? { reviewId: created.review.id, provider }
+                ? {
+                    repositoryId: created.review.repositoryId,
+                    reviewId: created.review.id,
+                    snapshotId: created.snapshot.id,
+                    provider,
+                  }
                 : null
             )
             setNewReview(false)
           }}
-        />
-      )}
-      {workspace && topic !== undefined && (
-        <TopicEditorDialog
-          key={topic?.id ?? "new"}
-          snapshot={workspace.snapshot}
-          topic={topic ?? undefined}
-          open
-          onClose={() => setTopic(undefined)}
-          onSave={(value) => {
-            const topics = workspace.review.topics.some(
-              (t) => t.id === value.id
-            )
-              ? workspace.review.topics.map((t) =>
-                  t.id === value.id ? value : t
-                )
-              : [...workspace.review.topics, value]
-            return action({ kind: "saveTopics", topics })
-          }}
-        />
-      )}
-      {workspace && historyOpen && (
-        <ReviewHistoryDialog
-          workspace={workspace}
-          onClose={() => setHistoryOpen(false)}
         />
       )}
       <SettingsDialog open={settings} onClose={() => setSettings(false)} />
@@ -477,32 +442,23 @@ export function ReviewBoxApp() {
         workspace={workspace}
         actions={{
           step: next,
-          validate: () =>
-            selected && void action({ kind: "validate", anchor: selected }),
-          comment: (kind) => {
+          view: () => {
             setSpace("review")
-            setNoteKind(kind)
-            setInspector("notes")
+            setView(view === "document" ? "code" : "document")
           },
           openChange: (changeId) => {
             const target = workspace?.snapshot.changes.find(
               (c) => c.id === changeId
             )
             if (!workspace || !target) return
-            session.select(
-              anchorFor(workspace.snapshot, target.id, target.passages[0])
+            const file = workspace.review.files.find((item) =>
+              item.changeIds.includes(changeId)
             )
+            if (file) session.selectFile(file.id, changeId)
+            setView("code")
             setSpace("review")
           },
           space: setSpace,
-          coverage: () => {
-            setSpace("review")
-            setCoverage(true)
-          },
-          askRev: () => {
-            setSpace("review")
-            setInspector("ask")
-          },
           newReview: () => repository && setNewReview(true),
           openRepository: () => void choose(),
           settings: () => setSettings(true),

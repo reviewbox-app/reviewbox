@@ -232,7 +232,7 @@ export function HarnessSetupStep({
             <h3 className="text-xl font-medium">{title}</h3>
             <p className="mt-2 text-sm leading-5 text-muted-foreground">
               {status?.ready
-                ? "Rev will use it to suggest topics, explain code and answer your questions. You can change the harness in Settings."
+                ? "Rev will use it to prepare reading paths and explain code. You can change the harness in Settings."
                 : `Rev runs on ${name}, installed on your Mac. Sign-in is handled by ${name}; ReviewBox does not store your credentials.`}
             </p>
           </div>

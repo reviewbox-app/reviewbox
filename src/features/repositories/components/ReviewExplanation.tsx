@@ -221,13 +221,13 @@ export function PreparationExplanation({ mode }: { mode: PreparationMode }) {
   const points = rev
     ? [
         "Rev reads the review files",
-        "It suggests topics and their steps",
-        "You accept, edit or reject each topic",
+        "It writes the steps for all three reading levels",
+        "Start reading once the documents are ready",
       ]
     : [
-        "All files are listed; nothing is pre-grouped",
-        "Add a topic with + when a theme emerges",
-        "You can ask Rev later",
+        "Each file appears once, with all its captured changes",
+        "Read and validate files in Developer mode",
+        "Prepare a guided review with Rev whenever you need it",
       ]
   return (
     <div className="w-full max-w-[480px] space-y-6">
@@ -236,12 +236,12 @@ export function PreparationExplanation({ mode }: { mode: PreparationMode }) {
       </div>
       <div>
         <h3 className="text-xl font-medium">
-          {rev ? "Rev prepares a reading tour" : "Build the tour as you read"}
+          {rev ? "Rev prepares a reading tour" : "Review the files yourself"}
         </h3>
         <p className="mt-2 text-sm leading-5 text-muted-foreground">
           {rev
-            ? "Rev reads the review files and suggests topics, each broken into steps. Nothing is added without your agreement."
-            : "The review starts with all files outside the tour. Create topics whenever you want, or read file by file."}
+            ? "Rev explains the captured changes as an ordered reading path, with documents, references and pseudo-code ready before you begin."
+            : "Open the captured source directly, file by file. No documents or pseudo-code are generated for a manual review."}
         </p>
       </div>
       <ol className="space-y-3">
