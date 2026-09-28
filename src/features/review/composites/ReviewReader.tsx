@@ -107,6 +107,7 @@ export function ReviewReader({
   } = useReviewWorkspaceStore()
   const { review, snapshot } = workspace
   const units = readingUnits(workspace)
+  const hasReviewDocuments = units.length > 0
   const current = currentUnit(workspace)
   const guided = review.position.context !== "files"
   const unit = current?.unit ?? null
@@ -176,7 +177,7 @@ export function ReviewReader({
     (level === "intermediate" || representation === "pseudo") &&
     !!file &&
     !pseudoAvailable(file, snapshot)
-  const showDecisionFooter = !summary && units.length > 0
+  const showDecisionFooter = !summary && hasReviewDocuments
   const footerHeight = showDecisionFooter ? FOOTER : 0
   const canDecide =
     showDecisionFooter &&
@@ -191,6 +192,7 @@ export function ReviewReader({
   const cursorIndex = guided ? index : fileIndex
   const rightDocument = guided && !!unit
   const showRight =
+    hasReviewDocuments &&
     level !== "beginner" &&
     view === "code" &&
     explanationRequested &&
@@ -530,25 +532,27 @@ export function ReviewReader({
             : `${total} ${guided ? "steps" : "files"}`}
         </span>
         <div className="flex-1" />
-        <Select
-          value={level}
-          onValueChange={(value) => {
-            if (value) setReaderLevel(value as ReadingLevel)
-          }}
-        >
-          <Hint label="Reading level">
-            <SelectTrigger aria-label="Reading level">
-              <SelectValue>{levelNames[level]}</SelectValue>
-            </SelectTrigger>
-          </Hint>
-          <SelectContent>
-            {(Object.keys(levelNames) as ReadingLevel[]).map((value) => (
-              <SelectItem key={value} value={value}>
-                {levelNames[value]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {hasReviewDocuments && (
+          <Select
+            value={level}
+            onValueChange={(value) => {
+              if (value) setReaderLevel(value as ReadingLevel)
+            }}
+          >
+            <Hint label="Reading level">
+              <SelectTrigger aria-label="Reading level">
+                <SelectValue>{levelNames[level]}</SelectValue>
+              </SelectTrigger>
+            </Hint>
+            <SelectContent>
+              {(Object.keys(levelNames) as ReadingLevel[]).map((value) => (
+                <SelectItem key={value} value={value}>
+                  {levelNames[value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         {level !== "beginner" && (
           <Tabs
             value={view}
@@ -626,7 +630,7 @@ export function ReviewReader({
             </TabsList>
           </Tabs>
         )}
-        {level !== "beginner" && view === "code" && (
+        {hasReviewDocuments && level !== "beginner" && view === "code" && (
           <Hint
             label={
               explanationRequested ? "Hide explanation" : "Show explanation"
@@ -643,11 +647,13 @@ export function ReviewReader({
             </Button>
           </Hint>
         )}
-        <ReviewContents
-          units={units}
-          states={states}
-          onSelect={(item) => onSelectStep(item.step.step.id)}
-        />
+        {hasReviewDocuments && (
+          <ReviewContents
+            units={units}
+            states={states}
+            onSelect={(item) => onSelectStep(item.step.step.id)}
+          />
+        )}
       </header>
       {!summary && !isDocument && file && file.changeIds.length > 1 && (
         <div
