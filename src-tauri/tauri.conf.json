@@ -34,7 +34,8 @@
         "img-src": "'self' data: blob:",
         "font-src": "'self' data:",
         "object-src": "'none'",
-        "base-uri": "'self'"
+        "base-uri": "'self'",
+        "frame-src": "reviewbox-illustration: http://reviewbox-illustration.localhost https://reviewbox-illustration.localhost"
       },
       "devCsp": {
         "default-src": "'self'",
@@ -45,7 +46,8 @@
         "img-src": "'self' data: blob:",
         "font-src": "'self' data:",
         "object-src": "'none'",
-        "base-uri": "'self'"
+        "base-uri": "'self'",
+        "frame-src": "reviewbox-illustration: http://reviewbox-illustration.localhost https://reviewbox-illustration.localhost"
       }
     }
   },
