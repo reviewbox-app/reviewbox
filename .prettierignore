@@ -5,7 +5,9 @@ coverage/
 src-tauri/target/
 src-tauri/gen/
 public/monaco/
+public/file-icons/
 artifacts/
+.reviewbox/
 bun.lock
 src-tauri/Cargo.lock
 next-env.d.ts
