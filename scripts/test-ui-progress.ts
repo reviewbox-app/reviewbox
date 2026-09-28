@@ -1,103 +1,56 @@
 import assert from "node:assert/strict"
-import { chmod, writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { NativeUI, fixture } from "../tests/native/ui-driver"
+import { createPreparationHarness } from "../tests/native/preparation-fixture"
 
-// Default: deterministic app-server subprocess. --live uses the installed Codex
-// with its existing authentication, on this disposable repository only.
+// Product interactions use the actual Tauri WebView. The default harness is a
+// deterministic protocol subprocess; --live uses installed Codex on this fixture.
 const live = process.argv.includes("--live")
+const selection = process.argv.includes("--selection")
 const f = await fixture()
+if (selection) {
+  await f.write(
+    "skip-notes.md",
+    "# Release notes\nDocument the behavior and describe the available settings.\n"
+  )
+  await f.write(
+    "skip-settings.json",
+    JSON.stringify(
+      Object.fromEntries(
+        Array.from({ length: 120 }, (_, i) => [
+          `displayOption${i}`,
+          i % 2 === 0,
+        ])
+      ),
+      null,
+      2
+    )
+  )
+  await f.write(
+    "skip-types.ts",
+    "export interface DisplaySettings { theme: 'light' | 'dark'; title: string }\nexport type SettingId = string;\n"
+  )
+  await f.write(
+    "src/answer.ts",
+    "export const answer = 43;\nexport function totalEligible(values: number[], minimum: number) {\n  let total = 0;\n  for (const value of values) {\n    if (value < minimum) continue;\n    total += value;\n  }\n  return total;\n}\n"
+  )
+}
 const ui = new NativeUI()
-const mode = join(f.root, "mode")
-const executable = live ? Bun.which("codex")! : join(f.root, "codex-fixture")
-assert(executable, "Codex is installed")
-await writeFile(mode, "wait")
-if (!live) {
-  await writeFile(
-    executable,
-    `#!${process.execPath}
-import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
-import {createInterface} from 'node:readline';
-import {join} from 'node:path';
-const args=process.argv.slice(2), send=value=>console.log(JSON.stringify(value));
-if(args[0]==='--version'){console.log('codex-cli 0.157.0');process.exit(0)}
-if(args[0]==='login'){console.log('Logged in using ChatGPT');process.exit(0)}
-if(args.includes('generate-json-schema')){const out=join(args[args.indexOf('--out')+1],'v2');mkdirSync(out,{recursive:true});writeFileSync(join(out,'ThreadStartParams.json'),JSON.stringify({properties:{ephemeral:{type:['boolean','null']}},definitions:{SandboxMode:{enum:['danger-full-access']}}}));process.exit(0)}
-const event=(method,item)=>send({method,params:{item}});
-for await(const line of createInterface({input:process.stdin})){
- const m=JSON.parse(line);
- if(m.method==='initialize')send({id:m.id,result:{}});
- if(m.method==='model/list')send({id:m.id,result:{data:[{id:'gpt-6-sol',model:'gpt-6-sol',displayName:'GPT-6 Sol',description:'Fixture',hidden:false,isDefault:true,supportedReasoningEfforts:[{reasoningEffort:'medium',description:'Medium'}],defaultReasoningEffort:'medium'}],nextCursor:null}});
- if(m.method==='thread/start')send({id:m.id,result:{thread:{id:'thread',ephemeral:true}}});
- if(m.method!=='turn/start')continue;
- send({id:m.id,result:{}});
- send({method:'turn/plan/updated',params:{plan:[{step:'Inspect captured changes',status:'inProgress'},{step:'Prepare reading topics',status:'pending'}]}});
- for(let i=0;i<4;i++){event('item/started',{type:'commandExecution',id:'read-'+i,commandActions:[{type:'read'}]});event('item/completed',{type:'commandExecution',id:'read-'+i,commandActions:[{type:'read'}],status:'completed',exitCode:0});}
- event('item/started',{type:'webSearch',id:'unfinished'});
- for(let i=0;i<12;i++)event('item/completed',{type:'agentMessage',id:'note-'+i,phase:'commentary',text:'**Progress note '+i+'**: inspecting captured behavior.'});
- while(readFileSync(${JSON.stringify(mode)},'utf8')==='wait')await Bun.sleep(100);
- event('item/completed',{type:'agentMessage',id:'later',phase:'commentary',text:'**Additional activity** arrived.'});
- while(readFileSync(${JSON.stringify(mode)},'utf8')==='more')await Bun.sleep(100);
- if(readFileSync(${JSON.stringify(mode)},'utf8')==='error'){send({method:'turn/completed',params:{turn:{status:'failed'}}});continue;}
- const text=m.params.input[0].text;
- const pointer=text.split('\\n').find(line=>line.trim().startsWith('"reviewManifest":'));
- const manifest=JSON.parse(readFileSync(JSON.parse(pointer.split(':').slice(1).join(':').trim().replace(/,$/,'')),'utf8'));
- const metadata=manifest.changes.map(c=>JSON.parse(readFileSync(c.metadata,'utf8')));
- const anchor=metadata.find(c=>c.change.path==='src/answer.ts').anchors[0];
- send({method:'turn/plan/updated',params:{plan:[{step:'Inspect captured changes',status:'completed'},{step:'Prepare reading topics',status:'completed'}]}});
- const finalText=JSON.stringify({kind:'topics',topics:[{id:'fixture-topic',title:'Captured behavior',brief:'Review the change.',steps:[{id:'fixture-step',title:'Read the change',explanation:'Inspect the captured value.',anchors:[anchor]}]}]});
- event('item/started',{type:'agentMessage',id:'final',phase:'final_answer'});
- send({method:'item/agentMessage/delta',params:{itemId:'final',delta:finalText.slice(0,-2)}});
- while(readFileSync(${JSON.stringify(mode)},'utf8')==='draft')await Bun.sleep(100);
- send({method:'item/agentMessage/delta',params:{itemId:'final',delta:finalText.slice(-2)}});
- event('item/completed',{type:'agentMessage',id:'final',phase:'final_answer',text:finalText});
- send({method:'turn/completed',params:{turn:{status:'completed'}}});
-}
-`
-  )
-  await chmod(executable, 0o700)
-}
-
+const { mode, calls, executable } = await createPreparationHarness(f.root, live)
 const history = '[aria-label="Preparation activity history"]'
-async function startReview() {
-  await ui.until(
-    '[...document.querySelectorAll("button")].some(b=>b.textContent.trim()==="Next"&&!b.disabled)'
-  )
-  await ui.named("Next")
-  await ui.has("How should we prepare the reading?")
-  await ui.named("With Rev", "label", false)
-  await ui.named("Start review")
-  await ui.until(
-    '!!document.querySelector("[data-testid=preparation-progress]")'
-  )
-}
-let sawLiveDraft = false
-async function ready() {
+async function waitReady() {
   await ui.wait(
     async () => {
       const error = await ui.execute<string>(
-        'return document.querySelector("[role=alert]")?.textContent ?? ""'
+        'return document.querySelector("[data-testid=preparing-review] [role=alert]")?.textContent ?? ""'
       )
       assert(!error, error)
-      const state = await ui.execute<{ ready: boolean; draft: boolean }>(
-        `return {ready: !!document.querySelector('article[data-topic-id]'), draft: !!document.querySelector('[aria-label="Suggestion draft"]')}`
-      )
-      if (state.draft && !state.ready) sawLiveDraft = true
-      return state.ready
+      return (await ui.text()).includes("Your review is ready")
     },
-    "Codex topic proposal",
-    live ? 180000 : 15000
+    "complete three-level review and selected file pseudo-code",
+    live ? 900000 : 60000
   )
-  await ui.until(
-    'document.querySelector("[aria-controls=rev-progress-content]")?.getAttribute("aria-expanded")==="false"'
-  )
-  assert.equal(
-    await ui.execute(`return !!document.querySelector('${history}')`),
-    false,
-    "successful preparation folds activity"
-  )
-  await ui.named("Show activity")
-  assert(await ui.execute(`return !!document.querySelector('${history}')`))
 }
 try {
   await ui.start(join(f.root, "appdata"))
@@ -117,21 +70,42 @@ try {
   await ui.named("or enter a path")
   await ui.fill('[aria-label="Repository path"]', f.repo)
   await ui.named("Open")
-  await startReview()
+  await ui.reviewScope()
+  await ui.nextReviewStep()
+  await ui.named("With Rev", "label", false)
+  await ui.named("Start review", "[role=dialog] footer button")
+  await ui.until(
+    '!!document.querySelector("[data-testid=preparation-progress]")'
+  )
+  if (live && process.argv.includes("--exercise-cancel")) {
+    await ui.until(
+      `!!document.querySelector('[aria-label="Active preparation batches"]')`,
+      "live coordinator work"
+    )
+    await Bun.sleep(2000)
+    await ui.named("Cancel", "[data-testid=preparing-review] button", false)
+    await ui.has("Preparation stopped. The review files are kept.")
+    await ui.named("Resume preparation")
+  }
   if (!live) {
     await ui.has("Progress note 11")
-    await ui.has("4 actions")
-    await ui.until(
-      `(() => { const e=document.querySelector('${history}');return e.scrollHeight-e.scrollTop-e.clientHeight<=32 })()`,
-      "activity follows new entries"
-    )
-    await ui.until(
-      `!document.querySelector('[aria-label="Elapsed time"]').textContent.startsWith('0:00')`,
-      "elapsed time advances"
-    )
+    await ui.has("The new amount")
     assert(
-      await ui.execute(`return !!document.querySelector('${history} strong')`),
-      "commentary renders Markdown"
+      await ui.execute(`return !!document.querySelector('${history} strong')`)
+    )
+    await ui.until(
+      `!document.querySelector('[aria-label="Elapsed time"]').textContent.startsWith('0:00')`
+    )
+    await ui.named("Continue browsing")
+    await ui.until('!document.querySelector("[data-testid=preparing-review]")')
+    await ui.named("Review", '[role="tab"]')
+    await ui.has("Progress note 11")
+    assert.equal(
+      (await readFile(calls, "utf8"))
+        .split("\n")
+        .filter((kind) => kind === "outline").length,
+      1,
+      "navigation does not restart the native job"
     )
     await ui.execute(
       `const e=document.querySelector('${history}');e.scrollTop=0;e.dispatchEvent(new Event('scroll'));return true`
@@ -141,119 +115,159 @@ try {
     assert.equal(
       await ui.execute(`return document.querySelector('${history}').scrollTop`),
       0,
-      "new events preserve manual scroll position"
+      "activity preserves manual scroll"
     )
     await ui.screenshot("progress-running")
-  } else {
-    await ui.wait(
-      () =>
-        ui.execute(
-          'return document.querySelectorAll("[aria-label=Activities] li").length>0'
-        ),
-      "real Codex activity",
-      60000
-    )
-  }
-  await ui.named(
-    "Cancel",
-    '[aria-label="Rev preparation session"] button',
-    false
-  )
-  await ui.has("Preparation stopped. Your frozen review has been kept.")
-  assert(
-    await ui.execute(`return !!document.querySelector('${history}')`),
-    "cancellation retains history"
-  )
-  if (!live) {
-    await ui.has("Interrupted")
+    await ui.named("Cancel", "[data-testid=preparing-review] button", false)
+    await ui.has("Preparation stopped. The review files are kept.")
+    assert(await ui.execute(`return !!document.querySelector('${history}')`))
     await writeFile(mode, "error")
-    await ui.named("Try again")
-    await ui.has("Preparation could not finish.")
-    await ui.has("Your frozen review is available.")
-    assert(
-      await ui.execute(`return !!document.querySelector('${history}')`),
-      "failure retains history"
+    await ui.named("Resume preparation")
+    await ui.has("Rev could not finish")
+    await ui.until(
+      '!!document.querySelector("[data-testid=preparing-review] [role=alert]")'
     )
     await writeFile(mode, "draft")
-  }
-  await ui.named("Try again")
-  if (!live) {
-    await ui.has("1 topic drafted")
-    assert.equal(
-      await ui.execute(
-        'return !!document.querySelector("article[data-topic-id]")'
-      ),
-      false,
-      "draft is not yet a proposal"
+    await ui.named("Resume preparation")
+    await ui.has("Preparing suggestions")
+    assert(
+      !(await ui.text()).includes("Your review is ready"),
+      "partial JSON is never published"
     )
     await ui.screenshot("progress-draft")
     await writeFile(mode, "done")
   }
-  await ready()
-  if (live)
-    assert(
-      sawLiveDraft,
-      "real Codex streams draft progress before its final proposal"
+  await waitReady()
+  const query = Bun.spawn(
+    [
+      "python3",
+      "-c",
+      "import sqlite3,sys; db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); print(db.execute(\"SELECT body FROM documents WHERE kind='review_preparation'\").fetchone()[0]); db.close()",
+      join(f.root, "appdata", "reviewbox.sqlite3"),
+    ],
+    { stdout: "pipe", stderr: "pipe" }
+  )
+  const checkpoint = JSON.parse(await new Response(query.stdout).text())
+  assert.equal(await query.exited, 0, await new Response(query.stderr).text())
+  const runState = checkpoint.state
+  const usage = new Map<string, unknown>()
+  const helpers = new Map<string, unknown>()
+  for (const event of runState.events) {
+    if (event.progress?.type === "usage")
+      usage.set(event.progress.id, event.progress)
+    if (event.progress?.type === "delegation")
+      helpers.set(event.progress.id, event.progress)
+  }
+  await writeFile(
+    join(ui.artifacts, `preparation-${live ? "live" : "fixture"}-metrics.json`),
+    JSON.stringify(
+      {
+        elapsedMs: Number(runState.updatedAt) - Number(runState.startedAt),
+        steps: runState.stepTitles.length,
+        completedResults: runState.completedBatches,
+        translationSelection: runState.translationSelection,
+        translationDecisions: checkpoint.results?.outline?.translationFiles,
+        providerCalls: checkpoint.measurements?.length ?? null,
+        measurements: checkpoint.measurements ?? [],
+        reportedUsageInRetainedHistory: [...usage.values()],
+        observedHelpersInRetainedHistory: [...helpers.values()],
+        note: "Provider-reported usage in retained events only; no monetary estimate or inferred child usage.",
+      },
+      null,
+      2
     )
-  await ui.named("View files", "main footer button")
-  const rows = await ui.execute<string[]>(
-    `return [...document.querySelectorAll('[aria-label="Files outside the tour"] li p:first-child')].map(p=>p.textContent)`
   )
   assert.equal(
-    rows.filter((path) => path === "src/answer.ts").length,
-    1,
-    "staged and unstaged changes share one file row"
+    await ui.execute(`return !!document.querySelector('${history}')`),
+    false,
+    "ready details are folded"
   )
-  assert(
-    rows.includes("src/new.ts"),
-    "untracked source is present in outside files"
-  )
-  await ui.named("Close", '[role="dialog"] button')
-  await ui.until('!document.querySelector("[role=dialog][data-open]")')
-  if (!live) {
-    await ui.has("Interrupted") // missing completion is never promoted to success
-    assert.equal(
-      await ui.execute(
-        'return document.querySelectorAll("[aria-label=Activities] strong").length'
-      ),
-      13,
-      "retry clears earlier history"
+  await ui.named("Details", "button", false)
+  await ui.named("Show activity")
+  assert(await ui.execute(`return !!document.querySelector('${history}')`))
+  if (selection) {
+    assert(
+      runState.translationSelection.skippedFiles >= 3,
+      "Rev skips documentation, declarative configuration and types"
+    )
+    assert(
+      runState.translationSelection.selectedFiles > 0,
+      "Rev selects executable behavior"
+    )
+    await ui.has(
+      `${runState.translationSelection.selectedFiles} ${runState.translationSelection.selectedFiles === 1 ? "file" : "files"} selected by Rev`
     )
   }
+  assert(
+    !(await ui.text()).includes("topics drafted"),
+    "grouped Codex results do not display the obsolete topic-draft counter"
+  )
   for (const [width, height] of [
     [1440, 900],
     [800, 600],
   ]) {
     await ui.resize(width, height)
-    assert.deepEqual(
-      (await ui.layout()).overflow,
-      [],
-      `no horizontal overflow at ${width}`
-    )
+    assert.deepEqual((await ui.layout()).overflow, [])
     await ui.screenshot(`progress-${live ? "live" : "fixture"}-${width}`)
   }
+  await ui.resize(1440, 900)
+  await ui.named("Start review")
+  await ui.until('!document.querySelector("[data-testid=preparing-review]")')
+  await ui.named("Contents")
   if (!live) {
-    await ui.named("Accept", "article[data-topic-id] button")
-    await ui.named("View files", "main footer button")
-    await ui.has("1 of 2 changes outside accepted topics")
-    await ui.named("Close", '[role="dialog"] button')
-    await ui.until('!document.querySelector("[role=dialog][data-open]")')
-    await ui.named("Add 1 accepted topic")
-    await ui.until('!document.querySelector("[data-testid=preparing-review]")')
-    await ui.named("files with changes outside the tour", "button", false)
-    await ui.named("Outside the tour", '[role="tab"]', false)
     assert.equal(
       await ui.execute(
-        `return [...document.querySelectorAll('[aria-label="Coverage"] button')].filter(b=>b.textContent.trim()==='Review file').length`
+        `return document.querySelectorAll('[aria-label="Review steps"] > li').length`
       ),
-      3,
-      "outside coverage lists files rather than passages"
+      2,
+      "file explanations are not additional guided steps"
     )
+    const runCalls = (await readFile(calls, "utf8")).trim().split("\n")
+    assert.equal(
+      runCalls.filter((kind) => kind === "outline").length,
+      1,
+      "resume preserves the outline checkpoint"
+    )
+    assert.equal(
+      runCalls.filter((kind) => kind === "fileExplanation").length,
+      0,
+      "documents are only generated for contextual reading steps"
+    )
+    assert.equal(
+      runCalls.filter((kind) => kind === "pseudo").length,
+      6,
+      "shared staged/unstaged bytes are translated once"
+    )
+  }
+  await ui.keys("\uE00C")
+  if (selection) {
+    await ui.named("Code", '[role="tab"]')
+    await ui.named("Files")
+    await ui.until(
+      '!!document.querySelector("[aria-label=\\"Review files\\"]")'
+    )
+    for (const path of [
+      "skip-notes.md",
+      "skip-settings.json",
+      "skip-types.ts",
+    ]) {
+      await ui.named(path, '[aria-label="Review files"] button', false)
+      await ui.has("No pseudo-code for this file")
+      await ui.until(
+        '[...document.querySelectorAll("button")].some(button => button.textContent.trim() === "Validate file and continue" && !button.disabled)'
+      )
+      await ui.named("Validate file and continue")
+    }
+    await ui.named("skip-types.ts", '[aria-label="Review files"] button', false)
+    await ui.has("No pseudo-code for this file")
+    await ui.screenshot("selection-omitted-file")
   }
   assert.equal(f.git("write-tree"), f.index)
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
-    `Native preparation progress (${live ? "real Codex" : "fixture"}): activity, cancellation, retry, completion and layout passed`
+    live
+      ? "Native preparation (real Codex): generated and opened a review with three-level documents and pseudo-code"
+      : "Native preparation (fixture): native ownership, cancellation, checkpoint resume, bounded progress, three-level documents and complete pseudo-code passed"
   )
 } catch (error) {
   await ui.screenshot("progress-failure").catch(() => {})

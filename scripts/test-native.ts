@@ -1,4 +1,11 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises"
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  rm,
+  copyFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import assert from "node:assert/strict"
@@ -9,7 +16,6 @@ import type {
   FileContent,
   ProjectSettings,
   ProjectKnowledge,
-  TestRun,
 } from "../src/lib/desktop/contracts.generated"
 
 const root = resolve(import.meta.dir, "..")
@@ -34,7 +40,8 @@ await writeFile(
   "export const answer = 42;\n"
 )
 const port = 14445
-const binary = resolve(root, "src-tauri/target/debug/reviewbox")
+const binary = join(temporary, "reviewbox-native")
+await copyFile(resolve(root, "src-tauri/target/debug/reviewbox"), binary)
 const child = Bun.spawn([binary], {
   cwd: root,
   env: {
@@ -62,14 +69,22 @@ async function request<T>(
   return json.value
 }
 async function execute<T>(script: string, args: unknown[] = []): Promise<T> {
-  return request<T>(`/session/${session}/execute/sync`, { script, args })
+  try {
+    return await request<T>(`/session/${session}/execute/sync`, {
+      script,
+      args,
+    })
+  } catch (cause) {
+    throw new Error(`WebView command failed: ${script.slice(0, 80)}`, { cause })
+  }
 }
 async function native<T>(command: string, args: object = {}): Promise<T> {
+  console.log(`Native contract: ${command}`)
   const result = await request<{ value?: T; error?: unknown }>(
     `/session/${session}/execute/async`,
     {
       script:
-        'const done=arguments[arguments.length-1];if(arguments[0]==="answer_test_permission"){arguments[1].channel="__CHANNEL__:"+window.__TAURI_INTERNALS__.transformCallback(()=>{});}window.__TAURI_INTERNALS__.invoke(arguments[0],arguments[1]).then(value=>done({value})).catch(error=>done({error}));',
+        "const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke(arguments[0],arguments[1]).then(value=>done({value})).catch(error=>done({error}));",
       args: [command, args],
     }
   )
@@ -161,7 +176,17 @@ try {
             {
               id: "step",
               title: "Return the expected value",
-              explanation: "The exported value changes from 41 to 42.",
+              documents: Object.fromEntries(
+                ["beginner", "intermediate", "developer"].map((level) => [
+                  level,
+                  {
+                    body: "The exported value changes from 41 to 42.",
+                    readingSeconds: 10,
+                    references: [],
+                    terms: [],
+                  },
+                ])
+              ),
               anchors: [anchor],
             },
           ],
@@ -172,27 +197,41 @@ try {
   workspace = await native<Workspace>("update_review", {
     id: workspace.review.id,
     revision: workspace.review.revision,
-    action: { kind: "validate", anchor },
+    action: { kind: "validateStep", stepId: "step" },
+  })
+  assert.equal(
+    (await native<Coverage>("review_coverage", { id: workspace.review.id }))
+      .complete,
+    true,
+    "authored steps alone finish the guided review"
+  )
+  assert(
+    !workspace.review.decisions.some(
+      (decision) => decision.target.kind === "file"
+    ),
+    "step validation does not validate the file"
+  )
+  workspace = await native<Workspace>("update_review", {
+    id: workspace.review.id,
+    revision: workspace.review.revision,
+    action: {
+      kind: "validateFile",
+      fileId: workspace.review.files[0].id,
+      level: "developer",
+    },
   })
   assert.equal(
     (await native<Coverage>("review_coverage", { id: workspace.review.id }))
       .complete,
     true
   )
-  workspace = await native<Workspace>("update_review", {
-    id: workspace.review.id,
-    revision: workspace.review.revision,
-    action: {
-      kind: "addAnnotation",
-      anchor,
-      body: "Does this cover all consumers?",
-      question: true,
-    },
-  })
-  assert.equal(
-    (await native<Coverage>("review_coverage", { id: workspace.review.id }))
-      .complete,
-    false
+
+  await assert.rejects(() =>
+    native("update_review", {
+      id: workspace.review.id,
+      revision: workspace.review.revision,
+      action: { kind: "addAnnotation", anchor, body: "removed" },
+    })
   )
   const knowledge = await native<ProjectKnowledge>("load_knowledge", {
     repositoryId: repo.id,
@@ -213,44 +252,26 @@ try {
     ).terms.length,
     1
   )
-  const declined = await native<TestRun>("prepare_test", {
-    reviewId: workspace.review.id,
-    command: ["/usr/bin/touch", "should-not-exist"],
-  })
-  assert.equal(
-    (
-      await native<TestRun>("answer_test_permission", {
-        id: declined.id,
-        approved: false,
-      })
-    ).status,
-    "declined"
-  )
-  assert.equal(
-    await Bun.file(join(repositoryPath, "should-not-exist")).exists(),
-    false
-  )
-  const approved = await native<TestRun>("prepare_test", {
-    reviewId: workspace.review.id,
-    command: ["/usr/bin/printf", "Native evidence received\n"],
-  })
-  const observed = await native<TestRun>("answer_test_permission", {
-    id: approved.id,
-    approved: true,
-  })
-  assert.equal(observed.status, "observed")
-  assert.equal(observed.exitCode, 0)
-  assert.match(observed.output, /Native evidence received/)
   await assert.rejects(() =>
-    native("answer_test_permission", { id: approved.id, approved: true })
+    native("prepare_test", {
+      reviewId: workspace.review.id,
+      command: ["/usr/bin/true"],
+    })
   )
-  await execute("window.location.reload();return true")
+  await execute(
+    'localStorage.setItem("reviewbox.reading-preferences",JSON.stringify({level:"developer",askEachReview:false}));window.location.reload();return true'
+  )
   await waitFor(
     `return Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes(${JSON.stringify(repositoryPath)}))`
   )
   await execute(
     "Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes(arguments[0]))?.click();return true",
     [repositoryPath]
+  )
+  // A review with a written tour opens on its document; the code is one tab away.
+  await waitFor("return !!document.querySelector('[aria-label=\"Review\"]')")
+  await execute(
+    "document.querySelector('[role=tab][aria-label=Code]')?.click();return true"
   )
   await waitFor(
     "return !!document.querySelector('[aria-label=\"Code diff\"]') && !!document.querySelector('.monaco-editor')"
@@ -339,7 +360,11 @@ try {
     .split("\n")
     .map((line) => JSON.parse(line))
   assert.equal(await mcp.exited, 0)
-  assert.equal(messages[1].result.tools.length, 6)
+  assert(
+    !messages[1].result.tools.some((tool: { name: string }) =>
+      /annotate|test|ask/.test(tool.name)
+    )
+  )
   const tour = await native<
     import("../src/lib/desktop/contracts.generated").OnboardingTour
   >("save_onboarding_tour", {
@@ -441,15 +466,12 @@ try {
       "frozen diff",
       "topics",
       "human validation",
-      "open question blocks completion",
+      "removed annotation and test APIs rejected",
       "glossary persistence",
       "review after reload",
       "Monaco mount",
       "external changes",
       "targeted invalidation",
-      "permission decline",
-      "approved test execution",
-      "one-shot approval",
       "CLI context and pending proposal",
       "proposal acceptance",
       "MCP initialize and tools",

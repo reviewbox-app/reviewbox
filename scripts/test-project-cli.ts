@@ -31,29 +31,16 @@ try {
   const workspace: Workspace = JSON.parse(
     await run([binary, "create", "--repo", repo])
   )
-  const change = workspace.snapshot.changes[0]
-  const anchor = {
-    snapshotId: workspace.snapshot.id,
-    changeId: change.id,
-    passageId: change.passages[0].id,
-  }
-  const input = join(directory, "comment.json")
-  await writeFile(
-    input,
-    JSON.stringify({
-      reviewId: workspace.review.id,
-      snapshotId: workspace.snapshot.id,
-      anchor,
-      body: "Created without the desktop app",
-      question: true,
-    })
+  const input = join(directory, "request.json")
+  const removed = Bun.spawn(
+    [binary, "annotate", "--repo", repo, "--from", input],
+    { env, stdout: "pipe", stderr: "pipe" }
   )
-  const review = JSON.parse(
-    await run([binary, "annotate", "--repo", repo, "--from", input])
+  assert.notEqual(
+    await removed.exited,
+    0,
+    "The removed annotation command is refused"
   )
-  assert.equal(review.annotations.length, 1)
-  assert.equal(review.annotations[0].author, "agent:external")
-  assert.equal(review.decisions.length, 0)
   await writeFile(
     input,
     JSON.stringify({
@@ -140,7 +127,7 @@ try {
   assert(status.includes(" M a.ts"))
   assert(status.includes("?? .reviewbox/"))
   console.log(
-    "Headless CLI/MCP: create, annotate, enrich, tour and context passed; Git index unchanged."
+    "Headless CLI/MCP: create, removed API refusal, enrich, tour and context passed; Git index unchanged."
   )
 } finally {
   await rm(directory, { recursive: true, force: true })
