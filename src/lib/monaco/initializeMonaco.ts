@@ -1,4 +1,4 @@
-import { defineReviewboxThemes } from "./reviewboxThemes"
+import { initializeCodeHighlighting } from "@/lib/code/highlighter"
 
 let initialization: Promise<void> | undefined
 
@@ -37,12 +37,16 @@ export function initializeMonaco(): Promise<void> {
     }
 
     const [monaco, { loader }] = await Promise.all([
-      import("monaco-editor"),
+      import("monaco-editor/editor/editor.api"),
       import("@monaco-editor/react"),
     ])
 
+    await import("monaco-editor/features/register.all")
+    // 0.56's aggregate registers range tokens only; native servers also expose
+    // full-document tokens, whose lifecycle feature must be registered explicitly.
+    await import("monaco-editor/editor/contrib/semanticTokens/browser/documentSemanticTokens")
     loader.config({ monaco })
-    defineReviewboxThemes(monaco)
+    await initializeCodeHighlighting(monaco)
   })().catch((error: unknown) => {
     initialization = undefined
     throw error

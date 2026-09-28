@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, type ReactNode } from "react"
+import { useState } from "react"
+import { HighlightedCode } from "@/features/code-editor/components/HighlightedCode"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
@@ -8,11 +9,11 @@ import { Button } from "@/components/ui/button"
 export function MarkdownCodeBlock({
   source,
   language,
-  children,
+  label,
 }: {
   source: string
   language?: string
-  children?: ReactNode
+  label?: string
 }) {
   const [copied, setCopied] = useState<string | null>(null)
   const [error, setError] = useState(false)
@@ -31,7 +32,7 @@ export function MarkdownCodeBlock({
   return (
     <div className="markdown-code not-prose my-4 min-w-0 overflow-hidden rounded-xl border bg-muted">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-1 text-xs text-muted-foreground">
-        <span>{language || "Code"}</span>
+        <span>{label || language || "Code"}</span>
         <Button variant="ghost" size="xs" onClick={copy} aria-label="Copy code">
           <HugeiconsIcon icon={isCopied ? Tick02Icon : Copy01Icon} />
           {isCopied ? "Copied" : "Copy"}
@@ -44,8 +45,8 @@ export function MarkdownCodeBlock({
               : ""}
         </span>
       </div>
-      <pre className="m-0 overflow-x-auto bg-transparent p-4 font-mono text-xs leading-5 text-foreground">
-        {children ?? <code>{source}</code>}
+      <pre className="m-0 bg-transparent p-4 font-mono text-xs leading-5 [overflow-wrap:anywhere] whitespace-pre-wrap text-foreground [&_code]:whitespace-pre-wrap">
+        <HighlightedCode source={source} language={language} />
       </pre>
     </div>
   )

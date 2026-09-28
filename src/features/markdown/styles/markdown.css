@@ -80,46 +80,6 @@
   height: auto;
 }
 
-/* Highlight.js token classes are emitted by rehype-highlight. */
-.markdown .hljs-comment,
-.markdown .hljs-quote {
-  color: var(--muted-foreground);
-  font-style: italic;
-}
-.markdown .hljs-keyword,
-.markdown .hljs-selector-tag,
-.markdown .hljs-literal,
-.markdown .hljs-section {
-  color: light-dark(#8250df, #d2a8ff);
-}
-.markdown .hljs-string,
-.markdown .hljs-regexp,
-.markdown .hljs-addition {
-  color: light-dark(#116329, #7ee787);
-}
-.markdown .hljs-number,
-.markdown .hljs-symbol,
-.markdown .hljs-bullet,
-.markdown .hljs-attr,
-.markdown .hljs-variable {
-  color: light-dark(#0550ae, #79c0ff);
-}
-.markdown .hljs-title,
-.markdown .hljs-built_in,
-.markdown .hljs-type {
-  color: light-dark(#953800, #ffa657);
-}
-.markdown .hljs-meta,
-.markdown .hljs-name,
-.markdown .hljs-deletion {
-  color: light-dark(#cf222e, #ff7b72);
-}
-.markdown .hljs-emphasis {
-  font-style: italic;
-}
-.markdown .hljs-strong {
-  font-weight: 700;
-}
 .markdown {
   color-scheme: light;
 }

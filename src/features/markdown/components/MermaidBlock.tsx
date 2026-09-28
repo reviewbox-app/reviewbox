@@ -7,7 +7,13 @@ import { MarkdownCodeBlock } from "./MarkdownCodeBlock"
 // Mermaid has global configuration: serialize theme setup and rendering.
 let renderQueue: Promise<void> = Promise.resolve()
 
-export function MermaidBlock({ chart }: { chart: string }) {
+export function MermaidBlock({
+  chart,
+  showSource = true,
+}: {
+  chart: string
+  showSource?: boolean
+}) {
   const { resolvedTheme } = useTheme()
   const id = `mermaid-${useId().replace(/[^a-zA-Z0-9-]/g, "")}`
   const theme = resolvedTheme === "dark" ? "dark" : "default"
@@ -55,10 +61,12 @@ export function MermaidBlock({ chart }: { chart: string }) {
       <div>
         <p className="text-xs text-muted-foreground" role="status">
           {current
-            ? "Diagram unavailable. Source shown below."
+            ? showSource
+              ? "Diagram unavailable. Source shown below."
+              : "Diagram unavailable."
             : "Rendering diagram…"}
         </p>
-        <MarkdownCodeBlock source={chart} language="mermaid" />
+        {showSource && <MarkdownCodeBlock source={chart} language="mermaid" />}
       </div>
     )
   }
@@ -71,10 +79,14 @@ export function MermaidBlock({ chart }: { chart: string }) {
         aria-label="Mermaid diagram"
         dangerouslySetInnerHTML={{ __html: current.svg }}
       />
-      <details className="mt-2 text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Diagram source</summary>
-        <MarkdownCodeBlock source={chart} language="mermaid" />
-      </details>
+      {showSource && (
+        <details className="mt-2 text-xs text-muted-foreground">
+          <summary className="cursor-pointer">Diagram source</summary>
+          {showSource && (
+            <MarkdownCodeBlock source={chart} language="mermaid" />
+          )}
+        </details>
+      )}
     </figure>
   )
 }

@@ -35,7 +35,7 @@ describe("MarkdownRenderer", () => {
     expect(html).not.toContain("<script")
     expect(html).not.toContain("onerror")
     expect(html).not.toContain("javascript:")
-    expect(html).toContain("hljs-keyword")
+    expect(html).toContain('data-language="javascript"')
     expect(html).toContain('aria-label="Copy code"')
   })
 
