@@ -137,8 +137,6 @@
   --color-review-validated-soft: var(--review-validated-soft);
   --color-review-attention: var(--review-attention);
   --color-review-attention-soft: var(--review-attention-soft);
-  --color-review-question: var(--review-question);
-  --color-review-question-soft: var(--review-question-soft);
   --color-review-step: var(--review-step);
   --color-diff-added: var(--diff-added-fg);
   --color-diff-removed: var(--diff-removed-fg);
@@ -151,8 +149,6 @@
   --review-validated-soft: #16a34a1a;
   --review-attention: #d97706;
   --review-attention-soft: #d977061a;
-  --review-question: #7c3aed;
-  --review-question-soft: #7c3aed17;
   --review-step: #1447e60a;
   --diff-added-bg: #16a34a12;
   --diff-added-gutter: #16a34a24;
@@ -166,8 +162,6 @@
   --review-validated-soft: #4ade8024;
   --review-attention: #fbbf24;
   --review-attention-soft: #fbbf241f;
-  --review-question: #a78bfa;
-  --review-question-soft: #a78bfa24;
   --review-step: #5c80ff12;
   --diff-added-bg: #4ade8012;
   --diff-added-gutter: #4ade8029;
