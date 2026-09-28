@@ -293,12 +293,15 @@ try {
   assert.equal(saved.defaultScope, "local")
   assert.equal(saved.includeUntracked, false)
   assert.equal(saved.defaultPreparation, "manual")
-  await ui.click('aside button[title="src/other.ts"]')
+  await ui.keys("\uE03D", "k")
+  await ui.fill('[role="combobox"]', "other.ts")
+  await ui.named("other.ts", '[role="option"]', false)
+  await ui.until("!document.querySelector('[role=dialog]')")
   await ui.until(
     '!!document.querySelector(\'[aria-label="Code diff"] header [title="src/other.ts"]\')'
   )
   const previous = await ui.execute<string>(
-    "return document.querySelector('aside header')?.textContent ?? ''"
+    "return document.querySelector('[aria-label=Review] > header')?.textContent ?? ''"
   )
 
   // Readiness may change in place; this draft must retain its three-step layout.
@@ -321,7 +324,7 @@ try {
   assert.deepEqual(await reviewIds(), [firstId])
   assert.equal(
     await ui.execute(
-      "return document.querySelector('aside header')?.textContent ?? ''"
+      "return document.querySelector('[aria-label=Review] > header')?.textContent ?? ''"
     ),
     previous,
     "Closing preserves the previous review identity"

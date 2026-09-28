@@ -36,34 +36,13 @@ try {
   await ui.startManualReview()
   await ui.until("!!document.querySelector('.monaco-editor')")
   await check("local-changes")
-  await ui.named("Notes", '[role="tab"]', false)
-  await check("notes")
-  await ui.named("Ask Rev", '[role="tab"]')
-  await check("ask-rev")
-  await ui.named("Explanation", '[role="tab"]')
-  await ui.named("Add topic")
-  await ui.fill(
-    "#topic-title",
-    "VeryLongUnbrokenTopicTitleThatMustWrapWithinTheReadingSidebarRatherThanOverflow"
-  )
-  await ui.fill(
-    '[aria-label="Step title"]',
-    "VeryLongUnbrokenStepTitleThatMustRemainReadableWithoutHorizontalScrolling"
-  )
-  await ui.fill(
-    '[aria-label="Step explanation"]',
-    "SomeVeryLongUnbrokenTechnicalIdentifierThatMustWrapCorrectlyWithoutGrowingTheInspector"
-  )
-  await ui.click('[role="dialog"] [role="checkbox"]')
-  await ui.named("Add step")
-  await ui.named("Save topic")
-  await ui.named(
-    "VeryLongUnbrokenTopicTitleThatMustWrapWithinTheReadingSidebarRatherThanOverflow",
-    '[aria-label="Reading path"] button',
-    false
-  )
-  await check("topics")
-  await ui.named("Understand", '[role="tab"]')
+  await ui.named("Document", '[role="tab"]')
+  await check("document")
+  await ui.named("Contents")
+  await check("contents")
+  await ui.keys("\uE00C")
+  await ui.named("Code", '[role="tab"]')
+  await ui.named("Code Explain", '[role="tab"]')
   await check("understand")
   await ui.named("Glossary", '[role="tab"]')
   await check("glossary")

@@ -48,6 +48,12 @@ const openPicker = async (selector: string) => {
   await ui.until("!document.body.innerText.includes('Loading models…')")
 }
 const choose = (name: string) => ui.named(name, '[role="option"]', false)
+// Discovery removes/disables its initiating button. The native driver's extra
+// post-click focus would override the component's handoff to the search input.
+const reloadModels = () =>
+  ui.execute(
+    "document.querySelector('[aria-label=\"Reload models\"]').click(); return true"
+  )
 const savedProject = async () =>
   JSON.parse(await readFile(join(f.repo, ".reviewbox/settings.json"), "utf8"))
     .data
@@ -69,13 +75,55 @@ try {
     "settings window"
   )
   await ui.request(ui.route("/window"), { handle: "settings" })
-  await ui.execute(
-    "window.__uiErrors=[];addEventListener('error',e=>window.__uiErrors.push(e.message));addEventListener('unhandledrejection',e=>window.__uiErrors.push(String(e.reason)));return true"
+  await ui.wait(
+    async () => {
+      try {
+        return await ui.execute(
+          "return document.readyState === 'complete' && !!document.querySelector('nav button')"
+        )
+      } catch (error) {
+        // The new WebView's initial navigation can replace its script bridge.
+        if (error instanceof DOMException && error.name === "TimeoutError")
+          return false
+        throw error
+      }
+    },
+    "settings document",
+    45000
   )
+  // Covered macOS WebViews suspend animation frames. This suite verifies
+  // selection and persistence, so use Base UI's animation-free test mode.
+  await ui.execute(
+    "window.BASE_UI_ANIMATIONS_DISABLED=true;window.__uiErrors=[];addEventListener('error',e=>window.__uiErrors.push(e.message));addEventListener('unhandledrejection',e=>window.__uiErrors.push(String(e.reason)));return true"
+  )
+  await ui.execute(`
+    const frame = window.requestAnimationFrame.bind(window), cancel = window.cancelAnimationFrame.bind(window);
+    window.requestAnimationFrame = callback => document.hidden ? -setTimeout(() => callback(performance.now()), 16) : frame(callback);
+    window.cancelAnimationFrame = id => id < 0 ? clearTimeout(-id) : cancel(id);
+    return true;
+  `)
   await ui.named("Rev", "nav button")
   await ui.setHarnessExecutable("codex", join(f.root, "codex"))
   await ui.setHarnessExecutable("claude", join(f.root, "claude"))
+  phase = "helper selection"
+  await openPicker("#helper-model")
+  // The native click driver refocuses an option after selection; use the same
+  // keyboard path as the primary model picker for this immediate-save field.
+  await ui.fill('[aria-label="Search models"]', "GPT-6 Sol")
+  await ui.keys("\uE015", "\uE007")
+  await ui.until(
+    "!document.querySelector('[role=listbox]')",
+    "helper picker closes after saving"
+  )
+  await ui.until(
+    "!!document.querySelector('#helper-model')?.textContent.match(/gpt[- ]6[- ]sol/i)"
+  )
+  await ui.until(
+    "!document.querySelector('#helper-model')?.disabled",
+    "helper preference saved"
+  )
   await ui.harnessOption("codex", "Details")
+  phase = "main catalog"
   await openPicker("#model-codex")
   await ui.has("GPT-6 Luna")
   await ui.has("Everyday coding work")
@@ -91,11 +139,18 @@ try {
     "selection does not submit the settings form"
   )
   await ui.named("Save", "form button")
+  phase = "main remount"
   await ui.until("!document.querySelector('#model-codex')")
   await ui.harnessOption("codex", "Details")
   assert(
     (await ui.text()).includes("gpt-6-luna"),
     "selected model survives remount"
+  )
+  assert(
+    await ui.execute(
+      "return !!document.querySelector('#helper-model')?.textContent.match(/gpt[- ]6[- ]sol/i)"
+    ),
+    "main model selection preserves the independent helper preference"
   )
   await openPicker("#model-codex")
   const before = (await readFile(audit, "utf8")).trim().split("\n").length
@@ -107,14 +162,19 @@ try {
     "catalog reused during editing"
   )
   await writeFile(mode, "error")
-  await ui.named("Reload models")
+  phase = "catalog reload error"
+  await reloadModels()
   await ui.has("invalid model catalog")
   assert((await ui.text()).includes("gpt-6-luna"), "error keeps the selection")
   await writeFile(mode, "normal")
-  await ui.named("Try again")
+  phase = "catalog retry"
+  await ui.execute(
+    "[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Try again').click(); return true"
+  )
   await ui.has("GPT-6 Luna")
   await writeFile(mode, "empty")
-  await ui.named("Reload models")
+  phase = "empty catalog"
+  await reloadModels()
   await ui.has("No models returned by this harness.")
   await ui.has("Not listed by this harness")
   await choose("Harness default")
@@ -143,6 +203,10 @@ try {
   await ui.has("Saved in .reviewbox")
   assert.equal((await savedProject()).provider, "codex")
   assert.equal((await savedProject()).model, "gpt-6-sol")
+  assert(
+    !("helperModel" in (await savedProject())),
+    "helper preference stays private"
+  )
   await ui.select("#project-provider", "claude")
   phase = "Claude project selection"
   await ui.until(
@@ -195,7 +259,19 @@ try {
     await ui.keys("\uE00C")
     await ui.named("Cancel", "form button")
   }
-  assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
+  const errors = await ui.execute<string[]>("return window.__uiErrors")
+  const layoutNotice =
+    "ResizeObserver loop completed with undelivered notifications."
+  // WebKit can defer one resize notification when the occluded test window is
+  // resized with an open popup. Overflow is checked above; keep real errors fatal.
+  assert.deepEqual(
+    errors.filter((error) => error !== layoutNotice),
+    []
+  )
+  if (errors.length)
+    console.log(
+      `WebKit deferred layout notifications during resizing: ${errors.length}`
+    )
   const operations = (await readFile(audit, "utf8"))
     .trim()
     .split("\n")

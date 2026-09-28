@@ -26,7 +26,7 @@ try {
     "Permissions",
     "Context sent",
     "Integrations",
-    "Language servers",
+    "Languages",
     "Storage",
     "Shortcuts",
     "Project",

@@ -1,7 +1,7 @@
-import type * as Monaco from "monaco-editor"
+import type * as Monaco from "monaco-editor/editor/editor.api"
 import type { editor } from "monaco-editor"
 
-let probeSequence = 0
+import { ensureCodeLanguage, highlightCode } from "@/lib/code/highlighter"
 
 export function waitForProbe<T>(
   operation: PromiseLike<T>,
@@ -40,110 +40,53 @@ export function waitForProbe<T>(
   })
 }
 
-async function waitForFormatting(
-  action: editor.IEditorAction,
-  language: string,
-  signal: AbortSignal
-): Promise<void> {
-  if (action.isSupported()) return
-
-  let interval: ReturnType<typeof setInterval> | undefined
-  try {
-    await waitForProbe(
-      new Promise<void>((resolve) => {
-        interval = setInterval(() => {
-          if (action.isSupported()) resolve()
-        }, 25)
-      }),
-      `Chargement du formateur ${language}`,
-      signal
-    )
-  } finally {
-    clearInterval(interval)
-  }
-}
-
-export async function probeLanguageWorkers(
+export async function probeLanguageHighlighting(
   monaco: typeof Monaco,
   codeEditor: editor.IStandaloneCodeEditor,
   signal: AbortSignal
 ): Promise<string[]> {
-  signal.throwIfAborted()
-  const originalModel = codeEditor.getModel()
   const results: string[] = []
-  const models: editor.ITextModel[] = []
-  let editorDisposed = false
-  const disposal = codeEditor.onDidDispose(() => {
-    editorDisposed = true
-  })
-
-  try {
-    const tsModel = monaco.editor.createModel(
-      'const reviewCount: number = "invalid";',
-      "typescript",
-      monaco.Uri.parse(
-        `inmemory://reviewbox-validation/${++probeSequence}/probe.ts`
-      )
-    )
-    models.push(tsModel)
-    const getWorker = await waitForProbe(
-      monaco.typescript.getTypeScriptWorker(),
-      "Chargement TypeScript",
+  const originalModel = codeEditor.getModel()
+  const fixtures = [
+    [
+      "tsx",
+      "const Label = ({value}: {value: string}) => <button title={value}>{value}</button>",
+    ],
+    ["json", '{"review":true,"count":2}'],
+    ["css", ".review{color:red;margin:0}"],
+    ["html", "<html><body><div>ReviewBox</div></body></html>"],
+  ] as const
+  for (const [language, value] of fixtures) {
+    signal.throwIfAborted()
+    await waitForProbe(
+      ensureCodeLanguage(language),
+      `Grammaire ${language}`,
       signal
     )
-    const worker = await waitForProbe(
-      getWorker(tsModel.uri),
-      "Worker TypeScript",
+    const lines = await waitForProbe(
+      highlightCode(value, language, "tokyo-night-dark"),
+      `Coloration ${language}`,
       signal
     )
-    const diagnostics = await waitForProbe(
-      worker.getSemanticDiagnostics(tsModel.uri.toString()),
-      "Diagnostic TypeScript",
-      signal
-    )
-    if (!diagnostics.some((diagnostic) => diagnostic.code === 2322)) {
+    if (
+      lines
+        .flat()
+        .map((token) => token.content)
+        .join("") !== value ||
+      new Set(lines.flat().map((token) => token.color)).size < 3
+    ) {
       throw new Error(
-        "Le worker TypeScript ne retourne pas le diagnostic attendu."
+        `La grammaire ${language} ne distingue pas les éléments attendus.`
       )
     }
-    results.push("TypeScript : diagnostic 2322 reçu")
-
-    const fixtures = [
-      ["json", '{"review":true,"count":2}'],
-      ["css", ".review{color:red;margin:0}"],
-      ["html", "<html><body><div>ReviewBox</div></body></html>"],
-    ] as const
-
-    for (const [language, value] of fixtures) {
-      signal.throwIfAborted()
-      if (editorDisposed)
-        throw new Error("L’éditeur a été démonté pendant la vérification.")
-      const model = monaco.editor.createModel(value, language)
-      models.push(model)
-      codeEditor.setModel(model)
-      const action = codeEditor.getAction("editor.action.formatDocument")
-      if (!action) throw new Error(`Formatage ${language} indisponible`)
-
-      // Language services register asynchronously after their first model appears.
-      await waitForFormatting(action, language, signal)
-      await waitForProbe(action.run(), `Formatage ${language}`, signal)
-      signal.throwIfAborted()
-      if (model.getValue() === value || !model.getValue().includes("\n")) {
-        throw new Error(`Le worker ${language} n’a pas formaté le document.`)
-      }
-      results.push(`${language.toUpperCase()} : document formaté`)
-    }
-  } finally {
-    disposal.dispose()
-    if (!editorDisposed) {
-      codeEditor.setModel(originalModel?.isDisposed() ? null : originalModel)
-    } else {
-      // The React wrapper can only dispose the temporary model active at unmount.
-      originalModel?.dispose()
-    }
-    models.forEach((model) => model.dispose())
+    results.push(`${language.toUpperCase()} : coloration TextMate vérifiée`)
   }
-
+  if (
+    codeEditor.getModel() !== originalModel ||
+    !monaco.languages.getLanguages().some((language) => language.id === "tsx")
+  ) {
+    throw new Error("La vérification ne doit pas remplacer le modèle actif.")
+  }
   return results
 }
 

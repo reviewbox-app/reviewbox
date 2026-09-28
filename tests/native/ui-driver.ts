@@ -10,8 +10,10 @@ export class NativeUI {
       resolve("src-tauri/target/debug/reviewbox")
   ) {}
   session = ""
-  readonly port = 14446
-  readonly artifacts = resolve("artifacts/validation/ui")
+  readonly port = Number(process.env.REVIEWBOX_NATIVE_PORT ?? 14446)
+  readonly artifacts = resolve(
+    process.env.REVIEWBOX_NATIVE_ARTIFACTS ?? "artifacts/validation/ui"
+  )
   private child?: ReturnType<typeof Bun.spawn>
   async request<T>(path: string, body?: unknown, method?: string): Promise<T> {
     const response = await fetch(`http://127.0.0.1:${this.port}${path}`, {

@@ -23,7 +23,13 @@ try {
   await ui.named("Open")
   await ui.startManualReview()
   await ui.until("!!document.querySelector('.monaco-editor')")
-  await ui.named("long.ts", "aside button", false)
+  // The palette remains available alongside the optional file list.
+  async function openFile(name: string) {
+    await ui.keys("\uE03D", "k")
+    await ui.fill('[role="combobox"]', name)
+    await ui.named(name, '[role="option"]', false)
+  }
+  await openFile("long.ts")
   await ui.until(
     "document.querySelector('[aria-label=\"Code diff\"] header')?.textContent.includes('long.ts')"
   )
@@ -68,7 +74,8 @@ try {
     await ui.has("+400")
     await Bun.sleep(700)
     const scrolled = await scrollAndWait(diff)
-    await ui.named(mode === "Split" ? "Validate passage" : "Reopen passage")
+    await ui.named("More decisions")
+    await ui.named("Mark as examined", "[role=menuitem]")
     await Bun.sleep(800)
     assert.deepEqual(
       await readViewport(diff),
@@ -82,7 +89,7 @@ try {
       scrolled,
       "focus refresh must not recenter the editor"
     )
-    await ui.named("long.ts", "aside button", false)
+    await openFile("long.ts")
     await ui.wait(
       async () =>
         (await readViewport(diff)).some(
@@ -91,10 +98,10 @@ try {
       "explicit navigation still recenters the current passage"
     )
     console.log(
-      `${mode}: scroll survives save, polling, validation and focus; explicit navigation recenters`
+      `${mode}: scroll survives save, polling, examination and focus; explicit navigation recenters`
     )
   }
-  await ui.named("Understand", "[role=tab]")
+  await ui.named("Code Explain", "[role=tab]")
   await ui.fill('[aria-label="Filter files"]', "long.ts")
   await ui.named("long.ts", '[aria-label="Snapshot files"] button', false)
   await ui.until(

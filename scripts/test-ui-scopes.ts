@@ -106,7 +106,7 @@ try {
   await ui.named("Split", "[role=tab]")
   await ui.until("!!document.querySelector('.monaco-diff-editor.side-by-side')")
   await ui.named("Unified", "[role=tab]")
-  await ui.named("Resume", "[role=tab]")
+  await ui.named("Home", "[role=tab]")
   await ui.named("Review actions")
   await ui.named("Delete review…", "[role=menuitem]")
   await ui.named("Delete review", "[role=alertdialog] button")

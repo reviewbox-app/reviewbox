@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import type { Editor as TiptapEditor, JSONContent } from "@tiptap/react"
-import type * as Monaco from "monaco-editor"
+import type * as Monaco from "monaco-editor/editor/editor.api"
 import type { editor } from "monaco-editor"
 import { isTauri } from "@tauri-apps/api/core"
 import { z } from "zod"
@@ -15,7 +15,7 @@ import { getAppInfo } from "@/features/app-shell/services/appInfo.service"
 import { AnimationProbe } from "../components/AnimationProbe"
 import {
   probeDiff,
-  probeLanguageWorkers,
+  probeLanguageHighlighting,
   waitForProbe,
 } from "../helpers/editorProbes.helpers"
 import { useWorkbenchStore } from "../stores/useWorkbench.store"
@@ -105,7 +105,11 @@ export function DevelopmentWorkbench() {
       if (useWorkbenchStore.getState().count !== before + 1)
         throw new Error("État Zustand incohérent")
       addResult("Zustand : incrément vérifié")
-      const languages = await probeLanguageWorkers(monaco, instance, signal)
+      const languages = await probeLanguageHighlighting(
+        monaco,
+        instance,
+        signal
+      )
       languages.forEach(addResult)
       addResult(await probeDiff(diffInstance, signal))
       signal.throwIfAborted()

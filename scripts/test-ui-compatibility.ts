@@ -101,7 +101,9 @@ try {
   // Manual validation remains available with an unsupported harness.
   await ui.named("Validate passage")
   await ui.has("Validated")
-  await ui.named("Ask Rev", '[role="tab"]')
+  // Harness readiness is visible where Rev still talks: Code Explain.
+  await ui.named("Code Explain", '[role="tab"]')
+  await ui.named("Explain with Rev")
   await ui.fill('[aria-label="Question for Rev"]', "Explain this change")
   await ui.has("Codex is too old")
   await ui.until(sendDisabled)

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict"
-import { readdir, readFile, writeFile } from "node:fs/promises"
 import { NativeUI, fixture } from "../tests/native/ui-driver"
 
 const f = await fixture()
@@ -20,6 +19,7 @@ try {
       await ui.named("Open")
       await ui.has("New review")
       await ui.startManualReview()
+      // Without a tour written by Rev, the review opens on the code.
       await ui.until("!!document.querySelector('.monaco-editor')")
       await ui.has("src/answer.ts")
       await ui.screenshot("01-review")
@@ -31,118 +31,21 @@ try {
     await ui.named("Validate passage")
     await ui.has("Validated by Reviewer")
   })
-  await scenario(
-    "notes and questions through the rich text editor",
-    async () => {
-      await ui.named("Notes", '[role="tab"]', false)
-      await ui.fill(
-        '[contenteditable="true"][role="textbox"]',
-        "A persistent review note"
-      )
-      await ui.named("Add note")
-      await ui.has("A persistent review note")
-      await ui.named("Question", '[role="radio"]')
-      await ui.fill(
-        '[contenteditable="true"][role="textbox"]',
-        "Why change the answer?"
-      )
-      await ui.named("Ask question")
-      await ui.has("Why change the answer?")
-      await ui.screenshot("02-notes")
-    }
-  )
-  await scenario("resolve, reopen and delete annotations", async () => {
-    await ui.named("Resolve")
-    await ui.named("Reopen")
-    await ui.named("Resolve")
-    await ui.named("Delete")
-    await ui.until(
-      "!document.body.innerText.includes('Why change the answer?')"
-    )
-    await ui.named("Delete note")
-    await ui.until(
-      "!document.body.innerText.includes('A persistent review note')"
-    )
-  })
-  await scenario("failed note saves preserve the draft for retry", async () => {
-    const reviewId = (await readdir(`${f.repo}/.reviewbox/reviews`))[0]
-    const path = `${f.repo}/.reviewbox/reviews/${reviewId}/review.json`
-    const original = await readFile(path)
-    await ui.named("Note", '[role="radio"]')
-    await ui.fill(
-      '[contenteditable="true"][role="textbox"]',
-      "Keep this draft if saving fails"
-    )
-    await writeFile(path, "<<<<<<< conflicting review\n")
-    try {
-      await ui.named("Add note")
-      await ui.until("!!document.querySelector('[role=alert]')")
-      assert.match(
-        await ui.execute<string>(
-          "return document.querySelector('[contenteditable=true]')?.textContent ?? ''"
-        ),
-        /Keep this draft/
-      )
-    } finally {
-      await writeFile(path, original)
-    }
-    await ui.named("Dismiss")
-    await ui.named("Add note")
-    await ui.has("Keep this draft if saving fails")
-  })
-  await scenario("create a topic and navigate repeated anchors", async () => {
-    await ui.named("Add topic")
-    await ui.fill("#topic-title", "Answer behavior")
-    await ui.fill("#topic-brief", "Check both staged and unstaged behavior")
-    await ui.fill('[aria-label="Step title"]', "Compare the answer")
-    await ui.fill(
-      '[aria-label="Step explanation"]',
-      "The answer changes twice in separate layers."
-    )
-    await ui.click('[role="dialog"] [role="checkbox"]')
-    await ui.named("Add step")
-    await ui.fill('[aria-label="Step title"]', "Compare again")
-    await ui.fill(
-      '[aria-label="Step explanation"]',
-      "A second reading goal for the same passage."
-    )
-    await ui.click('[role="dialog"] [role="checkbox"]')
-    await ui.named("Add step")
-    await ui.named("Save topic")
-    await ui.has("Answer behavior")
-    await ui.named("Explanation", '[role="tab"]')
-    await ui.named("Next step (J)")
-    await ui.has("Step 2 of 2")
-    await ui.has("A second reading goal for the same passage.")
-    await ui.named("Previous step (K)")
-    await ui.has("Step 1 of 2")
-  })
-  await scenario(
-    "test permission refusal and observed successful run",
-    async () => {
-      await ui.named("Run a test…")
-      await ui.named("bun test", '[role="menuitem"]')
-      await ui.has("Allow this command once?")
-      await ui.named("Deny")
-      await ui.has("Denied")
-      await ui.named("Run a test…")
-      await ui.named("bun test", '[role="menuitem"]')
-      await ui.named("Allow once")
-      await ui.has("Passed")
-    }
-  )
   await scenario("command palette and keyboard navigation", async () => {
     await ui.keys("\uE03D", "k")
     await ui.until("!!document.querySelector('[role=combobox]')")
-    await ui.fill('[role="combobox"]', "Coverage")
-    await ui.named("Coverage and changes outside the tour", '[role="option"]')
-    await ui.until("!!document.querySelector('[aria-label=Coverage]')")
-    await ui.named("Back to code (Esc)")
+    await ui.fill('[role="combobox"]', "Switch document")
+    await ui.named("Switch document / code", '[role="option"]', false)
+    await ui.until("!document.querySelector('[aria-label=\"Code diff\"]')")
+    // Reading shortcuts are ignored while a dialog is still closing.
+    await ui.until("!document.querySelector('[role=dialog]')")
+    await ui.keys("d")
+    await ui.until("!!document.querySelector('[aria-label=\"Code diff\"]')")
   })
   await scenario(
     "glossary creation, aliases and multiple meanings",
     async () => {
-      await ui.named("Understand", '[role="tab"]')
+      await ui.named("Code Explain", '[role="tab"]')
       await ui.named("Glossary", '[role="tab"]')
       await ui.fill("#term-name", "answer")
       await ui.fill('[aria-label="Aliases"]', "response")
@@ -240,23 +143,22 @@ try {
       await ui.screenshot("05-changed")
       await ui.named("Refresh snapshot")
       await ui.until("!document.body.innerText.includes('Refresh snapshot')")
-      await ui.keys("j")
-      await ui.keys("j")
-      await ui.until(
-        "[...document.querySelectorAll('.view-lines')].some(e=>e.textContent.includes('44'))"
-      )
-      await ui.named("Review actions")
-      await ui.named("Review history", '[role="menuitem"]')
-      await ui.screenshot("06-history")
-      await ui.keys("\uE00C")
+      // Step through the review until the refreshed passage is on screen.
+      const refreshed =
+        "return [...document.querySelectorAll('.view-lines')].some(e=>e.textContent.includes('44'))"
+      for (let i = 0; i < 6 && !(await ui.execute<boolean>(refreshed)); i++) {
+        await ui.keys("j")
+        await Bun.sleep(600)
+      }
+      await ui.until(refreshed.replace("return ", ""))
     }
   )
   await scenario(
     "resume reviews and return to the saved reading position",
     async () => {
-      await ui.named("Resume", '[role="tab"]')
+      await ui.named("Home", '[role="tab"]')
       await ui.named("Resume", "main button")
-      await ui.until("!!document.querySelector('[aria-label=\"Code diff\"]')")
+      await ui.until("!!document.querySelector('[aria-label=\"Review\"]')")
     }
   )
   await scenario("application theme and project settings persist", async () => {
