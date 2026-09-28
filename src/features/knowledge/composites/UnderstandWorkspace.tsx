@@ -23,6 +23,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import {
   Collapsible,
   CollapsibleContent,
@@ -242,8 +243,11 @@ export function UnderstandWorkspace({
     )
   const folder = path.split("/").slice(0, -1).join("/")
   return (
-    <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
-      <aside className="flex w-[272px] shrink-0 flex-col gap-3 pb-2 max-[1100px]:w-[220px]">
+    <div data-resize-workspace className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
+      <aside
+        aria-label="Code Explain files"
+        className="relative flex w-[clamp(180px,var(--explain-files-width,272px),30%)] shrink-0 flex-col gap-3 pb-2 max-[1100px]:w-[clamp(180px,var(--explain-files-width,220px),30%)]"
+      >
         {nav}
         {glossary ? (
           <p className="px-3 text-sm leading-6 text-muted-foreground">
@@ -289,6 +293,11 @@ export function UnderstandWorkspace({
             </ul>
           </>
         )}
+        <SidebarResizeHandle
+          name="Code Explain files"
+          property="--explain-files-width"
+          maxRatio={0.3}
+        />
       </aside>
       <main className="flex min-w-0 flex-1 overflow-hidden rounded-panel border bg-card">
         {glossary && knowledge ? (

@@ -12,6 +12,7 @@ import {
   TextIcon,
 } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
+import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -370,6 +371,7 @@ export function ReviewReader({
     <main
       className="relative min-w-0 flex-1 overflow-hidden rounded-panel border bg-card"
       aria-label="Review"
+      data-resize-workspace
     >
       {summary ? (
         <div
@@ -399,7 +401,8 @@ export function ReviewReader({
           <div
             className={cn(
               "absolute inset-y-0 left-0",
-              filesOpen && "min-[1100px]:left-60"
+              filesOpen &&
+                "min-[1100px]:left-[clamp(180px,var(--review-files-width,240px),35%)]"
             )}
             style={{ right: showRight ? "min(440px,40%)" : 0 }}
           >
@@ -444,7 +447,8 @@ export function ReviewReader({
           </div>
           {filesOpen && (
             <aside
-              className="absolute left-0 z-30 w-60 border-r bg-card max-[1100px]:shadow-xl"
+              aria-label="Review files"
+              className="absolute left-0 z-30 w-[clamp(180px,var(--review-files-width,240px),35%)] border-r bg-card max-[1100px]:shadow-xl"
               style={{ top: HEADER, bottom: footerHeight }}
             >
               <ReviewFiles
@@ -452,6 +456,10 @@ export function ReviewReader({
                 selectedId={guided ? null : (file?.id ?? null)}
                 level={level}
                 onSelect={selectFile}
+              />
+              <SidebarResizeHandle
+                name="review files"
+                property="--review-files-width"
               />
             </aside>
           )}
