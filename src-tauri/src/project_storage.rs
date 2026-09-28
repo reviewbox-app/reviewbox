@@ -12,8 +12,10 @@ use std::{
 };
 
 mod content;
+pub(crate) mod reader_assets;
+pub(crate) mod step_documents;
 pub use content::{prepare_content, restore_content};
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 pub struct FileLock(pub fs::File);
 impl Drop for FileLock {
@@ -131,7 +133,7 @@ impl Project {
             if manifest.format != "reviewbox" || manifest.version != VERSION {
                 return Err(AppError::new(
                     "project_version",
-                    "This project uses an unsupported ReviewBox format. Version 2 is required; no files were changed.",
+                    "This project uses an unsupported ReviewBox format. Version 3 is required; no files were changed.",
                 ));
             }
         }
@@ -220,7 +222,7 @@ impl Project {
         if manifest.format != "reviewbox" || manifest.version != VERSION {
             return Err(AppError::new(
                 "project_version",
-                "Version 2 is required; no files were changed.",
+                "Version 3 is required; no files were changed.",
             ));
         }
         let journal = checked(&self.root, ".local/transaction.json")?;
@@ -326,7 +328,12 @@ impl Project {
             });
         }
         // Publish immutable source packs before documents that reference them.
-        changes.sort_by_key(|change| (!change.path.starts_with("content/"), change.path.clone()));
+        changes.sort_by_key(|change| {
+            (
+                !(change.path.starts_with("content/") || change.path.starts_with("generated/")),
+                change.path.clone(),
+            )
+        });
         if changes.is_empty() {
             return Ok(());
         }
@@ -401,7 +408,7 @@ impl Project {
             };
             if kind == "review" || kind == "knowledge" {
                 let fields: &[&str] = if kind == "review" {
-                    &["topics", "annotations", "decisions"]
+                    &["topics", "decisions"]
                 } else {
                     &["terms", "documents"]
                 };
@@ -485,7 +492,8 @@ impl Project {
                 let entry = entry?;
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.starts_with('.')
-                    || (prefix.is_empty() && ["content", "project.json"].contains(&name.as_str()))
+                    || (prefix.is_empty()
+                        && ["content", "generated", "project.json"].contains(&name.as_str()))
                 {
                     continue;
                 }
@@ -564,7 +572,7 @@ impl Project {
             }
             if doc.kind == "review" || doc.kind == "knowledge" {
                 let fields: &[&str] = if doc.kind == "review" {
-                    &["topics", "annotations", "decisions"]
+                    &["topics", "decisions"]
                 } else {
                     &["terms", "documents"]
                 };
@@ -636,7 +644,9 @@ fn validate(kind: &str, data: &Value) -> AppResult<()> {
         }};
     }
     match kind {
-        "review" | "review_history" => check!(Review),
+        "review" | "review_history" => {
+            let _: Review = serde_json::from_value(step_documents::validation_value(data)?)?;
+        }
         "snapshot" => {
             content::snapshot_sources(data)?;
         }
@@ -700,7 +710,6 @@ pub fn schemas() -> Value {
         ("proposal", schemars::schema_for!(Proposal)),
         ("project_settings", schemars::schema_for!(ProjectSettings)),
         ("topics", schemars::schema_for!(Topic)),
-        ("annotations", schemars::schema_for!(Annotation)),
         ("decisions", schemars::schema_for!(Decision)),
         ("terms", schemars::schema_for!(GlossaryTerm)),
         ("documents", schemars::schema_for!(ExplanationDocument)),
@@ -712,7 +721,11 @@ pub fn schemas() -> Value {
         }
         data.as_object_mut().unwrap().remove("$schema");
         if kind == "review" {
-            for field in ["topics", "annotations", "decisions"] {
+            data["properties"]["assetIndex"] = json!({"type":"object","additionalProperties":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","hash"],"properties":{"path":{"type":"string"},"hash":{"type":"string","pattern":"^[a-f0-9]{64}$"}}}}});
+            if let Some(required) = data["required"].as_array_mut() {
+                required.push(json!("assetIndex"));
+            }
+            for field in ["topics", "decisions"] {
                 data["properties"][field] =
                     json!({"type":"array","items":{"type":"string"},"uniqueItems":true});
             }
@@ -723,17 +736,41 @@ pub fn schemas() -> Value {
                     json!({"type":"array","items":{"type":"string"},"uniqueItems":true});
             }
         }
-        variants.push(json!({"type":"object","additionalProperties":false,"required":["format","version","kind","id","data"],"properties":{"format":{"const":"reviewbox"},"version":{"const":2},"kind":{"const":kind},"id":{"type":"string","pattern":"^[a-zA-Z0-9_@-]{1,160}$"},"data":data}}));
+        if kind == "topics" {
+            data["properties"]["steps"]["items"] = json!({"$ref":"#/$defs/StoredStep"});
+        }
+        if kind == "review_history" {
+            data["properties"]["topics"]["items"] = json!({"$ref":"#/$defs/StoredTopic"});
+        }
+        variants.push(json!({"type":"object","additionalProperties":false,"required":["format","version","kind","id","data"],"properties":{"format":{"const":"reviewbox"},"version":{"const":3},"kind":{"const":kind},"id":{"type":"string","pattern":"^[a-zA-Z0-9_@-]{1,160}$"},"data":data}}));
+    }
+    if let Some(mut step) = definitions.get("Step").cloned() {
+        step["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("documents");
+        step["properties"]["documentAsset"] = step_documents::reference_schema();
+        if let Some(required) = step["required"].as_array_mut() {
+            required.retain(|key| key != "documents");
+            required.push(json!("documentAsset"));
+        }
+        definitions.insert("StoredStep".into(), step);
+    }
+    if let Some(mut topic) = definitions.get("Topic").cloned() {
+        topic["properties"]["steps"]["items"] = json!({"$ref":"#/$defs/StoredStep"});
+        definitions.insert("StoredTopic".into(), topic);
     }
     let mut manifest = serde_json::to_value(schemars::schema_for!(Manifest)).unwrap();
     manifest["properties"]["format"] = json!({"const":"reviewbox"});
-    manifest["properties"]["version"] = json!({"const":2});
+    manifest["properties"]["version"] = json!({"const":3});
     let mut content = serde_json::to_value(schemars::schema_for!(content::ContentPack)).unwrap();
     content["properties"]["format"] = json!({"const":"reviewbox"});
-    content["properties"]["version"] = json!({"const":2});
+    content["properties"]["version"] = json!({"const":3});
     json!({
-        "project-document.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ReviewBox project document v2","oneOf":variants,"$defs":definitions},
+        "project-document.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ReviewBox project document v3","oneOf":variants,"$defs":definitions},
         "project-manifest.schema.json":manifest,
-        "project-content.schema.json":content
+        "project-content.schema.json":content,
+        "project-reading-assets.schema.json":reader_assets::schema(),
+        "project-step-documents.schema.json":step_documents::schema()
     })
 }

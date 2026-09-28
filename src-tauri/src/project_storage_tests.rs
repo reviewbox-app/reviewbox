@@ -74,28 +74,14 @@ fn fresh_clone_rebuilds_all_layers_without_touching_git_or_sources() {
     fs::write(root.join("image.bin"), [0, 1, 9, 0, 5, 8]).unwrap();
     fs::write(root.join("new.txt"), "new\n").unwrap();
     let mut w = capture(&s, &r);
-    let c = &w.snapshot.changes[0];
-    let anchor = CodeAnchor {
-        snapshot_id: w.snapshot.id.clone(),
-        change_id: c.id.clone(),
-        passage_id: c.passages[0].id.clone(),
-    };
     w = reviews::apply(
         &s,
         &w.review.id,
         w.review.revision,
-        ReviewAction::AddAnnotation {
-            anchor: anchor.clone(),
-            body: "Shared comment".into(),
-            question: true,
+        ReviewAction::ValidateFile {
+            file_id: crate::reader::file_id("a.ts"),
+            level: ReadingLevel::Developer,
         },
-    )
-    .unwrap();
-    w = reviews::apply(
-        &s,
-        &w.review.id,
-        w.review.revision,
-        ReviewAction::Validate { anchor },
     )
     .unwrap();
     let mut personal = w.review.clone();
@@ -113,7 +99,6 @@ fn fresh_clone_rebuilds_all_layers_without_touching_git_or_sources() {
     let loaded = reviews::load(&other, &w.review.id).unwrap();
     assert_ne!(remote.id, r.id);
     assert_eq!(loaded.review.repository_id, remote.id);
-    assert_eq!(loaded.review.annotations[0].body, "Shared comment");
     assert_eq!(
         loaded.review.decisions[0].author,
         w.review.decisions[0].author
@@ -149,7 +134,7 @@ fn fresh_clone_rebuilds_all_layers_without_touching_git_or_sources() {
         reviews::load(&rebuilt, &w.review.id)
             .unwrap()
             .review
-            .annotations
+            .decisions
             .len(),
         1
     );
@@ -209,7 +194,7 @@ fn external_edits_conflicts_invalid_files_and_branch_rollback_are_detected() {
     );
 }
 #[test]
-fn external_agents_create_enrich_and_comment_but_cannot_validate() {
+fn external_agents_create_but_cannot_annotate_or_validate() {
     let (_dir, s, r) = fixture();
     fs::write(Path::new(&r.path).join("a.ts"), "const answer = 4;\n").unwrap();
     let w: Workspace = serde_json::from_value(
@@ -218,12 +203,8 @@ fn external_agents_create_enrich_and_comment_but_cannot_validate() {
     .unwrap();
     let c = &w.snapshot.changes[0];
     let anchor = json!({"snapshotId":w.snapshot.id,"changeId":c.id,"passageId":c.passages[0].id});
-    integrations::dispatch(&s,json!({"method":"annotate","repo":r.path,"reviewId":w.review.id,"snapshotId":w.snapshot.id,"anchor":anchor,"body":"Agent question","question":true})).unwrap();
-    integrations::dispatch(&s,json!({"method":"enrich","repo":r.path,"reviewId":w.review.id,"snapshotId":w.snapshot.id,"content":{"kind":"topics","topics":[{"id":"topic","title":"Answer","brief":"Review it","steps":[{"id":"step","title":"Read answer","explanation":"A constant","anchors":[anchor]}]}]}})).unwrap();
+    assert!(integrations::dispatch(&s,json!({"method":"annotate","repo":r.path,"reviewId":w.review.id,"snapshotId":w.snapshot.id,"anchor":anchor,"body":"Agent question","question":true})).is_err());
     let loaded = reviews::load(&s, &w.review.id).unwrap();
-    assert_eq!(loaded.review.topics.len(), 1);
-    assert_eq!(loaded.review.annotations[0].author, "agent:external");
-    assert!(!loaded.review.annotations[0].resolved);
     assert!(loaded.review.decisions.is_empty());
     assert!(
         integrations::dispatch(
@@ -285,7 +266,7 @@ fn legacy_rows_are_never_read_or_imported() {
     assert!(!dir.path().join("app/backups").exists());
 }
 #[test]
-fn v1_is_rejected_without_creating_lock_or_recovering_journal() {
+fn v2_is_rejected_without_creating_lock_or_recovering_journal() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join(".reviewbox");
     fs::create_dir_all(&project).unwrap();
@@ -364,35 +345,28 @@ fn edited_child_without_revision_bump_invalidates_stale_writes() {
     let (_dir, s, r) = fixture();
     fs::write(Path::new(&r.path).join("a.ts"), "changed").unwrap();
     let w = capture(&s, &r);
-    let c = &w.snapshot.changes[0];
-    let anchor = CodeAnchor {
-        snapshot_id: w.snapshot.id.clone(),
-        change_id: c.id.clone(),
-        passage_id: c.passages[0].id.clone(),
-    };
     let w = reviews::apply(
         &s,
         &w.review.id,
         0,
-        ReviewAction::AddAnnotation {
-            anchor,
-            body: "initial".into(),
-            question: false,
+        ReviewAction::ValidateFile {
+            file_id: crate::reader::file_id("a.ts"),
+            level: ReadingLevel::Developer,
         },
     )
     .unwrap();
-    let note = &w.review.annotations[0];
+    let decision = &w.review.decisions[0];
     let path = Path::new(&r.path).join(format!(
-        ".reviewbox/reviews/{}/annotations/{}.json",
-        w.review.id, note.id
+        ".reviewbox/reviews/{}/decisions/{}.json",
+        w.review.id, decision.id
     ));
     let mut value = read(&path);
-    value["data"]["body"] = json!("edited externally");
+    value["data"]["author"] = json!("human:external");
     write(&path, &value);
     s.mount(&r).unwrap();
     assert_eq!(
-        reviews::load(&s, &w.review.id).unwrap().review.annotations[0].body,
-        "edited externally"
+        reviews::load(&s, &w.review.id).unwrap().review.decisions[0].author,
+        "human:external"
     );
     assert!(
         reviews::apply(
@@ -548,7 +522,7 @@ fn five_captures_of_235_files_write_five_packs_not_per_blob_files() {
         fs::write(root.join("a.ts"), format!("change {n}\r\n")).unwrap();
         let w = capture(&s, &r);
         let snapshot = read(&root.join(format!(".reviewbox/snapshots/{}.json", w.snapshot.id)));
-        assert_eq!(snapshot["version"], 2);
+        assert_eq!(snapshot["version"], 3);
         let dir = root.join(format!(".reviewbox/content/{}", w.snapshot.id));
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
         assert!(dir.join("0001.json").exists());

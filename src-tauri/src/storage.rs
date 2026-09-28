@@ -75,7 +75,7 @@ impl Storage {
         let tx = db.transaction()?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS documents (kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id)); PRAGMA user_version=2;")?;
         // A new owner cannot inherit live permissions or unfinished executions.
-        tx.execute("UPDATE documents SET body=json_set(body,'$.status','interrupted','$.snapshotMatches',json('false'),'$.finishedAt',?1), revision=revision+1 WHERE kind='test_run' AND json_extract(body,'$.status') IN ('running','awaiting_permission')", [now()])?;
+        tx.execute("UPDATE documents SET body=json_set(body,'$.state.status','interrupted','$.revision',revision+1), revision=revision+1 WHERE kind='review_preparation' AND json_extract(body,'$.state.status') IN ('running','publishing')", [])?;
         tx.execute("UPDATE documents SET body=json_set(body,'$.status','interrupted'), revision=revision+1 WHERE kind='agent_run' AND json_extract(body,'$.status')='running'", [])?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS project_index (repository_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(repository_id,kind,id)); CREATE TABLE IF NOT EXISTS git_sources (root TEXT NOT NULL, commit_oid TEXT NOT NULL, hash TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY(root,commit_oid,hash));")?;
         tx.commit()?;
@@ -108,6 +108,9 @@ impl Storage {
             if kind == "review" {
                 self.fill_reading(&mut value)?;
             }
+            if kind == "review" || kind == "review_history" {
+                self.fill_step_documents(&mut value)?;
+            }
             if kind == "onboarding" {
                 self.fill_visits(&mut value);
             }
@@ -138,6 +141,9 @@ impl Storage {
                 .map(|(_, mut value)| {
                     if kind == "review" {
                         self.fill_reading(&mut value)?;
+                    }
+                    if kind == "review" || kind == "review_history" {
+                        self.fill_step_documents(&mut value)?;
                     }
                     if kind == "onboarding" {
                         self.fill_visits(&mut value);
@@ -339,6 +345,35 @@ impl Storage {
         self.connection()?.execute("INSERT OR IGNORE INTO documents(kind,id,revision,body) VALUES('identity','author',0,?1)", [serde_json::to_string(&author)?])?;
         self.local_get("identity", "author")
     }
+    pub(crate) fn read_review_asset(
+        &self,
+        review_id: &str,
+        file_id: &str,
+    ) -> AppResult<ReviewFileContent> {
+        self.sync_projects(false)?;
+        let raw = self
+            .project_values("review")?
+            .into_iter()
+            .find(|(id, _)| id == review_id)
+            .map(|(_, v)| v)
+            .ok_or_else(|| AppError::new("not_found", "Review not found."))?;
+        let repo: Repository = self.get(
+            "repository",
+            raw["repositoryId"]
+                .as_str()
+                .ok_or_else(|| AppError::new("project", "Missing repository."))?,
+        )?;
+        let preparation_id = raw["preparationId"]
+            .as_str()
+            .ok_or_else(|| AppError::new("not_found", "This review has no generated files yet."))?;
+        project_storage::reader_assets::read(
+            &std::path::Path::new(&repo.path).join(".reviewbox"),
+            review_id,
+            preparation_id,
+            file_id,
+            &raw["assetIndex"],
+        )
+    }
     pub fn save_reading(&self, review: &Review) -> AppResult<()> {
         let key = format!("{}:{}", review.repository_id, review.id);
         self.connection()?.execute("INSERT INTO documents(kind,id,revision,body) VALUES('reading',?1,0,?2) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", params![key,serde_json::to_string(&json!({"position":review.position,"examined":review.examined}))?])?;
@@ -386,6 +421,18 @@ impl Storage {
         review["position"] = state["position"].clone();
         review["examined"] = state["examined"].clone();
         Ok(())
+    }
+    fn fill_step_documents(&self, review: &mut Value) -> AppResult<()> {
+        let repository: Repository = self.get(
+            "repository",
+            review["repositoryId"]
+                .as_str()
+                .ok_or_else(|| AppError::new("project", "Missing review repository."))?,
+        )?;
+        project_storage::step_documents::hydrate(
+            &std::path::Path::new(&repository.path).join(".reviewbox"),
+            review,
+        )
     }
     pub fn record_git_blobs(
         &self,
@@ -652,7 +699,32 @@ impl Storage {
                 packs.extend(content);
             }
             if *kind == "review" {
+                if let Some(entries) = value
+                    .as_object_mut()
+                    .and_then(|v| v.remove("generatedFiles"))
+                {
+                    let preparation_id = value["preparationId"].as_str().ok_or_else(|| {
+                        AppError::new("preparation", "Missing preparation identity.")
+                    })?;
+                    let (index, assets) = project_storage::reader_assets::prepare(
+                        &project,
+                        key,
+                        preparation_id,
+                        serde_json::from_value(entries)?,
+                    )?;
+                    value["assetIndex"] = index;
+                    packs.extend(assets);
+                } else {
+                    let previous = old.get(&(kind.to_string(), key.to_string()));
+                    value["assetIndex"] = previous
+                        .filter(|v| v["preparationId"] == value["preparationId"])
+                        .map(|v| v["assetIndex"].clone())
+                        .unwrap_or_else(|| json!({}));
+                }
                 self.save_reading(&serde_json::from_value(value.clone())?)?;
+            }
+            if *kind == "review" || *kind == "review_history" {
+                packs.extend(project_storage::step_documents::extract(&mut value)?);
             }
             if *kind == "onboarding" {
                 let local_key = format!("{repository_id}:{key}");

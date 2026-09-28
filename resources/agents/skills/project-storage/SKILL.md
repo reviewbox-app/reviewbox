@@ -14,17 +14,15 @@ The app and headless commands share domain validation and the project writer.
    the topics, explanation or glossary contract under `resources/agents/contracts`.
 4. Run `reviewbox enrich --repo <path> --from request.json` to add that content.
    Use `propose` instead when the user wants to approve it first.
-5. Use `annotate` with `anchor`, `body` and optional `question: true` to attach a
-   comment or open question. Use `tour` with an onboarding tour as `content` to
-   create or update a path through current code. New steps use empty `quote`
-   and `fingerprint`; ReviewBox captures their inclusive line range.
+5. Use `tour` for Code Explain onboarding paths. These are separate from the
+   guided review prepared by the native preparation manager.
 
-Do not fabricate anchors. Reread context after a stale snapshot error. Do not
-validate passages, resolve human questions, change source files, execute tests
-or manipulate Git through these operations. Preserve authorship and decisions.
+Do not fabricate anchors or human decisions. Reread context after a stale
+snapshot error. These operations cannot annotate, ask questions, execute tests,
+validate files or steps, modify source files or manipulate Git.
 
 Shared content is saved in `.reviewbox` and may be committed by the user. Keep
 secrets, absolute machine paths and private transcripts out of content. Direct
-file editing uses the versioned JSON schemas and ordered child references;
+file editing uses the version 3 JSON schemas and bounded indexed content packs;
 prefer the CLI for atomic, validated multi-file edits. Prompts and instructions
 remain Markdown resources, with literal single-pass `{{var}}` substitution.
