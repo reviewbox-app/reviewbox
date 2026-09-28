@@ -1,0 +1,357 @@
+[
+  {
+    "id": "typescript",
+    "name": "TypeScript / JavaScript",
+    "description": "TypeScript, JavaScript and React",
+    "languages": [
+      "typescript",
+      "typescriptreact",
+      "javascript",
+      "javascriptreact"
+    ],
+    "extensions": ["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"],
+    "version": "6.0.1",
+    "method": "npm",
+    "package": "typescript-language-server",
+    "packages": {
+      "typescript-language-server": "6.0.1",
+      "typescript": "5.9.3"
+    },
+    "bin": "typescript-language-server",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/typescript-language-server",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "vue",
+    "name": "Vue",
+    "description": "Vue 3 support using the standalone compatible language engine and private TypeScript SDK.",
+    "languages": ["vue"],
+    "extensions": ["vue"],
+    "version": "2.2.12",
+    "method": "npm",
+    "package": "@vue/language-server",
+    "packages": {
+      "@vue/language-server": "2.2.12",
+      "typescript": "5.9.3"
+    },
+    "bin": "vue-language-server",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/@vue/language-server",
+    "runtime": "Node.js (private)",
+    "prerequisites": [],
+    "overrides": {
+      "@emmetio/css-parser": "0.4.1"
+    }
+  },
+  {
+    "id": "svelte",
+    "name": "Svelte",
+    "description": "Svelte components",
+    "languages": ["svelte"],
+    "extensions": ["svelte"],
+    "version": "0.18.4",
+    "method": "npm",
+    "package": "svelte-language-server",
+    "packages": {
+      "svelte-language-server": "0.18.4",
+      "typescript": "5.9.3"
+    },
+    "bin": "svelteserver",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/svelte-language-server",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "python",
+    "name": "Python",
+    "description": "Python analysis with Pyright",
+    "languages": ["python"],
+    "extensions": ["py", "pyi"],
+    "version": "1.1.414",
+    "method": "npm",
+    "package": "pyright",
+    "packages": {
+      "pyright": "1.1.414"
+    },
+    "bin": "pyright-langserver",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/pyright",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "html",
+    "name": "HTML",
+    "description": "HTML documents and templates",
+    "languages": ["html"],
+    "extensions": ["html", "htm"],
+    "version": "4.10.0",
+    "method": "npm",
+    "package": "vscode-langservers-extracted",
+    "packages": {
+      "vscode-langservers-extracted": "4.10.0"
+    },
+    "bin": "vscode-html-language-server",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/vscode-langservers-extracted",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "css",
+    "name": "CSS / Sass / Less",
+    "description": "Stylesheets",
+    "languages": ["css", "scss", "less"],
+    "extensions": ["css", "scss", "less"],
+    "version": "4.10.0",
+    "method": "npm",
+    "package": "vscode-langservers-extracted",
+    "packages": {
+      "vscode-langservers-extracted": "4.10.0"
+    },
+    "bin": "vscode-css-language-server",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/vscode-langservers-extracted",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "json",
+    "name": "JSON / JSONC",
+    "description": "JSON documents and schemas",
+    "languages": ["json", "jsonc"],
+    "extensions": ["json", "jsonc"],
+    "version": "4.10.0",
+    "method": "npm",
+    "package": "vscode-langservers-extracted",
+    "packages": {
+      "vscode-langservers-extracted": "4.10.0"
+    },
+    "bin": "vscode-json-language-server",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/vscode-langservers-extracted",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "yaml",
+    "name": "YAML",
+    "description": "YAML documents and schemas",
+    "languages": ["yaml"],
+    "extensions": ["yaml", "yml"],
+    "version": "1.24.0",
+    "method": "npm",
+    "package": "yaml-language-server",
+    "packages": {
+      "yaml-language-server": "1.24.0"
+    },
+    "bin": "yaml-language-server",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/yaml-language-server",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "bash",
+    "name": "Bash",
+    "description": "Shell scripts",
+    "languages": ["shellscript"],
+    "extensions": ["sh", "bash", "zsh"],
+    "version": "5.8.1",
+    "method": "npm",
+    "package": "bash-language-server",
+    "packages": {
+      "bash-language-server": "5.8.1"
+    },
+    "bin": "bash-language-server",
+    "arguments": ["start"],
+    "sourceUrl": "https://www.npmjs.com/package/bash-language-server",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "sql",
+    "name": "SQL",
+    "description": "SQL statements and scripts",
+    "languages": ["sql"],
+    "extensions": ["sql"],
+    "version": "0.2.48",
+    "method": "go",
+    "package": "github.com/sqls-server/sqls",
+    "bin": "sqls",
+    "arguments": [],
+    "sourceUrl": "https://github.com/sqls-server/sqls",
+    "runtime": "Go (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "docker",
+    "name": "Dockerfile",
+    "description": "Docker build instructions",
+    "languages": ["dockerfile"],
+    "extensions": ["dockerfile"],
+    "version": "0.15.0",
+    "method": "npm",
+    "package": "dockerfile-language-server-nodejs",
+    "packages": {
+      "dockerfile-language-server-nodejs": "0.15.0"
+    },
+    "bin": "docker-langserver",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/dockerfile-language-server-nodejs",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "prisma",
+    "name": "Prisma",
+    "description": "Prisma schemas",
+    "languages": ["prisma"],
+    "extensions": ["prisma"],
+    "version": "31.12.10",
+    "method": "npm",
+    "package": "@prisma/language-server",
+    "packages": {
+      "@prisma/language-server": "31.12.10"
+    },
+    "bin": "prisma-language-server",
+    "arguments": ["--stdio"],
+    "sourceUrl": "https://www.npmjs.com/package/@prisma/language-server",
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "rust",
+    "name": "Rust",
+    "description": "Rust language intelligence",
+    "languages": ["rust"],
+    "extensions": ["rs"],
+    "version": "managed",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://github.com/rust-lang/rust-analyzer",
+    "runtime": null,
+    "prerequisites": []
+  },
+  {
+    "id": "go",
+    "name": "Go",
+    "description": "Go language intelligence",
+    "languages": ["go"],
+    "extensions": ["go"],
+    "version": "0.23.0",
+    "method": "go",
+    "arguments": [],
+    "sourceUrl": "https://github.com/golang/tools/tree/master/gopls",
+    "runtime": "Go (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "clangd",
+    "name": "C / C++",
+    "description": "C / C++ language intelligence",
+    "languages": ["c", "cpp"],
+    "extensions": ["c", "h", "cc", "cpp", "cxx", "hpp", "hxx", "m", "mm"],
+    "version": "managed",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://clangd.llvm.org/",
+    "runtime": null,
+    "prerequisites": []
+  },
+  {
+    "id": "toml",
+    "name": "TOML",
+    "description": "TOML language intelligence",
+    "languages": ["toml"],
+    "extensions": ["toml"],
+    "version": "managed",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://taplo.tamasfe.dev/",
+    "runtime": null,
+    "prerequisites": []
+  },
+  {
+    "id": "lua",
+    "name": "Lua",
+    "description": "Lua language intelligence",
+    "languages": ["lua"],
+    "extensions": ["lua"],
+    "version": "managed",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://luals.github.io/",
+    "runtime": null,
+    "prerequisites": []
+  },
+  {
+    "id": "java",
+    "name": "Java",
+    "description": "Java language intelligence",
+    "languages": ["java"],
+    "extensions": ["java"],
+    "version": "managed",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
+    "runtime": "Java (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "kotlin",
+    "name": "Kotlin (Preview)",
+    "description": "Kotlin language intelligence; upstream setup required",
+    "languages": ["kotlin"],
+    "extensions": ["kt", "kts"],
+    "version": "263.4702.0",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://github.com/Kotlin/kotlin-lsp",
+    "runtime": "Java (private)",
+    "prerequisites": [],
+    "setupRequired": "The current Kotlin preview package cannot display its required license terms, and the previous preview has expired. Configure a working Kotlin server manually until JetBrains publishes a usable package."
+  },
+  {
+    "id": "csharp",
+    "name": "C# (Roslyn)",
+    "description": "C# language intelligence",
+    "languages": ["csharp"],
+    "extensions": ["cs"],
+    "version": "managed",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://github.com/dotnet/roslyn",
+    "runtime": ".NET (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "ruby",
+    "name": "Ruby",
+    "description": "Ruby language intelligence",
+    "languages": ["ruby"],
+    "extensions": ["rb", "rake", "gemspec"],
+    "version": "0.26.11",
+    "method": "ruby",
+    "arguments": [],
+    "sourceUrl": "https://github.com/Shopify/ruby-lsp",
+    "runtime": "Ruby (private)",
+    "prerequisites": ["C compiler and macOS SDK to build private Ruby"]
+  },
+  {
+    "id": "swift",
+    "name": "Swift",
+    "description": "Swift language intelligence",
+    "languages": ["swift"],
+    "extensions": ["swift"],
+    "version": "toolchain",
+    "method": "swift",
+    "arguments": [],
+    "sourceUrl": "https://github.com/swiftlang/sourcekit-lsp",
+    "runtime": "Installed Swift toolchain",
+    "prerequisites": ["Xcode or Swift toolchain"]
+  }
+]
