@@ -21,8 +21,6 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuLabel,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { reviewboxTheme } from "@/lib/monaco/reviewboxThemes"
@@ -119,7 +117,6 @@ export function ReviewCodePane({
   const { resolvedTheme } = useTheme()
   const { split, setSplit } = useReviewWorkspaceStore()
   const instance = useRef<editor.IStandaloneDiffEditor | null>(null)
-  const focusedEditor = useRef<editor.IStandaloneCodeEditor | null>(null)
   const cleanup = useRef<(() => void) | null>(null)
   const selectedRef = useRef({ passage, split, selection })
   const revealedSelection = useRef<CodeAnchor | null>(null)
@@ -273,30 +270,6 @@ export function ReviewCodePane({
             <HugeiconsIcon icon={MoreHorizontalIcon} size={16} />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-64">
-            {representation === "real" && (
-              <>
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>Captured source</DropdownMenuLabel>
-                  {(["definitions", "references"] as const).map((method) => (
-                    <DropdownMenuItem
-                      key={method}
-                      disabled={!content}
-                      onClick={() =>
-                        void (
-                          focusedEditor.current ??
-                          instance.current?.getModifiedEditor()
-                        )
-                          ?.getAction(`reviewbox.${method}`)
-                          ?.run()
-                      }
-                    >
-                      Explore {method}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-              </>
-            )}
             <DropdownMenuGroup>
               <DropdownMenuLabel>Display · {change.layer}</DropdownMenuLabel>
               <DropdownMenuCheckboxItem
@@ -306,9 +279,6 @@ export function ReviewCodePane({
                 Hide edge whitespace
               </DropdownMenuCheckboxItem>
             </DropdownMenuGroup>
-            <p className="px-2 pt-1 pb-2 text-xs text-muted-foreground">
-              Filtering changes the display only, never the review files.
-            </p>
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
@@ -462,13 +432,6 @@ export function ReviewCodePane({
                 )
               }
               const scroll = modified.onDidScrollChange(persist)
-              focusedEditor.current = modified
-              const focused = [mounted.getOriginalEditor(), modified].map(
-                (editor) =>
-                  editor.onDidFocusEditorWidget(() => {
-                    focusedEditor.current = editor
-                  })
-              )
               const moved = modified.onDidChangeCursorPosition((event) => {
                 setCursor({
                   line: event.position.lineNumber,
@@ -477,8 +440,6 @@ export function ReviewCodePane({
                 persist()
               })
               cleanup.current = () => {
-                focusedEditor.current = null
-                for (const listener of focused) listener.dispose()
                 clearTimeout(timer)
                 diff.dispose()
                 scroll.dispose()
