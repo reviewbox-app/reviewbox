@@ -1,0 +1,158 @@
+{
+  "$defs": {
+    "DocumentReference": {
+      "additionalProperties": false,
+      "properties": {
+        "endLine": { "format": "uint32", "minimum": 0, "type": "integer" },
+        "explanation": { "type": "string" },
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "startLine": { "format": "uint32", "minimum": 0, "type": "integer" }
+      },
+      "required": [
+        "id",
+        "label",
+        "explanation",
+        "sourceId",
+        "startLine",
+        "endLine"
+      ],
+      "type": "object"
+    },
+    "DocumentTerm": {
+      "additionalProperties": false,
+      "properties": {
+        "context": { "type": "string" },
+        "definition": { "type": "string" },
+        "id": { "type": "string" },
+        "term": { "type": "string" }
+      },
+      "required": ["id", "term", "definition", "context"],
+      "type": "object"
+    },
+    "Entry": {
+      "additionalProperties": false,
+      "properties": {
+        "fileId": { "type": "string" },
+        "part": { "$ref": "#/$defs/Part" }
+      },
+      "required": ["fileId", "part"],
+      "type": "object"
+    },
+    "LevelDocuments": {
+      "additionalProperties": false,
+      "properties": {
+        "beginner": { "$ref": "#/$defs/ReviewDocument" },
+        "developer": { "$ref": "#/$defs/ReviewDocument" },
+        "glossary": {
+          "default": [],
+          "items": { "$ref": "#/$defs/DocumentTerm" },
+          "type": "array"
+        },
+        "intermediate": { "$ref": "#/$defs/ReviewDocument" }
+      },
+      "required": ["beginner", "intermediate", "developer"],
+      "type": "object"
+    },
+    "Part": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "documents": {
+              "anyOf": [
+                { "$ref": "#/$defs/LevelDocuments" },
+                { "type": "null" }
+              ]
+            },
+            "kind": { "const": "document", "type": "string" },
+            "pseudocodeSelected": {
+              "default": null,
+              "type": ["boolean", "null"]
+            },
+            "pseudocodeSkipReason": {
+              "default": null,
+              "type": ["string", "null"]
+            }
+          },
+          "required": ["kind"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "translation", "type": "string" },
+            "sourceHash": { "type": "string" },
+            "sourceId": { "type": "string" },
+            "unavailableReason": { "type": ["string", "null"] }
+          },
+          "required": ["kind", "sourceId", "sourceHash"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "block": { "$ref": "#/$defs/PseudoBlock" },
+            "index": { "format": "uint32", "minimum": 0, "type": "integer" },
+            "kind": { "const": "block", "type": "string" },
+            "sourceId": { "type": "string" }
+          },
+          "required": ["kind", "sourceId", "index", "block"],
+          "type": "object"
+        }
+      ]
+    },
+    "PseudoBlock": {
+      "additionalProperties": false,
+      "properties": {
+        "endLine": { "format": "uint32", "minimum": 0, "type": "integer" },
+        "startLine": { "format": "uint32", "minimum": 0, "type": "integer" },
+        "text": { "type": "string" }
+      },
+      "required": ["startLine", "endLine", "text"],
+      "type": "object"
+    },
+    "ReviewDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "body": { "type": "string" },
+        "readingSeconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "references": {
+          "items": { "$ref": "#/$defs/DocumentReference" },
+          "type": "array"
+        },
+        "termAliases": {
+          "additionalProperties": { "type": "string" },
+          "default": {},
+          "type": "object"
+        },
+        "terms": {
+          "items": { "$ref": "#/$defs/DocumentTerm" },
+          "type": "array"
+        }
+      },
+      "required": ["body", "references", "terms", "readingSeconds"],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "additionalProperties": { "$ref": "#/$defs/Entry" },
+      "type": "object"
+    },
+    "format": { "const": "reviewbox" },
+    "preparationId": { "type": "string" },
+    "reviewId": { "type": "string" },
+    "version": { "const": 3 }
+  },
+  "required": ["format", "version", "reviewId", "preparationId", "entries"],
+  "title": "Pack",
+  "type": "object"
+}

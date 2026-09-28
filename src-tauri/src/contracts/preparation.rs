@@ -17,3 +17,89 @@ pub struct ProposalDiagnostic {
     pub anchor_index: Option<u32>,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationRequest {
+    pub review_id: String,
+    pub provider: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparationStatus {
+    Running,
+    Ready,
+    Failed,
+    Cancelled,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparationPhase {
+    Context,
+    Outline,
+    Documents,
+    Files,
+    Pseudocode,
+    Checking,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationState {
+    #[serde(default)]
+    pub translation_selection: Option<TranslationSelection>,
+    #[serde(default)]
+    pub active_batches: Vec<PreparationBatch>,
+    #[serde(default)]
+    pub phases: Vec<PreparationPhaseCount>,
+    pub id: String,
+    pub review_id: String,
+    pub snapshot_id: String,
+    pub provider: String,
+    pub status: PreparationStatus,
+    pub phase: PreparationPhase,
+    pub completed_batches: u32,
+    pub total_batches: u32,
+    pub step_titles: Vec<String>,
+    pub events: Vec<super::AgentEvent>,
+    pub error: Option<super::AppError>,
+    pub started_at: String,
+    pub updated_at: String,
+    pub can_resume: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationSelection {
+    pub selected_files: u32,
+    pub skipped_files: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationBatch {
+    pub id: String,
+    pub label: String,
+    pub phase: PreparationPhase,
+    pub model: Option<String>,
+    pub started_at: String,
+    #[serde(default)]
+    pub status: PreparationBatchStatus,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PreparationBatchStatus {
+    #[default]
+    Running,
+    WaitingForProvider,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationPhaseCount {
+    pub phase: PreparationPhase,
+    pub total: u32,
+    pub completed: u32,
+}

@@ -1,7 +1,15 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod appearance;
 mod creation;
+pub use appearance::*;
+mod catalogue;
+pub use catalogue::*;
+mod languages;
+pub use languages::*;
+mod reader;
+pub use reader::*;
 mod preparation;
 mod provider_setup;
 pub use creation::*;
@@ -94,6 +102,8 @@ pub struct Passage {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
+    #[serde(default)]
+    pub untracked: bool,
     pub id: String,
     pub path: String,
     pub previous_path: Option<String>,
@@ -133,7 +143,7 @@ pub struct CodeAnchor {
 pub struct Step {
     pub id: String,
     pub title: String,
-    pub explanation: String,
+    pub documents: LevelDocuments,
     pub anchors: Vec<CodeAnchor>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
@@ -146,32 +156,20 @@ pub struct Topic {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct Annotation {
-    #[serde(default)]
-    pub resolved_by: Option<String>,
-    #[serde(default)]
-    pub resolved_at: Option<String>,
-    pub id: String,
-    pub anchor: CodeAnchor,
-    pub body: String,
-    pub question: bool,
-    pub resolved: bool,
-    pub author: String,
-    pub created_at: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct Decision {
     #[serde(default = "legacy_author")]
     pub author: String,
     pub id: String,
-    pub anchor: CodeAnchor,
+    pub target: DecisionTarget,
+    pub state: DecisionState,
     pub fingerprint: String,
     pub created_at: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadingPosition {
+    pub context: ReadingContext,
+    pub file_id: Option<String>,
     pub change_id: Option<String>,
     pub passage_id: Option<String>,
     pub step_id: Option<String>,
@@ -182,6 +180,8 @@ pub struct ReadingPosition {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Review {
+    #[serde(default)]
+    pub glossary: Vec<DocumentTerm>,
     pub id: String,
     pub title: String,
     pub repository_id: String,
@@ -189,7 +189,9 @@ pub struct Review {
     pub previous_snapshot_ids: Vec<String>,
     pub revision: u32,
     pub topics: Vec<Topic>,
-    pub annotations: Vec<Annotation>,
+    pub mode: ReviewMode,
+    pub preparation_id: Option<String>,
+    pub files: Vec<ReviewFile>,
     pub decisions: Vec<Decision>,
     #[serde(default)]
     pub examined: Vec<String>,
@@ -220,31 +222,30 @@ pub enum ReviewAction {
     SaveTopics {
         topics: Vec<Topic>,
     },
-    Validate {
-        anchor: CodeAnchor,
+    ExamineStep {
+        #[serde(rename = "stepId")]
+        step_id: String,
     },
-    Reopen {
-        anchor: CodeAnchor,
+    ExamineFile {
+        #[serde(rename = "fileId")]
+        file_id: String,
     },
-    Examine {
-        anchor: CodeAnchor,
+    ValidateStep {
+        #[serde(rename = "stepId")]
+        step_id: String,
     },
-    AddAnnotation {
-        anchor: CodeAnchor,
-        body: String,
-        question: bool,
+    ReopenStep {
+        #[serde(rename = "stepId")]
+        step_id: String,
     },
-    KeepAgentNote {
-        anchor: CodeAnchor,
-        #[serde(rename = "runId")]
-        run_id: String,
+    ValidateFile {
+        #[serde(rename = "fileId")]
+        file_id: String,
+        level: ReadingLevel,
     },
-    ResolveQuestion {
-        id: String,
-        resolved: bool,
-    },
-    DeleteAnnotation {
-        id: String,
+    ReopenFile {
+        #[serde(rename = "fileId")]
+        file_id: String,
     },
     SavePosition {
         position: ReadingPosition,
@@ -257,7 +258,7 @@ pub struct Coverage {
     pub examined: u32,
     pub validated: u32,
     pub outside: u32,
-    pub questions: u32,
+
     pub complete: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
@@ -427,6 +428,14 @@ pub fn typescript() -> String {
         ProviderSetupPhase::decl(&cfg),
         AgentPreparationContext::decl(&cfg),
         ProposalDiagnostic::decl(&cfg),
+        PreparationRequest::decl(&cfg),
+        PreparationState::decl(&cfg),
+        TranslationSelection::decl(&cfg),
+        PreparationBatch::decl(&cfg),
+        PreparationBatchStatus::decl(&cfg),
+        PreparationPhaseCount::decl(&cfg),
+        PreparationStatus::decl(&cfg),
+        PreparationPhase::decl(&cfg),
         Repository::decl(&cfg),
         Scope::decl(&cfg),
         CaptureRequest::decl(&cfg),
@@ -436,9 +445,24 @@ pub fn typescript() -> String {
         Change::decl(&cfg),
         Snapshot::decl(&cfg),
         CodeAnchor::decl(&cfg),
+        ReadingLevel::decl(&cfg),
+        ReviewMode::decl(&cfg),
+        ReadingContext::decl(&cfg),
+        ReviewDocument::decl(&cfg),
+        LevelDocuments::decl(&cfg),
+        DocumentReference::decl(&cfg),
+        DocumentTerm::decl(&cfg),
+        PseudoBlock::decl(&cfg),
+        PseudoTranslation::decl(&cfg),
+        PseudoTranslationInfo::decl(&cfg),
+        ReviewFile::decl(&cfg),
+        ReviewFileContent::decl(&cfg),
+        SourceDescriptor::decl(&cfg),
+        FrozenSource::decl(&cfg),
+        DecisionTarget::decl(&cfg),
+        DecisionState::decl(&cfg),
         Step::decl(&cfg),
         Topic::decl(&cfg),
-        Annotation::decl(&cfg),
         Decision::decl(&cfg),
         ReadingPosition::decl(&cfg),
         Review::decl(&cfg),
@@ -463,9 +487,27 @@ pub fn typescript() -> String {
         AgentActivityKind::decl(&cfg),
         AgentActivityStatus::decl(&cfg),
         AgentRun::decl(&cfg),
-        TestRun::decl(&cfg),
         LanguageServerConfig::decl(&cfg),
+        CodeTheme::decl(&cfg),
+        IconClone::decl(&cfg),
+        FileIconPreferences::decl(&cfg),
+        AppearancePreferences::decl(&cfg),
+        EditorProfile::decl(&cfg),
+        LanguageSide::decl(&cfg),
+        LanguageDocument::decl(&cfg),
+        LanguageMethod::decl(&cfg),
+        LanguageRequest::decl(&cfg),
+        LanguageRange::decl(&cfg),
+        LanguageLocation::decl(&cfg),
+        LanguageHover::decl(&cfg),
+        LanguageSymbol::decl(&cfg),
+        LanguageTokens::decl(&cfg),
+        LanguageCapabilities::decl(&cfg),
+        LanguageResponse::decl(&cfg),
         LanguageServerSettings::decl(&cfg),
+        LanguageServerCatalogue::decl(&cfg),
+        LanguageServerCatalogueEntry::decl(&cfg),
+        LanguageServerInstallOperation::decl(&cfg),
         CodeLocation::decl(&cfg),
         ProposalContent::decl(&cfg),
         Proposal::decl(&cfg),
@@ -500,6 +542,9 @@ pub struct AgentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub batch_id: Option<String>,
     pub run_id: String,
     pub sequence: u32,
     pub kind: String,
@@ -512,6 +557,19 @@ pub struct AgentEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentProgress {
+    Delegation {
+        id: String,
+        parent: String,
+        task: String,
+        model: Option<String>,
+        status: AgentActivityStatus,
+    },
+    Usage {
+        id: String,
+        input: u64,
+        cached: u64,
+        output: u64,
+    },
     Draft {
         characters: u32,
         topics: Vec<String>,
@@ -578,24 +636,6 @@ pub struct AgentRun {
     pub output: String,
     pub status: String,
     pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct TestRun {
-    pub id: String,
-    pub review_id: String,
-    pub snapshot_id: String,
-    pub command: Vec<String>,
-    pub cwd: String,
-    pub status: String,
-    pub output: String,
-    pub exit_code: Option<i32>,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub before_fingerprint: Option<String>,
-    pub after_fingerprint: Option<String>,
-    pub snapshot_matches: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
@@ -705,9 +745,15 @@ pub struct ProviderModel {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettings {
+    #[serde(default = "default_helper_model")]
+    pub helper_model: String,
     pub revision: u32,
     #[serde(default)]
     pub model_defaults_version: u32,
     pub default_provider: String,
     pub providers: Vec<ProviderConfig>,
+}
+
+fn default_helper_model() -> String {
+    "gpt-6-luna".into()
 }

@@ -83,6 +83,48 @@ export type ProposalDiagnostic = {
   anchorIndex: number | null
   message: string
 }
+export type PreparationRequest = { reviewId: string; provider: string }
+export type PreparationState = {
+  translationSelection: TranslationSelection | null
+  activeBatches: Array<PreparationBatch>
+  phases: Array<PreparationPhaseCount>
+  id: string
+  reviewId: string
+  snapshotId: string
+  provider: string
+  status: PreparationStatus
+  phase: PreparationPhase
+  completedBatches: number
+  totalBatches: number
+  stepTitles: Array<string>
+  events: Array<AgentEvent>
+  error: AppError | null
+  startedAt: string
+  updatedAt: string
+  canResume: boolean
+}
+export type TranslationSelection = {
+  selectedFiles: number
+  skippedFiles: number
+}
+export type PreparationBatch = {
+  id: string
+  label: string
+  phase: PreparationPhase
+  model: string | null
+  startedAt: string
+  status: PreparationBatchStatus
+}
+export type PreparationBatchStatus = "running" | "waitingForProvider"
+export type PreparationPhaseCount = {
+  phase: PreparationPhase
+  total: number
+  completed: number
+}
+export type PreparationStatus =
+  "running" | "ready" | "failed" | "cancelled" | "interrupted"
+export type PreparationPhase =
+  "context" | "outline" | "documents" | "files" | "pseudocode" | "checking"
 export type Repository = {
   id: string
   path: string
@@ -109,6 +151,7 @@ export type Passage = {
   fingerprint: string
 }
 export type Change = {
+  untracked: boolean
   id: string
   path: string
   previousPath: string | null
@@ -136,10 +179,85 @@ export type CodeAnchor = {
   changeId: string
   passageId: string
 }
+export type ReadingLevel = "beginner" | "intermediate" | "developer"
+export type ReviewMode = "guided" | "manual"
+export type ReadingContext = "guided" | "files"
+export type ReviewDocument = {
+  termAliases: { [key in string]: string }
+  body: string
+  references: Array<DocumentReference>
+  terms: Array<DocumentTerm>
+  readingSeconds: number
+}
+export type LevelDocuments = {
+  glossary: Array<DocumentTerm>
+  beginner: ReviewDocument
+  intermediate: ReviewDocument
+  developer: ReviewDocument
+}
+export type DocumentReference = {
+  id: string
+  label: string
+  explanation: string
+  sourceId: string
+  startLine: number
+  endLine: number
+}
+export type DocumentTerm = {
+  id: string
+  term: string
+  definition: string
+  context: string
+}
+export type PseudoBlock = { startLine: number; endLine: number; text: string }
+export type PseudoTranslation = {
+  sourceId: string
+  sourceHash: string
+  blocks: Array<PseudoBlock>
+  unavailableReason: string | null
+}
+export type PseudoTranslationInfo = {
+  sourceId: string
+  sourceHash: string
+  available: boolean
+  unavailableReason: string | null
+}
+export type ReviewFile = {
+  pseudocodeSelected?: boolean
+  pseudocodeSkipReason: string | null
+  id: string
+  path: string
+  changeIds: Array<string>
+  hasDocuments: boolean
+  translations: Array<PseudoTranslationInfo>
+}
+export type ReviewFileContent = {
+  pseudocodeSelected?: boolean
+  pseudocodeSkipReason: string | null
+  fileId: string
+  documents: LevelDocuments | null
+  translations: Array<PseudoTranslation>
+}
+export type SourceDescriptor = {
+  sourceId: string
+  path: string
+  hash: string
+  size: number
+}
+export type FrozenSource = {
+  sourceId: string
+  path: string
+  hash: string
+  text: string | null
+  unavailableReason: string | null
+}
+export type DecisionTarget =
+  { kind: "step"; stepId: string } | { kind: "file"; fileId: string }
+export type DecisionState = "examined" | "validated"
 export type Step = {
   id: string
   title: string
-  explanation: string
+  documents: LevelDocuments
   anchors: Array<CodeAnchor>
 }
 export type Topic = {
@@ -148,25 +266,17 @@ export type Topic = {
   brief: string
   steps: Array<Step>
 }
-export type Annotation = {
-  resolvedBy: string | null
-  resolvedAt: string | null
-  id: string
-  anchor: CodeAnchor
-  body: string
-  question: boolean
-  resolved: boolean
-  author: string
-  createdAt: string
-}
 export type Decision = {
   author: string
   id: string
-  anchor: CodeAnchor
+  target: DecisionTarget
+  state: DecisionState
   fingerprint: string
   createdAt: string
 }
 export type ReadingPosition = {
+  context: ReadingContext
+  fileId: string | null
   changeId: string | null
   passageId: string | null
   stepId: string | null
@@ -175,6 +285,7 @@ export type ReadingPosition = {
   split: boolean
 }
 export type Review = {
+  glossary: Array<DocumentTerm>
   id: string
   title: string
   repositoryId: string
@@ -182,7 +293,9 @@ export type Review = {
   previousSnapshotIds: Array<string>
   revision: number
   topics: Array<Topic>
-  annotations: Array<Annotation>
+  mode: ReviewMode
+  preparationId: string | null
+  files: Array<ReviewFile>
   decisions: Array<Decision>
   examined: Array<string>
   position: ReadingPosition
@@ -198,25 +311,18 @@ export type FileContent = {
 export type ReviewAction =
   | { kind: "rename"; title: string }
   | { kind: "saveTopics"; topics: Array<Topic> }
-  | { kind: "validate"; anchor: CodeAnchor }
-  | { kind: "reopen"; anchor: CodeAnchor }
-  | { kind: "examine"; anchor: CodeAnchor }
-  | {
-      kind: "addAnnotation"
-      anchor: CodeAnchor
-      body: string
-      question: boolean
-    }
-  | { kind: "keepAgentNote"; anchor: CodeAnchor; runId: string }
-  | { kind: "resolveQuestion"; id: string; resolved: boolean }
-  | { kind: "deleteAnnotation"; id: string }
+  | { kind: "examineStep"; stepId: string }
+  | { kind: "examineFile"; fileId: string }
+  | { kind: "validateStep"; stepId: string }
+  | { kind: "reopenStep"; stepId: string }
+  | { kind: "validateFile"; fileId: string; level: ReadingLevel }
+  | { kind: "reopenFile"; fileId: string }
   | { kind: "savePosition"; position: ReadingPosition }
 export type Coverage = {
   total: number
   examined: number
   validated: number
   outside: number
-  questions: number
   complete: boolean
 }
 export type Sense = { id: string; description: string }
@@ -293,6 +399,7 @@ export type AgentRequest = {
   paths: Array<string>
 }
 export type AgentEvent = {
+  batchId?: string
   runId: string
   sequence: number
   kind: string
@@ -300,6 +407,15 @@ export type AgentEvent = {
   progress?: AgentProgress
 }
 export type AgentProgress =
+  | {
+      type: "delegation"
+      id: string
+      parent: string
+      task: string
+      model: string | null
+      status: AgentActivityStatus
+    }
+  | { type: "usage"; id: string; input: bigint; cached: bigint; output: bigint }
   | { type: "draft"; characters: number; topics: Array<string> }
   | { type: "plan"; steps: Array<AgentPlanStep> }
   | {
@@ -339,21 +455,6 @@ export type AgentRun = {
   status: string
   createdAt: string
 }
-export type TestRun = {
-  id: string
-  reviewId: string
-  snapshotId: string
-  command: Array<string>
-  cwd: string
-  status: string
-  output: string
-  exitCode: number | null
-  startedAt: string | null
-  finishedAt: string | null
-  beforeFingerprint: string | null
-  afterFingerprint: string | null
-  snapshotMatches: boolean
-}
 export type LanguageServerConfig = {
   id: string
   name: string
@@ -361,9 +462,126 @@ export type LanguageServerConfig = {
   executable: string
   arguments: Array<string>
 }
+export type CodeTheme = "tokyo-night" | "reviewbox"
+export type IconClone = {
+  name: string
+  base: string
+  color: string | null
+  lightColor: string | null
+  fileNames: Array<string>
+  fileExtensions: Array<string>
+  folderNames: Array<string>
+  rootFolderNames: Array<string>
+  activeForPacks: Array<string>
+}
+export type FileIconPreferences = {
+  activeIconPack: string
+  fileAssociations: { [key in string]: string }
+  folderAssociations: { [key in string]: string }
+  fileClones: Array<IconClone>
+  folderClones: Array<IconClone>
+}
+export type AppearancePreferences = {
+  revision: number
+  codeTheme: CodeTheme
+  fileIcons: FileIconPreferences
+  importedProfile: string | null
+  importWarnings: Array<string>
+}
+export type EditorProfile = { id: string; name: string }
+export type LanguageSide = "before" | "after"
+export type LanguageDocument = {
+  snapshotId: string
+  path: string
+  changeId: string | null
+  side: LanguageSide | null
+  contentHash: string
+}
+export type LanguageMethod =
+  "semanticTokens" | "hover" | "definitions" | "references" | "symbols"
+export type LanguageRequest = {
+  requestId: string
+  document: LanguageDocument
+  method: LanguageMethod
+  line: number | null
+  column: number | null
+}
+export type LanguageRange = {
+  startLine: number
+  startColumn: number
+  endLine: number
+  endColumn: number
+}
+export type LanguageLocation = {
+  document: LanguageDocument
+  range: LanguageRange
+}
+export type LanguageHover = { markdown: string; range: LanguageRange | null }
+export type LanguageSymbol = {
+  name: string
+  detail: string | null
+  kind: number
+  location: LanguageLocation
+  children: Array<LanguageSymbol>
+}
+export type LanguageTokens = {
+  data: Array<number>
+  tokenTypes: Array<string>
+  tokenModifiers: Array<string>
+}
+export type LanguageCapabilities = {
+  semanticTokens: boolean
+  hover: boolean
+  definitions: boolean
+  references: boolean
+  symbols: boolean
+}
+export type LanguageResponse = {
+  requestId: string
+  contentHash: string
+  serverId: string
+  capabilities: LanguageCapabilities
+  analysisNote: string | null
+  hover: LanguageHover | null
+  locations: Array<LanguageLocation>
+  symbols: Array<LanguageSymbol>
+  tokens: LanguageTokens | null
+}
 export type LanguageServerSettings = {
   servers: Array<LanguageServerConfig>
   revision: number
+}
+export type LanguageServerCatalogue = {
+  entries: Array<LanguageServerCatalogueEntry>
+  operations: Array<LanguageServerInstallOperation>
+}
+export type LanguageServerCatalogueEntry = {
+  id: string
+  name: string
+  description: string
+  languages: Array<string>
+  extensions: Array<string>
+  version: string
+  installedVersion: string | null
+  status: string
+  enabled: boolean
+  supported: boolean
+  setupRequired: string | null
+  sourceUrl: string
+  runtime: string | null
+  prerequisites: Array<string>
+  error: string | null
+  preview: boolean
+  capabilities: LanguageCapabilities | null
+}
+export type LanguageServerInstallOperation = {
+  id: string
+  serverId: string
+  status: string
+  phase: string
+  message: string
+  downloadedBytes: bigint
+  totalBytes: bigint | null
 }
 export type CodeLocation = { path: string; line: number; column: number }
 export type ProposalContent =
@@ -418,6 +636,7 @@ export type ProviderModel = {
   supportedEfforts: Array<string>
 }
 export type ProviderSettings = {
+  helperModel: string
   revision: number
   modelDefaultsVersion: number
   defaultProvider: string

@@ -1,28 +1,5 @@
 {
   "$defs": {
-    "Annotation": {
-      "properties": {
-        "anchor": { "$ref": "#/$defs/CodeAnchor" },
-        "author": { "type": "string" },
-        "body": { "type": "string" },
-        "createdAt": { "type": "string" },
-        "id": { "type": "string" },
-        "question": { "type": "boolean" },
-        "resolved": { "type": "boolean" },
-        "resolvedAt": { "default": null, "type": ["string", "null"] },
-        "resolvedBy": { "default": null, "type": ["string", "null"] }
-      },
-      "required": [
-        "id",
-        "anchor",
-        "body",
-        "question",
-        "resolved",
-        "author",
-        "createdAt"
-      ],
-      "type": "object"
-    },
     "BlobRef": {
       "properties": {
         "hash": { "type": "string" },
@@ -56,7 +33,8 @@
         "layer": { "type": "string" },
         "passages": { "items": { "$ref": "#/$defs/Passage" }, "type": "array" },
         "path": { "type": "string" },
-        "previousPath": { "type": ["string", "null"] }
+        "previousPath": { "type": ["string", "null"] },
+        "untracked": { "default": false, "type": "boolean" }
       },
       "required": ["id", "path", "layer", "binary", "passages"],
       "type": "object"
@@ -96,13 +74,66 @@
     },
     "Decision": {
       "properties": {
-        "anchor": { "$ref": "#/$defs/CodeAnchor" },
         "author": { "default": "human:legacy", "type": "string" },
         "createdAt": { "type": "string" },
         "fingerprint": { "type": "string" },
-        "id": { "type": "string" }
+        "id": { "type": "string" },
+        "state": { "$ref": "#/$defs/DecisionState" },
+        "target": { "$ref": "#/$defs/DecisionTarget" }
       },
-      "required": ["id", "anchor", "fingerprint", "createdAt"],
+      "required": ["id", "target", "state", "fingerprint", "createdAt"],
+      "type": "object"
+    },
+    "DecisionState": { "enum": ["examined", "validated"], "type": "string" },
+    "DecisionTarget": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": { "const": "step", "type": "string" },
+            "stepId": { "type": "string" }
+          },
+          "required": ["kind", "stepId"],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "fileId": { "type": "string" },
+            "kind": { "const": "file", "type": "string" }
+          },
+          "required": ["kind", "fileId"],
+          "type": "object"
+        }
+      ]
+    },
+    "DocumentReference": {
+      "additionalProperties": false,
+      "properties": {
+        "endLine": { "format": "uint32", "minimum": 0, "type": "integer" },
+        "explanation": { "type": "string" },
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "startLine": { "format": "uint32", "minimum": 0, "type": "integer" }
+      },
+      "required": [
+        "id",
+        "label",
+        "explanation",
+        "sourceId",
+        "startLine",
+        "endLine"
+      ],
+      "type": "object"
+    },
+    "DocumentTerm": {
+      "additionalProperties": false,
+      "properties": {
+        "context": { "type": "string" },
+        "definition": { "type": "string" },
+        "id": { "type": "string" },
+        "term": { "type": "string" }
+      },
+      "required": ["id", "term", "definition", "context"],
       "type": "object"
     },
     "ExplanationDocument": {
@@ -156,6 +187,21 @@
         "term": { "type": "string" }
       },
       "required": ["id", "term", "aliases", "senses", "archived"],
+      "type": "object"
+    },
+    "LevelDocuments": {
+      "additionalProperties": false,
+      "properties": {
+        "beginner": { "$ref": "#/$defs/ReviewDocument" },
+        "developer": { "$ref": "#/$defs/ReviewDocument" },
+        "glossary": {
+          "default": [],
+          "items": { "$ref": "#/$defs/DocumentTerm" },
+          "type": "array"
+        },
+        "intermediate": { "$ref": "#/$defs/ReviewDocument" }
+      },
+      "required": ["beginner", "intermediate", "developer"],
       "type": "object"
     },
     "OnboardingStep": {
@@ -240,18 +286,74 @@
         }
       ]
     },
+    "PseudoTranslationInfo": {
+      "properties": {
+        "available": { "type": "boolean" },
+        "sourceHash": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "unavailableReason": { "type": ["string", "null"] }
+      },
+      "required": ["sourceId", "sourceHash", "available"],
+      "type": "object"
+    },
+    "ReadingContext": { "enum": ["guided", "files"], "type": "string" },
     "ReadingPosition": {
       "properties": {
         "changeId": { "type": ["string", "null"] },
+        "context": { "$ref": "#/$defs/ReadingContext" },
+        "fileId": { "type": ["string", "null"] },
         "line": { "format": "uint32", "minimum": 0, "type": "integer" },
         "passageId": { "type": ["string", "null"] },
         "scrollTop": { "format": "double", "type": "number" },
         "split": { "type": "boolean" },
         "stepId": { "type": ["string", "null"] }
       },
-      "required": ["line", "scrollTop", "split"],
+      "required": ["context", "line", "scrollTop", "split"],
       "type": "object"
     },
+    "ReviewDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "body": { "type": "string" },
+        "readingSeconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "references": {
+          "items": { "$ref": "#/$defs/DocumentReference" },
+          "type": "array"
+        },
+        "termAliases": {
+          "additionalProperties": { "type": "string" },
+          "default": {},
+          "type": "object"
+        },
+        "terms": {
+          "items": { "$ref": "#/$defs/DocumentTerm" },
+          "type": "array"
+        }
+      },
+      "required": ["body", "references", "terms", "readingSeconds"],
+      "type": "object"
+    },
+    "ReviewFile": {
+      "properties": {
+        "changeIds": { "items": { "type": "string" }, "type": "array" },
+        "hasDocuments": { "type": "boolean" },
+        "id": { "type": "string" },
+        "path": { "type": "string" },
+        "pseudocodeSelected": { "default": null, "type": ["boolean", "null"] },
+        "pseudocodeSkipReason": { "default": null, "type": ["string", "null"] },
+        "translations": {
+          "items": { "$ref": "#/$defs/PseudoTranslationInfo" },
+          "type": "array"
+        }
+      },
+      "required": ["id", "path", "changeIds", "hasDocuments", "translations"],
+      "type": "object"
+    },
+    "ReviewMode": { "enum": ["guided", "manual"], "type": "string" },
     "Scope": {
       "enum": ["local", "staged", "unstaged", "commit", "range"],
       "type": "string"
@@ -278,11 +380,42 @@
           "items": { "$ref": "#/$defs/CodeAnchor" },
           "type": "array"
         },
-        "explanation": { "type": "string" },
+        "documents": { "$ref": "#/$defs/LevelDocuments" },
         "id": { "type": "string" },
         "title": { "type": "string" }
       },
-      "required": ["id", "title", "explanation", "anchors"],
+      "required": ["id", "title", "documents", "anchors"],
+      "type": "object"
+    },
+    "StoredStep": {
+      "properties": {
+        "anchors": {
+          "items": { "$ref": "#/$defs/CodeAnchor" },
+          "type": "array"
+        },
+        "documentAsset": {
+          "additionalProperties": false,
+          "properties": {
+            "hash": { "pattern": "^[a-f0-9]{64}$", "type": "string" },
+            "path": { "type": "string" }
+          },
+          "required": ["path", "hash"],
+          "type": "object"
+        },
+        "id": { "type": "string" },
+        "title": { "type": "string" }
+      },
+      "required": ["id", "title", "anchors", "documentAsset"],
+      "type": "object"
+    },
+    "StoredTopic": {
+      "properties": {
+        "brief": { "type": "string" },
+        "id": { "type": "string" },
+        "steps": { "items": { "$ref": "#/$defs/StoredStep" }, "type": "array" },
+        "title": { "type": "string" }
+      },
+      "required": ["id", "title", "brief", "steps"],
       "type": "object"
     },
     "TermOccurrence": {
@@ -316,10 +449,20 @@
       "properties": {
         "data": {
           "properties": {
-            "annotations": {
-              "items": { "type": "string" },
-              "type": "array",
-              "uniqueItems": true
+            "assetIndex": {
+              "additionalProperties": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "hash": { "pattern": "^[a-f0-9]{64}$", "type": "string" },
+                    "path": { "type": "string" }
+                  },
+                  "required": ["path", "hash"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "type": "object"
             },
             "createdAt": { "type": "string" },
             "decisions": {
@@ -332,11 +475,23 @@
               "items": { "type": "string" },
               "type": "array"
             },
+            "files": {
+              "items": { "$ref": "#/$defs/ReviewFile" },
+              "type": "array"
+            },
+            "glossary": {
+              "default": [],
+              "items": { "$ref": "#/$defs/DocumentTerm" },
+              "type": "array"
+            },
             "id": { "type": "string" },
+            "mode": { "$ref": "#/$defs/ReviewMode" },
             "position": {
               "$ref": "#/$defs/ReadingPosition",
               "default": {
                 "changeId": null,
+                "context": "guided",
+                "fileId": null,
                 "line": 0,
                 "passageId": null,
                 "scrollTop": 0,
@@ -344,6 +499,7 @@
                 "stepId": null
               }
             },
+            "preparationId": { "type": ["string", "null"] },
             "previousSnapshotIds": {
               "items": { "type": "string" },
               "type": "array"
@@ -367,10 +523,12 @@
             "previousSnapshotIds",
             "revision",
             "topics",
-            "annotations",
+            "mode",
+            "files",
             "decisions",
             "createdAt",
-            "updatedAt"
+            "updatedAt",
+            "assetIndex"
           ],
           "title": "Review",
           "type": "object"
@@ -378,7 +536,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "review" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -388,10 +546,6 @@
       "properties": {
         "data": {
           "properties": {
-            "annotations": {
-              "items": { "$ref": "#/$defs/Annotation" },
-              "type": "array"
-            },
             "createdAt": { "type": "string" },
             "decisions": {
               "items": { "$ref": "#/$defs/Decision" },
@@ -402,11 +556,23 @@
               "items": { "type": "string" },
               "type": "array"
             },
+            "files": {
+              "items": { "$ref": "#/$defs/ReviewFile" },
+              "type": "array"
+            },
+            "glossary": {
+              "default": [],
+              "items": { "$ref": "#/$defs/DocumentTerm" },
+              "type": "array"
+            },
             "id": { "type": "string" },
+            "mode": { "$ref": "#/$defs/ReviewMode" },
             "position": {
               "$ref": "#/$defs/ReadingPosition",
               "default": {
                 "changeId": null,
+                "context": "guided",
+                "fileId": null,
                 "line": 0,
                 "passageId": null,
                 "scrollTop": 0,
@@ -414,6 +580,7 @@
                 "stepId": null
               }
             },
+            "preparationId": { "type": ["string", "null"] },
             "previousSnapshotIds": {
               "items": { "type": "string" },
               "type": "array"
@@ -422,7 +589,10 @@
             "revision": { "format": "uint32", "minimum": 0, "type": "integer" },
             "snapshotId": { "type": "string" },
             "title": { "type": "string" },
-            "topics": { "items": { "$ref": "#/$defs/Topic" }, "type": "array" },
+            "topics": {
+              "items": { "$ref": "#/$defs/StoredTopic" },
+              "type": "array"
+            },
             "updatedAt": { "type": "string" }
           },
           "required": [
@@ -433,7 +603,8 @@
             "previousSnapshotIds",
             "revision",
             "topics",
-            "annotations",
+            "mode",
+            "files",
             "decisions",
             "createdAt",
             "updatedAt"
@@ -444,7 +615,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "review_history" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -497,7 +668,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "snapshot" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -534,7 +705,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "knowledge" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -560,7 +731,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "onboarding" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -594,7 +765,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "proposal" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -628,7 +799,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "project_settings" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -640,7 +811,10 @@
           "properties": {
             "brief": { "type": "string" },
             "id": { "type": "string" },
-            "steps": { "items": { "$ref": "#/$defs/Step" }, "type": "array" },
+            "steps": {
+              "items": { "$ref": "#/$defs/StoredStep" },
+              "type": "array"
+            },
             "title": { "type": "string" }
           },
           "required": ["id", "title", "brief", "steps"],
@@ -650,7 +824,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "topics" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -660,55 +834,21 @@
       "properties": {
         "data": {
           "properties": {
-            "anchor": { "$ref": "#/$defs/CodeAnchor" },
-            "author": { "type": "string" },
-            "body": { "type": "string" },
-            "createdAt": { "type": "string" },
-            "id": { "type": "string" },
-            "question": { "type": "boolean" },
-            "resolved": { "type": "boolean" },
-            "resolvedAt": { "default": null, "type": ["string", "null"] },
-            "resolvedBy": { "default": null, "type": ["string", "null"] }
-          },
-          "required": [
-            "id",
-            "anchor",
-            "body",
-            "question",
-            "resolved",
-            "author",
-            "createdAt"
-          ],
-          "title": "Annotation",
-          "type": "object"
-        },
-        "format": { "const": "reviewbox" },
-        "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
-        "kind": { "const": "annotations" },
-        "version": { "const": 2 }
-      },
-      "required": ["format", "version", "kind", "id", "data"],
-      "type": "object"
-    },
-    {
-      "additionalProperties": false,
-      "properties": {
-        "data": {
-          "properties": {
-            "anchor": { "$ref": "#/$defs/CodeAnchor" },
             "author": { "default": "human:legacy", "type": "string" },
             "createdAt": { "type": "string" },
             "fingerprint": { "type": "string" },
-            "id": { "type": "string" }
+            "id": { "type": "string" },
+            "state": { "$ref": "#/$defs/DecisionState" },
+            "target": { "$ref": "#/$defs/DecisionTarget" }
           },
-          "required": ["id", "anchor", "fingerprint", "createdAt"],
+          "required": ["id", "target", "state", "fingerprint", "createdAt"],
           "title": "Decision",
           "type": "object"
         },
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "decisions" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -731,7 +871,7 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "terms" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
@@ -774,11 +914,11 @@
         "format": { "const": "reviewbox" },
         "id": { "pattern": "^[a-zA-Z0-9_@-]{1,160}$", "type": "string" },
         "kind": { "const": "documents" },
-        "version": { "const": 2 }
+        "version": { "const": 3 }
       },
       "required": ["format", "version", "kind", "id", "data"],
       "type": "object"
     }
   ],
-  "title": "ReviewBox project document v2"
+  "title": "ReviewBox project document v3"
 }
