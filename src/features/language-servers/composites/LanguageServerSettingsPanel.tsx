@@ -1,154 +1,136 @@
 "use client"
-import { useEffect, useState } from "react"
+
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { languageServerCommands } from "../services/languageServer.commands"
-import { errorMessage } from "@/lib/desktop/review.commands"
-import type {
-  LanguageServerConfig,
-  LanguageServerSettings,
-} from "@/lib/desktop/contracts.generated"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AdvancedLanguageServerSettings } from "./AdvancedLanguageServerSettings"
+import { LanguageServerCatalogueRow } from "../components/LanguageServerCatalogueRow"
+import { useLanguageCatalogue } from "../hooks/useLanguageCatalogue"
+import { catalogueCommands } from "../services/catalogue.commands"
+
 export function LanguageServerSettingsPanel() {
-  const [settings, setSettings] = useState<LanguageServerSettings | null>(null)
-  const [error, setError] = useState("")
-  const [saved, setSaved] = useState(false)
+  const state = useLanguageCatalogue()
+  const [query, setQuery] = useState("")
+  const [filter, setFilter] = useState("all")
+  const [advanced, setAdvanced] = useState(false)
+  const advancedPanel = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    let alive = true
-    languageServerCommands
-      .settings()
-      .then((v) => {
-        if (alive) setSettings(v)
-      })
-      .catch((e) => {
-        if (alive) setError(errorMessage(e))
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
-  const update = (id: string, patch: Partial<LanguageServerConfig>) => {
-    if (settings)
-      setSettings({
-        ...settings,
-        servers: settings.servers.map((s) =>
-          s.id === id ? { ...s, ...patch } : s
-        ),
-      })
-    setSaved(false)
-  }
+    if (advanced) advancedPanel.current?.scrollIntoView({ block: "start" })
+  }, [advanced])
+  const entries = state.catalogue?.entries ?? []
+  const available = entries.filter(
+    (entry) =>
+      state.recommended.has(entry.id) &&
+      entry.supported &&
+      !entry.installedVersion &&
+      entry.status !== "installing"
+  )
+  const visible = entries.filter(
+    (entry) =>
+      (filter !== "installed" || entry.installedVersion) &&
+      (filter !== "recommended" || state.recommended.has(entry.id)) &&
+      `${entry.name} ${entry.languages.join(" ")}`
+        .toLowerCase()
+        .includes(query.toLowerCase())
+  )
   return (
-    <section className="space-y-5">
-      <p className="text-muted-foreground">
-        Configure language servers already installed on your Mac. They run on a
-        copy of the frozen source files. ReviewBox does not install tools.
-      </p>
-      {error && (
-        <p role="alert" className="text-destructive">
-          {error}
-        </p>
-      )}
-      {settings?.servers.map((server) => (
-        <fieldset key={server.id} className="space-y-3 rounded-3xl border p-5">
-          <legend className="sr-only">{server.name}</legend>
-          <p className="font-medium">{server.name}</p>
-          <Label htmlFor={`${server.id}-name`}>Name</Label>
-          <Input
-            id={`${server.id}-name`}
-            value={server.name}
-            onChange={(e) => update(server.id, { name: e.target.value })}
-          />
-          <Label htmlFor={`${server.id}-exe`}>Executable</Label>
-          <Input
-            id={`${server.id}-exe`}
-            value={server.executable}
-            onChange={(e) => update(server.id, { executable: e.target.value })}
-          />
-          <Label htmlFor={`${server.id}-args`}>Arguments (one per line)</Label>
-          <textarea
-            id={`${server.id}-args`}
-            className="min-h-16 w-full rounded-2xl bg-input/50 px-2.5 py-2 font-mono text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/30"
-            value={server.arguments.join("\n")}
-            onChange={(e) =>
-              update(server.id, {
-                arguments: e.target.value.split("\n").filter(Boolean),
-              })
-            }
-          />
-          <Label htmlFor={`${server.id}-ext`}>
-            Extensions, separated by commas
-          </Label>
-          <Input
-            id={`${server.id}-ext`}
-            value={server.extensions.join(",")}
-            onChange={(e) =>
-              update(server.id, {
-                extensions: e.target.value
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              })
-            }
-          />
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() =>
-              settings &&
-              setSettings({
-                ...settings,
-                servers: settings.servers.filter((s) => s.id !== server.id),
-              })
-            }
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Label htmlFor="languages-project">Project</Label>
+          <NativeSelect
+            id="languages-project"
+            value={state.repositoryId}
+            onChange={(event) => state.setRepositoryId(event.target.value)}
           >
-            Remove
-          </Button>
-        </fieldset>
-      ))}
-      <div className="flex gap-2">
+            {state.repositories.map((repository) => (
+              <NativeSelectOption key={repository.id} value={repository.id}>
+                {repository.name}
+              </NativeSelectOption>
+            ))}
+            {!state.repositories.length && (
+              <NativeSelectOption value="">No open project</NativeSelectOption>
+            )}
+          </NativeSelect>
+        </div>
         <Button
+          size="sm"
           variant="secondary"
-          disabled={!settings}
+          disabled={!available.length || state.busy.includes("recommended")}
           onClick={() =>
-            settings &&
-            setSettings({
-              ...settings,
-              servers: [
-                ...settings.servers,
-                {
-                  id: crypto.randomUUID(),
-                  name: "Language server",
-                  extensions: ["py"],
-                  executable: "",
-                  arguments: [],
-                },
-              ],
+            void state.act("recommended", async () => {
+              for (const entry of available)
+                await catalogueCommands.install(entry.id)
             })
           }
         >
-          Add language server
-        </Button>
-        <Button
-          disabled={!settings}
-          onClick={() => {
-            if (settings)
-              void languageServerCommands
-                .configure(settings)
-                .then((value) => {
-                  setSettings(value)
-                  setSaved(true)
-                })
-                .catch((e) => setError(errorMessage(e)))
-          }}
-        >
-          Save configuration
+          Install recommended
         </Button>
       </div>
-      {saved && (
-        <p role="status" className="text-review-validated">
-          Configuration saved.
+      <Input
+        aria-label="Search languages"
+        placeholder="Search languages or servers…"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Tabs value={filter} onValueChange={setFilter}>
+          <TabsList>
+            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="installed">Installed</TabsTrigger>
+            <TabsTrigger value="recommended">Recommended</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <Button
+          size="xs"
+          variant="ghost"
+          aria-expanded={advanced}
+          onClick={() => setAdvanced(!advanced)}
+        >
+          Custom executables
+        </Button>
+      </div>
+      {state.error && (
+        <Alert variant="faded" size="sm">
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      )}
+      {advanced && (
+        <div ref={advancedPanel}>
+          <AdvancedLanguageServerSettings />
+        </div>
+      )}
+      {!state.catalogue ? (
+        <p className="text-sm text-muted-foreground">Loading languages…</p>
+      ) : visible.length ? (
+        <ul className="divide-y divide-border/50">
+          {visible.map((entry) => (
+            <LanguageServerCatalogueRow
+              key={entry.id}
+              entry={entry}
+              recommended={state.recommended.has(entry.id)}
+              busy={state.busy.includes(entry.id)}
+              operation={state.catalogue?.operations.findLast(
+                (operation) => operation.serverId === entry.id
+              )}
+              act={state.act}
+              onCustomSetup={() => setAdvanced(true)}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="py-5 text-sm text-muted-foreground">
+          No languages match this filter.
         </p>
       )}
+      <p className="text-xs text-muted-foreground">
+        Tools are installed only when requested, in ReviewBox’s private data.
+        Missing dependencies may limit analysis; code reading stays available.
+      </p>
     </section>
   )
 }
