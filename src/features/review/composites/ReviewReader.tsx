@@ -12,6 +12,14 @@ import {
   TextIcon,
 } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import {
   DropdownMenu,
@@ -348,24 +356,35 @@ export function ReviewReader({
         onOpenReference={pinReference}
       />
     ) : (
-      <div className="space-y-3 py-16 text-center">
-        <h1 className="text-xl font-medium">
-          {guided ? "No guided steps yet" : "Explore the captured file"}
-        </h1>
-        <p className="text-sm leading-6 text-muted-foreground">
-          {level === "beginner"
-            ? "Prepare a review with Rev to read the changes as a document."
-            : "Use the code view to inspect the captured file."}
-        </p>
-        {review.mode === "manual" && (
-          <Button onClick={onPrepare}>Prepare with Rev</Button>
+      <Empty className="px-4 py-16">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <HugeiconsIcon icon={guided ? Book02Icon : CodeIcon} aria-hidden />
+          </EmptyMedia>
+          <EmptyTitle>
+            <h1>
+              {guided ? "No guided steps yet" : "Explore the captured file"}
+            </h1>
+          </EmptyTitle>
+          <EmptyDescription>
+            {level === "beginner"
+              ? "Prepare a review with Rev to read the changes as a document."
+              : "Use the code view to inspect the captured file."}
+          </EmptyDescription>
+        </EmptyHeader>
+        {(review.mode === "manual" || level !== "beginner") && (
+          <EmptyContent className="flex-row flex-wrap justify-center gap-2">
+            {review.mode === "manual" && (
+              <Button onClick={onPrepare}>Prepare with Rev</Button>
+            )}
+            {level !== "beginner" && (
+              <Button variant="secondary" onClick={() => setView("code")}>
+                Open code
+              </Button>
+            )}
+          </EmptyContent>
         )}
-        {level !== "beginner" && (
-          <Button variant="secondary" onClick={() => setView("code")}>
-            Open code
-          </Button>
-        )}
-      </div>
+      </Empty>
     )
   const isDocument = level === "beginner" || view === "document" || !change
 
@@ -391,10 +410,18 @@ export function ReviewReader({
         <div
           ref={scroller}
           aria-label="Review document"
-          className="absolute inset-0 overflow-y-auto"
+          className={cn(
+            "absolute inset-0 overflow-y-auto",
+            !(guided && unit) && "flex flex-col"
+          )}
           style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
         >
-          <div className="mx-auto w-full max-w-[720px] px-8 py-12">
+          <div
+            className={cn(
+              "mx-auto w-full max-w-[720px] px-8 py-12",
+              !(guided && unit) && "my-auto"
+            )}
+          >
             {document}
           </div>
         </div>
