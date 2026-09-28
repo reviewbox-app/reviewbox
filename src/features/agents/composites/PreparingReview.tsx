@@ -3,65 +3,60 @@
 import { useEffect, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
-  AiMagicIcon,
   Alert02Icon,
-  ArrowRight01Icon,
-  GitCommitIcon,
-  PlusSignIcon,
+  ArrowDown01Icon,
+  DashedLineCircleIcon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Kbd } from "@/components/ui/kbd"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import type { Topic, Workspace } from "@/lib/desktop/contracts.generated"
+import type { Workspace } from "@/lib/desktop/contracts.generated"
 import { cn } from "@/lib/utils"
 import { PreparationProgress } from "../components/PreparationProgress"
-import { PreparationTopicCard } from "../components/PreparationTopicCard"
-import { PreparationTopicEditor } from "../components/PreparationTopicEditor"
-import { groupFileAnchors } from "@/features/review/helpers/review.helpers"
-import { outsidePreparation } from "../helpers/preparation.helpers"
 import { useReviewPreparation } from "../hooks/useReviewPreparation"
-import { harnessNames } from "../hooks/useRevStatus"
 
-function SessionStep({
+type RowState = "done" | "busy" | "todo" | "failed"
+
+function Row({
+  state,
   title,
   detail,
-  done,
-  busy,
+  children,
 }: {
+  state: RowState
   title: string
   detail?: string
-  done?: boolean
-  busy?: boolean
+  children?: React.ReactNode
 }) {
   return (
-    <li className="flex min-w-0 items-start gap-2.5">
-      <span className="flex h-5 w-4 shrink-0 items-center justify-center">
-        {busy ? (
+    <li className="flex min-w-0 items-start gap-3 py-2.5">
+      <span
+        className={cn(
+          "flex size-6 shrink-0 items-center justify-center rounded-full",
+          state === "done" && "bg-review-validated-soft text-review-validated",
+          state === "failed" && "bg-destructive/10 text-destructive"
+        )}
+      >
+        {state === "busy" ? (
           <Spinner className="size-4" />
-        ) : done ? (
+        ) : state === "done" ? (
+          <HugeiconsIcon icon={Tick02Icon} size={14} />
+        ) : state === "failed" ? (
+          <HugeiconsIcon icon={Alert02Icon} size={14} />
+        ) : (
           <HugeiconsIcon
-            icon={Tick02Icon}
-            size={16}
+            icon={DashedLineCircleIcon}
+            size={18}
             className="text-muted-foreground"
           />
-        ) : (
-          <span className="size-3 rounded-full border border-muted-foreground/60" />
         )}
       </span>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1 pt-0.5">
         <p
           className={cn(
-            "text-sm leading-5",
-            !done && !busy && "text-muted-foreground"
+            "text-sm font-medium",
+            state === "todo" && "text-muted-foreground"
           )}
         >
           {title}
@@ -71,371 +66,337 @@ function SessionStep({
             {detail}
           </p>
         )}
+        {children}
       </div>
     </li>
   )
 }
 
+function duration(from: number, to: number) {
+  const seconds = Math.max(0, Math.round((to - from) / 1000))
+  return seconds < 60
+    ? `${seconds} s`
+    : `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} s`
+}
+
+/**
+ * Rev prepares the review in front of the reader, then the review opens on its
+ * first step. There is no step where proposals have to be accepted.
+ */
 export function PreparingReview({
   workspace,
   provider,
-  onDone,
   onApplied,
+  onStart,
+  onLeave,
 }: {
   workspace: Workspace
   provider: string
-  onDone: () => void
+  /** Reloads the review once Rev's tour is saved. */
   onApplied: () => void | Promise<void>
+  onStart: () => void
+  /** Navigation detaches this screen; the native job stays alive. */
+  onLeave: () => void
 }) {
-  const preparation = useReviewPreparation(
-    workspace,
-    provider,
-    onApplied,
-    onDone
-  )
-  const [editing, setEditing] = useState<Topic | null>(null)
-  const [showOutside, setShowOutside] = useState(false)
-  const outside = outsidePreparation(workspace.snapshot, preparation.topics)
-  const outsideFiles = groupFileAnchors(workspace.snapshot, outside)
-  const proposedFiles = new Set(
-    groupFileAnchors(
-      workspace.snapshot,
-      preparation.topics.flatMap(({ topic }) =>
-        topic.steps.flatMap((step) => step.anchors)
-      )
-    ).map((file) => file.path)
-  )
-  const pending = preparation.topics.filter(
-    (item) => item.choice === "pending"
-  ).length
-  const applying = preparation.phase === "applying"
-  const hasProposal = preparation.topics.length > 0
-  const unresolvedAnchors = preparation.topics
-    .filter((item) => item.choice !== "rejected")
-    .reduce((sum, item) => sum + item.diagnostics.length, 0)
-  const anchorStatus = unresolvedAnchors
-    ? `${unresolvedAnchors} ${unresolvedAnchors === 1 ? "anchor needs" : "anchors need"} attention.`
-    : "All retained anchors match the review files."
+  const preparation = useReviewPreparation(workspace, provider, onApplied)
+  const [details, setDetails] = useState(false)
+  const { state, progress, active, cancel } = preparation
+  const complete = state?.status === "ready"
+  const failed =
+    !!state && ["failed", "cancelled", "interrupted"].includes(state.status)
   const files = new Set(workspace.snapshot.changes.map((change) => change.path))
     .size
-  const additions = workspace.snapshot.changes
-    .flatMap((change) => change.passages)
-    .reduce((sum, passage) => sum + passage.newLines, 0)
-  const deletions = workspace.snapshot.changes
-    .flatMap((change) => change.passages)
-    .reduce((sum, passage) => sum + passage.oldLines, 0)
-
-  const { active, cancel } = preparation
+  const titles = state?.stepTitles ?? []
+  const phases = [
+    "context",
+    "outline",
+    "documents",
+    "pseudocode",
+    "checking",
+  ] as const
+  const phaseIndex = state
+    ? phases.findIndex((phase) => phase === state.phase)
+    : 0
   useEffect(() => {
-    const stop = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && active && !editing && !showOutside) {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && active) {
         event.preventDefault()
         cancel()
+      } else if (
+        event.key === "Enter" &&
+        preparation.readyToOpen &&
+        !event.metaKey
+      ) {
+        event.preventDefault()
+        onStart()
       }
     }
-    window.addEventListener("keydown", stop)
-    return () => window.removeEventListener("keydown", stop)
-  }, [active, cancel, editing, showOutside])
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [active, cancel, preparation.readyToOpen, onStart])
+  const rows = (
+    <ol className="divide-y rounded-3xl border px-4" aria-label="Rev’s work">
+      {[
+        "Preparing the captured context",
+        "Understanding the changes",
+        "Writing the reading path",
+        "Preparing pseudo-code",
+        "Verifying and saving the review",
+      ].map((title, index) => {
+        const isPseudo = phases[index] === "pseudocode"
+        const selection = state?.translationSelection
+        const counts = state?.phases?.find(
+          (item) => item.phase === phases[index]
+        )
+        const working = state?.activeBatches?.some(
+          (item) => item.phase === phases[index]
+        )
+        const rowState: RowState =
+          complete || (isPseudo && selection?.selectedFiles === 0)
+            ? "done"
+            : counts
+              ? counts.total > 0 && counts.completed === counts.total
+                ? "done"
+                : failed && working
+                  ? "failed"
+                  : working
+                    ? "busy"
+                    : "todo"
+              : index < phaseIndex
+                ? "done"
+                : index === phaseIndex
+                  ? failed
+                    ? "failed"
+                    : "busy"
+                  : "todo"
+        return (
+          <Row
+            key={title}
+            title={title}
+            state={rowState}
+            detail={
+              isPseudo
+                ? selection
+                  ? `${selection.selectedFiles} ${selection.selectedFiles === 1 ? "file" : "files"} selected by Rev · ${selection.skippedFiles} do not need pseudo-code${counts && counts.total > 0 ? ` · ${counts.completed} of ${counts.total} versions ready` : ""}`
+                  : "Rev will choose which files need a translation."
+                : counts
+                  ? `${counts.completed} of ${counts.total} results ready`
+                  : index === phaseIndex
+                    ? preparation.status
+                    : undefined
+            }
+          />
+        )
+      })}
+    </ol>
+  )
 
   return (
-    <div
-      className="flex h-full min-h-0 min-w-0 gap-2 px-2 pb-2"
+    <main
+      className="relative mx-2 mb-2 flex min-h-0 flex-1 overflow-hidden rounded-panel border bg-card"
       data-testid="preparing-review"
+      aria-label="Review preparation"
     >
-      <aside
-        className="flex min-h-0 w-60 min-w-0 shrink-0 flex-col gap-3 overflow-hidden px-2 pt-1.5 pb-2 xl:w-68"
-        aria-label="Rev preparation session"
-      >
-        <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
-          <header className="space-y-0.5">
-            <h1
-              className="truncate text-base font-medium"
-              title={workspace.review.title}
-            >
-              {workspace.review.title}
-            </h1>
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <HugeiconsIcon icon={GitCommitIcon} size={14} />
-              Review files · {files} {files === 1 ? "file" : "files"}
-            </p>
-          </header>
-          <section className="space-y-3" aria-label="Preparation progress">
-            <h2 className="text-xs font-medium text-muted-foreground">
-              Rev session
-            </h2>
-            <ol className="space-y-3">
-              <SessionStep
-                title="Review scope prepared"
-                detail={`${files} changed files · +${additions} −${deletions} in the review`}
-                done={!!preparation.context}
-                busy={
-                  preparation.phase === "loading" ||
-                  (preparation.active && !preparation.context)
-                }
-              />
-              <SessionStep
-                title={`Preparing with ${harnessNames[provider] ?? provider}`}
-                detail={
-                  hasProposal
-                    ? "Topics ready for your review."
-                    : provider === "codex" && preparation.phase === "running"
-                      ? "Follow Rev’s activity in the main panel."
-                      : preparation.status
-                }
-                done={hasProposal}
-                busy={preparation.phase === "running"}
-              />
-              <SessionStep
-                title="Checking anchors in review files"
-                detail={hasProposal ? anchorStatus : undefined}
-                done={hasProposal}
-                busy={preparation.phase === "checking"}
-              />
-            </ol>
-            <div className="flex flex-wrap gap-2 pl-6.5">
-              {preparation.active ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={preparation.phase === "cancelled"}
-                  onClick={preparation.cancel}
+      <div className="absolute inset-0 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[640px] space-y-6 px-8 py-16">
+          {complete ? (
+            <>
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  aria-expanded={details}
+                  onClick={() => setDetails(!details)}
+                  className="flex w-full items-center gap-2.5 rounded-2xl bg-muted/60 px-3 py-2 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30"
                 >
-                  Cancel <Kbd>Esc</Kbd>
-                </Button>
-              ) : (
-                !hasProposal &&
-                preparation.context && (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={!preparation.canStart}
-                    onClick={() => void preparation.start()}
-                  >
-                    {preparation.phase === "error" ||
-                    preparation.phase === "cancelled"
-                      ? "Try again"
-                      : "Prepare with Rev"}
-                  </Button>
-                )
-              )}
-            </div>
-          </section>
-          {preparation.phase === "error" && !preparation.context && (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={preparation.retryContext}
-            >
-              Retry preparation
-            </Button>
-          )}
-          <section className="space-y-2 border-t pt-4">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-xs font-medium text-muted-foreground">
-                Review scope
-              </h2>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              <Badge variant="secondary">{files} changed files</Badge>
-              <Badge variant="secondary">Autonomous exploration</Badge>
-            </div>
-            <p className="text-xs leading-4 text-muted-foreground">
-              Rev explores the project and captured changes with its harness. It
-              chooses what to read and manages its own context.
-            </p>
-          </section>
-        </div>
-        <div className="shrink-0 border-t pt-2">
-          <Button
-            className="w-full"
-            size="sm"
-            variant="ghost"
-            disabled={preparation.active || applying}
-            onClick={onDone}
-          >
-            {preparation.phase === "complete"
-              ? "Open review"
-              : "Continue manually"}
-          </Button>
-        </div>
-      </aside>
-      <main
-        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border bg-card/50"
-        aria-label="Suggested topics"
-      >
-        <header className="flex min-h-18 shrink-0 flex-col items-stretch gap-3 border-b px-6 py-4 min-[1100px]:flex-row min-[1100px]:items-center">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-xl font-medium">Suggested topics</h2>
-            <p className="mt-1 text-sm leading-5 text-muted-foreground">
-              Accept, edit or reject each suggestion. Nothing is marked as
-              reviewed until you read it.
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={!pending || preparation.active || applying}
-              onClick={preparation.rejectRemaining}
-            >
-              Reject remaining
-            </Button>
-            <Button
-              size="sm"
-              disabled={!preparation.canApply}
-              onClick={() => void preparation.apply()}
-            >
-              {applying ? <Spinner /> : <HugeiconsIcon icon={PlusSignIcon} />}
-              Add {preparation.acceptedCount || ""} accepted{" "}
-              {preparation.acceptedCount === 1 ? "topic" : "topics"}
-            </Button>
-          </div>
-        </header>
-        <div className="min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto p-4">
-          {preparation.error && (
-            <div
-              role="alert"
-              className="flex gap-2 rounded-2xl bg-destructive/10 p-4 text-sm text-destructive"
-            >
-              <HugeiconsIcon
-                icon={Alert02Icon}
-                size={16}
-                className="shrink-0"
-              />
-              <div className="min-w-0 space-y-1 wrap-anywhere">
-                <p>{preparation.error}</p>
-                <p className="text-foreground">
-                  Your frozen review is available. You can retry or continue
-                  manually.
+                  <HugeiconsIcon
+                    icon={Tick02Icon}
+                    size={14}
+                    className="text-review-validated"
+                  />
+                  <span className="flex-1">
+                    Preparation finished
+                    {progress && state?.updatedAt
+                      ? ` in ${duration(progress.startedAt, Number(state.updatedAt))}`
+                      : ""}
+                  </span>
+                  Details
+                  <HugeiconsIcon
+                    icon={ArrowDown01Icon}
+                    size={14}
+                    className={cn(
+                      "transition-transform",
+                      !details && "-rotate-90"
+                    )}
+                  />
+                </button>
+                {details && (
+                  <div className="space-y-3">
+                    {rows}
+                    {progress && (
+                      <PreparationProgress
+                        key={progress.runId}
+                        progress={progress}
+                        batches={state?.activeBatches}
+                        showDraft={state?.provider !== "codex"}
+                        complete
+                        checking={false}
+                        status={preparation.status}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="flex size-12 items-center justify-center rounded-2xl bg-review-validated-soft text-review-validated">
+                <HugeiconsIcon icon={Tick02Icon} size={24} />
+              </div>
+              <div className="space-y-3">
+                <h1 className="text-3xl leading-10 font-semibold tracking-tight">
+                  Your review is ready
+                </h1>
+                <p className="text-base leading-7 text-muted-foreground">
+                  {titles.length
+                    ? `Rev explained the changes in ${titles.length} ${titles.length === 1 ? "step" : "steps"}. Read them one at a time; the code is there when you need it.`
+                    : "Rev did not create a guided tour for these changes. You can review the captured files manually."}
                 </p>
               </div>
-            </div>
-          )}
-          {preparation.phase === "cancelled" && (
-            <p role="status" className="rounded-2xl bg-muted p-4 text-sm">
-              {preparation.active
-                ? "Stopping the harness…"
-                : "Preparation stopped. Your frozen review has been kept."}
-            </p>
-          )}
-          {provider === "codex" && preparation.progress && (
-            <PreparationProgress
-              key={preparation.progress.runId}
-              progress={preparation.progress}
-              complete={["suggestions", "applying", "complete"].includes(
-                preparation.phase
-              )}
-              checking={preparation.phase === "checking"}
-              status={preparation.status}
-            />
-          )}
-          {preparation.topics.map((item) => (
-            <PreparationTopicCard
-              key={item.topic.id}
-              item={item}
-              snapshot={workspace.snapshot}
-              disabled={applying}
-              onChoose={(choice) => preparation.choose(item.topic.id, choice)}
-              onEdit={() => setEditing(item.topic)}
-            />
-          ))}
-          {(provider !== "codex" || !preparation.progress) &&
-            (preparation.active || preparation.phase === "loading") && (
-              <section
-                role="status"
-                className="space-y-2.5 rounded-3xl border border-dashed px-4 py-3.5"
+              <ol
+                className="space-y-0.5 rounded-3xl border p-2"
+                aria-label="Steps of the review"
               >
-                <p className="flex items-center gap-2.5 text-sm text-muted-foreground">
-                  <Spinner className="size-4" />
-                  {preparation.status}
+                {titles.map((title, index) => (
+                  <li
+                    key={index}
+                    className="flex items-center gap-3 rounded-xl px-2 py-1.5 text-sm"
+                  >
+                    <span className="flex size-5.5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-medium text-muted-foreground">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{title}</span>
+                  </li>
+                ))}
+              </ol>
+              {preparation.error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {preparation.error}
                 </p>
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-3/4" />
-              </section>
-            )}
-          {preparation.phase === "ready" && (
-            <div className="space-y-3 rounded-3xl border border-dashed p-6 text-sm text-muted-foreground">
-              <HugeiconsIcon icon={AiMagicIcon} size={24} />
-              <p>{preparation.status}</p>
-              <p>
-                The review is already captured. Retry preparation or continue
-                manually.
-              </p>
-            </div>
+              )}
+              <div className="flex items-center gap-2 pt-2">
+                <Button
+                  size="lg"
+                  onClick={onStart}
+                  disabled={!preparation.readyToOpen}
+                  autoFocus
+                >
+                  {titles.length ? "Start review" : "Review files"}
+                </Button>
+                {preparation.readyToOpen ? (
+                  <Kbd>↵</Kbd>
+                ) : (
+                  <span role="status" className="text-xs text-muted-foreground">
+                    Loading the prepared review…
+                  </span>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-muted-foreground">
+                  {workspace.review.title} · {files}{" "}
+                  {files === 1 ? "file" : "files"}
+                </p>
+                <h1 className="text-3xl leading-10 font-semibold tracking-tight">
+                  {failed
+                    ? "Rev could not finish"
+                    : "Rev is preparing your review"}
+                </h1>
+                <p className="text-base leading-7 text-muted-foreground">
+                  Rev reads the changes and writes a tour that explains them,
+                  step by step. You can browse elsewhere in the app while Rev
+                  works. Quitting the app stops preparation; you can resume it
+                  explicitly when you return.
+                </p>
+              </div>
+              {rows}
+              {state && (
+                <p className="text-xs text-muted-foreground">
+                  {state.completedBatches} of {state.totalBatches} batches
+                  complete
+                </p>
+              )}
+              {titles.length > 0 && (
+                <ul
+                  aria-label="Prepared outline"
+                  className="space-y-1 text-sm text-muted-foreground"
+                >
+                  {titles.map((title, index) => (
+                    <li key={index}>
+                      {index + 1}. {title}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {preparation.error && (
+                <div
+                  role="alert"
+                  className="flex gap-2.5 rounded-2xl bg-destructive/10 p-4 text-sm text-destructive"
+                >
+                  <HugeiconsIcon
+                    icon={Alert02Icon}
+                    size={16}
+                    className="mt-0.5 shrink-0"
+                  />
+                  <p className="min-w-0 wrap-anywhere">{preparation.error}</p>
+                </div>
+              )}
+              {(state?.status === "cancelled" ||
+                state?.status === "interrupted") && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  {active
+                    ? "Stopping the harness…"
+                    : "Preparation stopped. The review files are kept."}
+                </p>
+              )}
+              {progress && (
+                <PreparationProgress
+                  key={progress.runId}
+                  progress={progress}
+                  batches={state?.activeBatches}
+                  showDraft={state?.provider !== "codex"}
+                  complete={false}
+                  checking={state?.phase === "checking"}
+                  status={preparation.status}
+                />
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                  Rev never changes your files.
+                </p>
+                <Button variant="ghost" onClick={onLeave}>
+                  Continue browsing
+                </Button>
+                {active ? (
+                  <Button
+                    variant="ghost"
+                    disabled={preparation.pending}
+                    onClick={cancel}
+                  >
+                    Cancel <Kbd>Esc</Kbd>
+                  </Button>
+                ) : failed || preparation.error ? (
+                  <Button
+                    variant="secondary"
+                    disabled={preparation.pending}
+                    onClick={() => void preparation.start()}
+                  >
+                    {state?.canResume ? "Resume preparation" : "Try again"}
+                  </Button>
+                ) : null}
+              </div>
+            </>
           )}
         </div>
-        <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t glass-bar px-6 py-3">
-          <span className="size-3 shrink-0 rounded-full border border-dashed border-muted-foreground" />
-          <p className="min-w-0 flex-1 text-xs leading-4 text-muted-foreground">
-            {outsideFiles.length}{" "}
-            {outsideFiles.length === 1 ? "file has" : "files have"} changes
-            outside accepted topics.
-            {hasProposal && (
-              <span className="block">
-                Suggestions reference {proposedFiles.size} of {files} files.{" "}
-                {preparation.acceptedCount === 0
-                  ? "Accept topics to include them in the tour."
-                  : "Only linked changes are included."}
-              </span>
-            )}
-          </p>
-          <Button
-            variant="ghost"
-            size="xs"
-            disabled={!outside.length}
-            onClick={() => setShowOutside(true)}
-          >
-            <HugeiconsIcon icon={ArrowRight01Icon} />
-            View files
-          </Button>
-        </footer>
-      </main>
-      {editing && (
-        <PreparationTopicEditor
-          key={editing.id}
-          topic={editing}
-          snapshot={workspace.snapshot}
-          onSave={preparation.edit}
-          onClose={() => setEditing(null)}
-        />
-      )}
-      {showOutside && (
-        <Dialog open onOpenChange={setShowOutside}>
-          <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
-            <DialogTitle>Outside the tour</DialogTitle>
-            <DialogDescription>
-              Files with changes outside accepted topics. Suggestions may
-              reference a file without covering every change. Accepting a topic
-              does not mark code as reviewed.
-            </DialogDescription>
-            <ul
-              className="min-h-0 space-y-2 overflow-y-auto"
-              aria-label="Files outside the tour"
-            >
-              {outsideFiles.map((file) => (
-                <li
-                  key={file.path}
-                  className="space-y-1 rounded-xl bg-muted p-3 text-xs wrap-anywhere"
-                >
-                  <p className="font-mono">{file.path}</p>
-                  <p className="text-muted-foreground">
-                    {file.layers.join(" · ")} · {file.anchors.length} of{" "}
-                    {file.total} changes outside accepted topics
-                  </p>
-                  {hasProposal && (
-                    <p className="text-muted-foreground">
-                      {proposedFiles.has(file.path)
-                        ? "Referenced by suggestions; some changes are not in accepted topics."
-                        : "Not referenced by any suggested topic."}
-                    </p>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </DialogContent>
-        </Dialog>
-      )}
-    </div>
+      </div>
+    </main>
   )
 }

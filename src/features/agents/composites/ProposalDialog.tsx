@@ -122,7 +122,7 @@ export function ProposalDialog({
                     />
                     <Textarea
                       aria-label="Proposed step explanation"
-                      value={step.explanation}
+                      value={step.documents.intermediate.body}
                       onChange={(e) =>
                         setContent({
                           ...content,
@@ -132,7 +132,16 @@ export function ProposalDialog({
                                   ...t,
                                   steps: t.steps.map((s, j) =>
                                     j === stepIndex
-                                      ? { ...s, explanation: e.target.value }
+                                      ? {
+                                          ...s,
+                                          documents: {
+                                            ...s.documents,
+                                            intermediate: {
+                                              ...s.documents.intermediate,
+                                              body: e.target.value,
+                                            },
+                                          },
+                                        }
                                       : s
                                   ),
                                 }

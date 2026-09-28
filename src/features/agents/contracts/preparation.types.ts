@@ -1,21 +1,9 @@
-import type {
-  ProposalDiagnostic,
-  Topic,
-} from "@/lib/desktop/contracts.generated"
-
-export type TopicChoice = "pending" | "accepted" | "rejected"
-export type PreparedTopic = {
-  topic: Topic
-  choice: TopicChoice
-  diagnostics: ProposalDiagnostic[]
-}
+/** Rev writes the review, checks its references and saves it; no acceptance step. */
 export type PreparationPhase =
   | "loading"
-  | "ready"
   | "running"
   | "checking"
-  | "suggestions"
-  | "cancelled"
-  | "error"
   | "applying"
   | "complete"
+  | "cancelled"
+  | "error"

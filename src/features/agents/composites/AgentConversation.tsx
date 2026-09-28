@@ -6,7 +6,6 @@ import {
   ArrowRight01Icon,
   Copy01Icon,
   GitCommitIcon,
-  NoteEditIcon,
   SentIcon,
   StopIcon,
 } from "@hugeicons/core-free-icons"
@@ -37,8 +36,6 @@ import { useProviderStatus } from "../hooks/useProviderStatus"
 import { harnessNames } from "../hooks/useRevStatus"
 
 const actionLabels: Record<string, string> = {
-  ask: "Ask a question",
-  topics: "Suggest review topics",
   file: "Explain this file",
   block: "Explain a block",
   glossary: "Suggest project definitions",
@@ -60,14 +57,13 @@ function RevHeader({ time }: { time?: string }) {
   )
 }
 
-/** Ask Rev from the current reading position; the harness explores as needed. */
+/** Code Explain generates structured explanations and glossary proposals. */
 export function AgentConversation({
   reviewId,
   snapshot,
   initialPath,
   contextLabel,
-  onSave,
-  actions = ["ask", "topics"],
+  actions = ["file", "block", "glossary", "refresh"],
   onApplied,
   className,
 }: {
@@ -76,7 +72,6 @@ export function AgentConversation({
   initialPath?: string
   /** Current reading position shown in the context, e.g. "Step 2 · validation.rs · 18–34". */
   contextLabel?: string
-  onSave?: (run: AgentRun) => void
   actions?: string[]
   onApplied?: () => void
   className?: string
@@ -123,7 +118,7 @@ export function AgentConversation({
       alive = false
     }
   }, [reviewId, snapshot.repositoryId])
-  const [question, setQuestion] = useState("")
+  const [instructions, setInstructions] = useState("")
   const [asked, setAsked] = useState("")
   const paths = initialPath ? [initialPath] : []
   const [output, setOutput] = useState("")
@@ -150,11 +145,10 @@ export function AgentConversation({
     reviewId,
     provider,
     action,
-    request: question,
+    request: instructions,
     paths,
   })
-  const canSend =
-    providerReady && !active && (action !== "ask" || !!question.trim())
+  const canSend = providerReady && !active
   const start = async () => {
     if (running.current || !canSend) return
     const id = crypto.randomUUID()
@@ -164,8 +158,8 @@ export function AgentConversation({
     setError("")
     setOutput("")
     setCompleted(null)
-    setAsked(action === "ask" ? question : (actionLabels[action] ?? action))
-    setQuestion("")
+    setAsked(actionLabels[action] ?? action)
+    setInstructions("")
     setStatus("Connecting…")
     const onEvent = (event: AgentEvent) => {
       if (running.current !== event.runId || event.sequence <= sequence.current)
@@ -180,7 +174,7 @@ export function AgentConversation({
         setOutput(run.output)
         setCompleted(run)
         setHistory((items) => [run, ...items])
-        if (action !== "ask") {
+        {
           const draft = await agentCommands.proposal(run.id)
           setProposal(draft)
           setProposals((items) => [draft, ...items])
@@ -256,18 +250,7 @@ export function AgentConversation({
               )}
               {completed && !active && (
                 <div className="flex flex-wrap gap-1">
-                  {onSave && completed.action === "ask" && (
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      disabled={completed.snapshotId !== snapshot.id}
-                      onClick={() => onSave(completed)}
-                    >
-                      <HugeiconsIcon icon={NoteEditIcon} />
-                      Keep as note
-                    </Button>
-                  )}
-                  {completed.action !== "ask" && (
+                  {
                     <Button
                       variant="secondary"
                       size="xs"
@@ -281,7 +264,7 @@ export function AgentConversation({
                     >
                       Review proposal
                     </Button>
-                  )}
+                  }
                   <Button
                     variant="ghost"
                     size="xs"
@@ -297,8 +280,8 @@ export function AgentConversation({
         )}
         {!asked && !output && !active && (
           <p className="text-sm leading-6 text-muted-foreground">
-            Ask Rev about the code in context. Rev explains and suggests; it
-            never validates a passage or resolves a question.
+            Generate an explanation or project definitions from the captured
+            code. Review the result before adding it to Code Explain.
           </p>
         )}
         {!providerReady && (
@@ -329,7 +312,7 @@ export function AgentConversation({
                 size={14}
                 className="transition-transform group-data-[panel-open]/earlier:rotate-90"
               />
-              Earlier answers and pending proposals
+              Earlier generations and pending proposals
             </CollapsibleTrigger>
             <CollapsibleContent className="mt-2 space-y-1">
               {pending.map((p) => (
@@ -370,21 +353,17 @@ export function AgentConversation({
       <footer className="absolute inset-x-0 bottom-0 border-t glass-bar p-3">
         <div className="rounded-3xl border bg-card/60 focus-within:border-ring">
           <Textarea
-            value={question}
+            value={instructions}
             disabled={active}
-            onChange={(e) => setQuestion(e.target.value)}
+            onChange={(e) => setInstructions(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault()
                 void start()
               }
             }}
-            placeholder={
-              action === "ask"
-                ? "Ask Rev about this code…"
-                : "Add instructions for Rev (optional)…"
-            }
-            aria-label="Question for Rev"
+            placeholder="Additional generation instructions (optional)…"
+            aria-label="Generation instructions"
             className="max-h-40 min-h-12 bg-transparent px-3.5 pt-2.5 focus-visible:border-transparent focus-visible:ring-0"
           />
           <div className="flex items-center gap-2 p-2">
@@ -426,7 +405,7 @@ export function AgentConversation({
             ) : (
               <Button
                 size="icon-sm"
-                aria-label="Ask Rev"
+                aria-label="Generate explanation"
                 disabled={!canSend}
                 onClick={() => void start()}
               >
@@ -436,7 +415,7 @@ export function AgentConversation({
           </div>
         </div>
         <p className="mt-2 text-center text-xs text-muted-foreground">
-          Answers are suggestions — never validations.
+          Generated explanations do not validate the review.
         </p>
       </footer>
       {proposal && (

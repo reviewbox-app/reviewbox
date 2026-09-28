@@ -1,5 +1,6 @@
 "use client"
 
+import type { PreparationBatch } from "@/lib/desktop/contracts.generated"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { MarkdownRenderer } from "@/features/markdown/components/MarkdownRenderer"
@@ -56,11 +57,15 @@ export function PreparationProgress({
   complete,
   checking,
   status,
+  batches = [],
+  showDraft = true,
 }: {
   progress: Progress
   complete: boolean
   checking: boolean
   status: string
+  batches?: PreparationBatch[]
+  showDraft?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const scroll = useRef<HTMLDivElement>(null)
@@ -72,15 +77,15 @@ export function PreparationProgress({
     .reverse()
     .find((entry) => entry.type === "group" && entry.counts.inProgress)
   const headline = checking
-    ? "Checking anchors against the review files…"
+    ? "Checking the code references…"
     : progress.outcome === "failed"
       ? "Preparation could not finish."
       : progress.outcome === "cancelled"
         ? "Preparation stopped."
         : complete
-          ? "Suggestions ready for your review."
-          : progress.draft
-            ? "Writing suggested topics…"
+          ? "Tour written."
+          : showDraft && progress.draft
+            ? "Writing the tour…"
             : (currentStep?.text ??
               (currentActivity?.type === "group"
                 ? activityLabels[currentActivity.category]
@@ -135,13 +140,79 @@ export function PreparationProgress({
           }}
           className="max-h-96 space-y-4 overflow-y-auto border-t px-4 py-3"
         >
-          {progress.plan.length > 0 && (
-            <section aria-label="Preparation plan" className="space-y-2">
+          {batches.length > 0 && (
+            <section
+              aria-label="Active preparation batches"
+              className="space-y-2"
+            >
+              <h4 className="text-xs font-medium text-muted-foreground">
+                {batches.length}{" "}
+                {batches.length === 1
+                  ? "coordinator assigned"
+                  : "coordinators assigned"}
+              </h4>
+              <ul className="space-y-2 text-sm">
+                {batches.map((batch) => (
+                  <li key={batch.id} className="flex items-start gap-2">
+                    <Spinner className="mt-1 size-3 shrink-0" />
+                    <span className="min-w-0 wrap-anywhere">
+                      {batch.label}
+                      <span className="block text-xs text-muted-foreground">
+                        {batch.model ?? "Harness default"}
+                        {batch.status === "waitingForProvider" &&
+                          " · Waiting for provider capacity"}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {Object.values(progress.helpers).length > 0 && (
+            <section
+              aria-label="Delegated preparation work"
+              className="space-y-2"
+            >
+              <h4 className="text-xs font-medium text-muted-foreground">
+                Helpers ·{" "}
+                {
+                  Object.values(progress.helpers).filter(
+                    (helper) => helper.status === "inProgress"
+                  ).length
+                }{" "}
+                active
+              </h4>
+              <ul className="space-y-2 text-sm">
+                {Object.values(progress.helpers)
+                  .slice(-6)
+                  .map((helper) => (
+                    <li key={helper.id} className="flex items-start gap-2">
+                      <ProgressMark status={helper.status} />
+                      <span className="min-w-0 flex-1">
+                        {helper.task}
+                        <span className="block text-xs text-muted-foreground">
+                          {helper.model ?? "Model not reported"}
+                        </span>
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {statusLabels[helper.status]}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
+          {Object.entries(progress.plans).map(([batch, plan]) => (
+            <section
+              key={batch}
+              aria-label="Preparation plan"
+              className="space-y-2"
+            >
               <h4 className="text-xs font-medium text-muted-foreground">
                 Plan
               </h4>
               <ol className="space-y-2">
-                {progress.plan.map((step, index) => {
+                {plan.map((step, index) => {
                   const state =
                     progress.outcome && step.status === "inProgress"
                       ? "interrupted"
@@ -167,7 +238,7 @@ export function PreparationProgress({
                 })}
               </ol>
             </section>
-          )}
+          ))}
           {progress.omitted > 0 && (
             <p className="text-xs text-muted-foreground">
               {progress.omitted} earlier activities omitted.
@@ -212,13 +283,13 @@ export function PreparationProgress({
               )
             )}
           </ol>
-          {progress.draft && (
+          {showDraft && progress.draft && (
             <section
-              aria-label="Suggestion draft"
+              aria-label="Tour draft"
               className="space-y-2 rounded-2xl bg-muted/50 p-3"
             >
               <h4 className="text-sm font-medium">
-                {progress.outcome ? "Suggestion draft" : "Writing suggestions"}
+                {progress.outcome ? "Tour draft" : "Writing the tour"}
               </h4>
               <p className="text-xs text-muted-foreground tabular-nums">
                 {progress.draft.characters.toLocaleString()} characters received
@@ -236,8 +307,8 @@ export function PreparationProgress({
                 </ul>
               )}
               <p className="text-xs text-muted-foreground">
-                Draft titles appear as they arrive. Topics and anchors are
-                checked when the full response is ready.
+                Topic titles appear as Rev writes them. Code references are
+                checked at the end.
               </p>
             </section>
           )}

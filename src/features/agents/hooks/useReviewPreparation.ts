@@ -1,310 +1,181 @@
 "use client"
-
 import { useCallback, useEffect, useRef, useState } from "react"
 import type {
-  AgentPreparationContext,
-  AgentRequest,
-  Proposal,
-  Topic,
+  PreparationState,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
-import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
-import { agentCommands } from "../services/agent.commands"
+import { errorMessage } from "@/lib/desktop/review.commands"
+import { preparationCommands } from "../services/preparation.commands"
 import {
   beginProgress,
   finishProgress,
   receiveProgress,
   type PreparationProgress,
 } from "../helpers/preparationProgress.helpers"
-import type {
-  PreparationPhase,
-  PreparedTopic,
-  TopicChoice,
-} from "../contracts/preparation.types"
 
+const phases = {
+  context: "Preparing the captured context…",
+  outline: "Exploring changes and choosing which files need pseudo-code…",
+  documents: "Writing each step for all three reading levels…",
+  files: "Preparing captured files…",
+  pseudocode: "Translating captured file versions into pseudo-code…",
+  checking: "Checking references and publishing the review…",
+}
+
+/** The screen subscribes; Rust owns execution and private checkpoints. */
 export function useReviewPreparation(
   workspace: Workspace,
   provider: string,
-  onApplied: () => void | Promise<void>,
-  onDone: () => void
+  onApplied: () => void | Promise<void>
 ) {
-  const [context, setContext] = useState<AgentPreparationContext | null>(null)
-  const [phase, setPhase] = useState<PreparationPhase>("loading")
-  const [status, setStatus] = useState("Preparing project exploration…")
-  const [error, setError] = useState("")
-  const [topics, setTopics] = useState<PreparedTopic[]>([])
+  const [state, setState] = useState<PreparationState | null>(null)
   const [progress, setProgress] = useState<PreparationProgress | null>(null)
-  const [active, setActive] = useState(false)
-  const [loadVersion, setLoadVersion] = useState(0)
-  const running = useRef<{
-    id: string
-    cancelled: boolean
-    started: boolean
-  } | null>(null)
-  const proposal = useRef<Proposal | null>(null)
-  const applying = useRef(false)
-  const mounted = useRef(false)
-  const identity = `${workspace.review.id}/${workspace.snapshot.id}/${provider}`
-  const currentIdentity = useRef(identity)
+  const [error, setError] = useState("")
+  const [pending, setPending] = useState(false)
+  const [loadedReviewId, setLoadedReviewId] = useState<string | null>(null)
+  const applied = useRef(onApplied)
+  const identity = `${workspace.review.repositoryId}/${workspace.review.id}/${workspace.snapshot.id}`
   const [stateIdentity, setStateIdentity] = useState(identity)
-  // A refreshed snapshot is a new preparation owner. Clear visible drafts in
-  // the same render so the previous snapshot is never offered for acceptance.
   if (stateIdentity !== identity) {
     setStateIdentity(identity)
-    setContext(null)
+    setState(null)
     setProgress(null)
-    setTopics([])
     setError("")
-    setPhase("loading")
-    setStatus("Preparing project exploration…")
-    setActive(false)
+    setLoadedReviewId(null)
   }
-
-  const start = useCallback(async () => {
-    if (running.current || !mounted.current) return
-    const owner = currentIdentity.current
-    const operation = {
-      id: crypto.randomUUID(),
-      cancelled: false,
-      started: false,
-    }
-    const current = () =>
-      mounted.current &&
-      owner === currentIdentity.current &&
-      running.current === operation
-    running.current = operation
-    setProgress(beginProgress(operation.id))
-    setActive(true)
-    setError("")
-    setTopics([])
-    proposal.current = null
-    setPhase("running")
-    setStatus("Preparing review instructions…")
-    const request: AgentRequest = {
-      id: operation.id,
-      reviewId: workspace.review.id,
-      provider,
-      action: "topics",
-      request: "",
-      paths: [],
-    }
-    let sequence = 0
-    let cancellationRetried = false
-    try {
-      const statuses = await reviewCommands.providers()
-      if (!current() || operation.cancelled) return
-      const harness = statuses.find((item) => item.provider === provider)
-      if (!harness?.ready)
-        throw new Error(
-          harness?.message || "This harness is not ready. Check Settings > Rev."
-        )
-      setStatus("Connecting to the harness…")
-      operation.started = true
-      const run = await agentCommands.start(request, (event) => {
-        if (event.runId !== operation.id) return
-        if (!current() || operation.cancelled) {
-          // Cancellation can reach Rust before start_agent registers. The
-          // first event proves registration happened, so cancel once again.
-          if (!cancellationRetried) {
-            cancellationRetried = true
-            void agentCommands.cancel(operation.id).catch(() => {})
-          }
-          return
-        }
-        if (event.sequence <= sequence) return
-        sequence = event.sequence
-        setProgress((state) => (state ? receiveProgress(state, event) : state))
-        if (event.kind === "delta")
-          setStatus("Rev is writing suggested topics…")
-        else if (event.kind !== "completed" && event.kind !== "progress")
-          setStatus(event.text || event.kind)
-      })
-      if (!current() || operation.cancelled) return
-      setProgress((state) =>
-        state ? finishProgress(state, "completed") : state
-      )
-      setPhase("checking")
-      setStatus("Checking anchors against the frozen files…")
-      const draft = await agentCommands.proposal(run.id)
-      if (!current() || operation.cancelled) return
-      if (draft.content.kind !== "topics")
-        throw new Error("Rev did not return a topic proposal.")
-      const diagnostics = await agentCommands.diagnose(
-        workspace.review.id,
-        draft.content
-      )
-      if (!current() || operation.cancelled) return
-      proposal.current = draft
-      setTopics(
-        draft.content.topics.map((topic, index) => ({
-          topic,
-          choice: "pending",
-          diagnostics: diagnostics.filter((item) => item.topicIndex === index),
-        }))
-      )
-      setStatus(
-        diagnostics.length
-          ? "Some anchors need your attention."
-          : "All proposed anchors match the review files."
-      )
-      setPhase("suggestions")
-    } catch (cause) {
-      if (current() && !operation.cancelled) {
-        setProgress((state) =>
-          state ? finishProgress(state, "failed") : state
-        )
-        setError(errorMessage(cause))
-        setPhase("error")
-        setStatus("Preparation could not finish.")
-      }
-    } finally {
-      if (current()) {
-        running.current = null
-        setActive(false)
-        if (operation.cancelled) setPhase("cancelled")
-      }
-    }
-  }, [provider, workspace.review.id])
-
+  const owner = useRef(identity)
+  const ready = useRef<string | null>(null)
+  const sequence = useRef(0)
+  const currentState = useRef<PreparationState | null>(null)
+  const operation = useRef(false)
   useEffect(() => {
-    mounted.current = true
-    currentIdentity.current = identity
-    proposal.current = null
-    applying.current = false
+    applied.current = onApplied
+  }, [onApplied])
+  const receive = useCallback(
+    (value: PreparationState) => {
+      if (owner.current !== identity) return
+      if (
+        value.snapshotId !== workspace.snapshot.id ||
+        value.reviewId !== workspace.review.id
+      )
+        return
+      if (
+        currentState.current &&
+        Number(value.updatedAt) < Number(currentState.current.updatedAt)
+      )
+        return
+      currentState.current = value
+      setState(value)
+      setProgress((old) => {
+        let next =
+          old?.runId === value.id
+            ? old
+            : beginProgress(value.id, Number(value.startedAt))
+        if (value.status === "running" && next.outcome)
+          next = { ...next, outcome: undefined, endedAt: undefined }
+        for (const event of value.events) next = receiveProgress(next, event)
+        sequence.current = next.sequence
+        if (value.status !== "running")
+          next = finishProgress(
+            next,
+            value.status === "ready"
+              ? "completed"
+              : value.status === "failed"
+                ? "failed"
+                : "cancelled",
+            Number(value.updatedAt)
+          )
+        return next
+      })
+      if (value.status === "ready" && ready.current !== value.id) {
+        ready.current = value.id
+        const completionOwner = owner.current
+        void Promise.resolve(applied.current())
+          .then(() => {
+            if (owner.current === completionOwner) {
+              setLoadedReviewId(value.id)
+              setError("")
+            }
+          })
+          .catch((cause) => {
+            if (owner.current === completionOwner) {
+              ready.current = null
+              setError(errorMessage(cause))
+            }
+          })
+      }
+    },
+    [identity, workspace.review.id, workspace.snapshot.id]
+  )
+  useEffect(() => {
+    owner.current = identity
+    sequence.current = 0
+    currentState.current = null
+    ready.current = null
     let alive = true
-    void agentCommands
-      .preparationContext(workspace.review.id)
-      .then((value) => {
-        if (!alive || value.snapshotId !== workspace.snapshot.id) return
-        setContext(value)
-        void start()
-      })
-      .catch((cause) => {
-        if (alive) {
-          setError(errorMessage(cause))
-          setPhase("error")
-        }
-      })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async (initial = false) => {
+      try {
+        let value = await preparationCommands.get(
+          workspace.review.id,
+          initial ? undefined : sequence.current
+        )
+        if (!alive) return
+        // An existing interrupted job is displayed and waits for explicit resume.
+        if (!value && initial)
+          value = await preparationCommands.start(workspace.review.id, provider)
+        if (alive && value) receive(value)
+      } catch (cause) {
+        if (alive) setError(errorMessage(cause))
+      }
+      if (alive) timer = setTimeout(() => void poll(), 800)
+    }
+    void poll(true)
     return () => {
       alive = false
-      mounted.current = false
-      const operation = running.current
-      running.current = null
-      if (operation) {
-        operation.cancelled = true
-        if (operation.started)
-          void agentCommands.cancel(operation.id).catch(() => {})
-      }
+      if (timer) clearTimeout(timer)
     }
-  }, [identity, start, workspace.review.id, workspace.snapshot.id, loadVersion])
-
-  const cancel = useCallback(() => {
-    const operation = running.current
-    if (!operation) return
-    operation.cancelled = true
-    setProgress((state) => (state ? finishProgress(state, "cancelled") : state))
-    setStatus("Stopping Rev…")
-    setPhase("cancelled")
-    if (operation.started)
-      void agentCommands.cancel(operation.id).catch((cause) => {
-        if (mounted.current) setError(errorMessage(cause))
-      })
-  }, [])
-
-  const choose = (id: string, choice: TopicChoice) =>
-    setTopics((items) =>
-      items.map((item) => (item.topic.id === id ? { ...item, choice } : item))
-    )
-  const edit = async (topic: Topic) => {
-    const owner = currentIdentity.current
-    if (!topics.some((item) => item.topic.id === topic.id))
-      throw new Error(
-        "This proposal changed. Close the editor and reopen the current topic."
-      )
-    const next = topics.map((item) =>
-      item.topic.id === topic.id
-        ? { ...item, topic, choice: "pending" as const }
-        : item
-    )
-    const diagnostics = await agentCommands.diagnose(workspace.review.id, {
-      kind: "topics",
-      topics: next.map((item) => item.topic),
-    })
-    if (mounted.current && currentIdentity.current === owner)
-      setTopics(
-        next.map((item, index) => ({
-          ...item,
-          diagnostics: diagnostics.filter(
-            (diagnostic) => diagnostic.topicIndex === index
-          ),
-        }))
-      )
-  }
-  const accepted = topics.filter((item) => item.choice === "accepted")
-  const apply = async () => {
-    const draft = proposal.current
-    const owner = currentIdentity.current
-    const current = () => mounted.current && currentIdentity.current === owner
-    if (
-      !draft ||
-      !accepted.length ||
-      accepted.some((item) => item.diagnostics.length) ||
-      applying.current
-    )
-      return
-    applying.current = true
-    setPhase("applying")
-    setError("")
-    try {
-      await agentCommands.answer(
-        draft.id,
-        draft.revision,
-        { kind: "topics", topics: accepted.map((item) => item.topic) },
-        true
-      )
-      if (!current()) return
-      proposal.current = null
-      setPhase("complete")
-      await onApplied()
-      if (current()) onDone()
-    } catch (cause) {
-      if (current()) {
-        setError(errorMessage(cause))
-        setPhase(proposal.current ? "suggestions" : "complete")
-      }
-    } finally {
-      if (current()) applying.current = false
-    }
-  }
-  return {
-    context,
-    progress,
-    retryContext: () => {
+  }, [identity, provider, receive, workspace.review.id])
+  const mutate = useCallback(
+    async (cancel = false) => {
+      if (operation.current) return
+      operation.current = true
+      setPending(true)
       setError("")
-      setPhase("loading")
-      setLoadVersion((value) => value + 1)
+      const requestOwner = identity
+      try {
+        if (cancel) {
+          await preparationCommands.cancel(workspace.review.id)
+          return
+        }
+        const value = currentState.current?.canResume
+          ? await preparationCommands.resume(workspace.review.id)
+          : await preparationCommands.start(workspace.review.id, provider)
+        if (owner.current === requestOwner) receive(value)
+      } catch (cause) {
+        if (owner.current === requestOwner) setError(errorMessage(cause))
+      } finally {
+        operation.current = false
+        if (owner.current === requestOwner) setPending(false)
+      }
     },
-    phase,
-    status,
-    error,
-    topics,
-    active,
-    acceptedCount: accepted.length,
-    canStart: !active && !!context,
-    canApply:
-      phase === "suggestions" &&
-      accepted.length > 0 &&
-      !accepted.some((item) => item.diagnostics.length),
-    start,
-    cancel,
-    choose,
-    edit,
-    apply,
-    rejectRemaining: () =>
-      setTopics((items) =>
-        items.map((item) =>
-          item.choice === "pending" ? { ...item, choice: "rejected" } : item
-        )
-      ),
+    [identity, provider, receive, workspace.review.id]
+  )
+  return {
+    state,
+    progress,
+    error: error || (state?.error ? errorMessage(state.error) : ""),
+    pending,
+    active: state?.status === "running",
+    readyToOpen: state?.status === "ready" && loadedReviewId === state.id,
+    start: () => mutate(),
+    cancel: useCallback(() => {
+      void mutate(true)
+    }, [mutate]),
+    status: state
+      ? state.status === "ready"
+        ? "Your review is ready."
+        : phases[state.phase]
+      : "Loading preparation…",
   }
 }

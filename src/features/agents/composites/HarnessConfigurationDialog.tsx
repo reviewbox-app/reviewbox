@@ -168,7 +168,7 @@ export function HarnessConfigurationDialog({
             )}
             {mode === "details" && (
               <p className="text-xs text-muted-foreground">
-                Used for Rev’s suggestions, questions and explanations.
+                Used for Rev’s reading paths and explanations.
               </p>
             )}
           </div>

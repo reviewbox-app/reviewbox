@@ -22,6 +22,7 @@ export function ModelSelector({
   executable,
   value,
   defaultLabel,
+  label = "Model",
   disabled,
   onChange,
 }: {
@@ -30,6 +31,7 @@ export function ModelSelector({
   executable?: string
   value: string | null
   defaultLabel: string
+  label?: string
   disabled?: boolean
   onChange: (value: string | null) => void
 }) {
@@ -89,7 +91,7 @@ export function ModelSelector({
       >
         <ComboboxTrigger
           id={id}
-          aria-label="Model"
+          aria-label={label}
           disabled={disabled || !provider}
           render={
             <Button

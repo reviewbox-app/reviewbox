@@ -126,3 +126,88 @@ it("keeps streamed draft outlines separate from activities and ignores later out
   ).toBe(stopped)
   expect(beginProgress("retry").draft).toBeUndefined()
 })
+
+it("keeps concurrent plans, helper models and activities scoped to their batch", () => {
+  let state = beginProgress("parallel")
+  const event = (
+    sequence: number,
+    batchId: string,
+    progress: AgentEvent["progress"]
+  ): AgentEvent => ({
+    runId: "parallel",
+    sequence,
+    batchId,
+    kind: "progress",
+    text: "",
+    progress,
+  })
+  state = receiveProgress(
+    state,
+    event(1, "a", {
+      type: "plan",
+      steps: [{ text: "Explain the file", status: "inProgress" }],
+    })
+  )
+  state = receiveProgress(
+    state,
+    event(2, "b", {
+      type: "plan",
+      steps: [{ text: "Translate the segment", status: "pending" }],
+    })
+  )
+  state = receiveProgress(
+    state,
+    event(3, "a", {
+      type: "plan",
+      steps: [{ text: "Explain the file", status: "completed" }],
+    })
+  )
+  expect(state.plans.b[0].status).toBe("pending")
+  expect(state.plans.a[0].status).toBe("completed")
+  state = receiveProgress(
+    state,
+    event(4, "a", {
+      type: "delegation",
+      id: "helper",
+      parent: "coordinator",
+      task: "Explain",
+      model: "gpt-6-luna",
+      status: "inProgress",
+    })
+  )
+  state = receiveProgress(
+    state,
+    event(5, "a", {
+      type: "delegation",
+      id: "helper",
+      parent: "coordinator",
+      task: "Explain",
+      model: null,
+      status: "completed",
+    })
+  )
+  expect(state.helpers.helper.model).toBe("gpt-6-luna")
+  state = receiveProgress(
+    state,
+    event(6, "a", {
+      type: "activity",
+      id: "a:read",
+      category: "read",
+      status: "completed",
+    })
+  )
+  state = receiveProgress(
+    state,
+    event(7, "b", {
+      type: "activity",
+      id: "b:read",
+      category: "read",
+      status: "inProgress",
+    })
+  )
+  expect(groupProgress(state.entries)).toHaveLength(2)
+  expect(finishProgress(state, "cancelled").helpers.helper.status).toBe(
+    "completed"
+  )
+  expect(beginProgress("retry").helpers).toEqual({})
+})
