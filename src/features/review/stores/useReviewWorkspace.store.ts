@@ -1,36 +1,46 @@
 import { create } from "zustand"
+import type { ReadingLevel } from "@/lib/desktop/contracts.generated"
 
 type Space = "understand" | "review" | "resume"
-type Inspector = "explanation" | "notes" | "ask"
+type ReaderView = "document" | "code"
 interface WorkspaceState {
   space: Space
-  inspector: Inspector
-  noteKind: "note" | "question"
-  setNoteKind: (noteKind: "note" | "question") => void
+  view: ReaderView
+  readerLevel: ReadingLevel
+  codeMode: "real" | "pseudo"
+  filesOpen: boolean
+  explanationRequested: boolean
   split: boolean
-  coverage: boolean
   settings: boolean
   palette: boolean
   setSpace: (space: Space) => void
-  setInspector: (inspector: Inspector) => void
+  setView: (view: ReaderView) => void
+  setReaderLevel: (readerLevel: ReadingLevel) => void
+  setCodeMode: (codeMode: "real" | "pseudo") => void
+  setFilesOpen: (filesOpen: boolean) => void
+  setExplanationRequested: (explanationRequested: boolean) => void
   setSplit: (split: boolean) => void
-  setCoverage: (coverage: boolean) => void
   setSettings: (settings: boolean) => void
   setPalette: (palette: boolean) => void
 }
 export const useReviewWorkspaceStore = create<WorkspaceState>((set) => ({
   space: "review",
-  inspector: "explanation",
-  noteKind: "note",
-  setNoteKind: (noteKind) => set({ noteKind }),
+  view: "document",
+  readerLevel: "intermediate",
+  codeMode: "real",
+  filesOpen: false,
+  explanationRequested: true,
   split: false,
-  coverage: false,
   settings: false,
   palette: false,
   setSpace: (space) => set({ space }),
-  setInspector: (inspector) => set({ inspector }),
+  setView: (view) => set({ view }),
+  setReaderLevel: (readerLevel) => set({ readerLevel }),
+  setCodeMode: (codeMode) => set({ codeMode }),
+  setFilesOpen: (filesOpen) => set({ filesOpen }),
+  setExplanationRequested: (explanationRequested) =>
+    set({ explanationRequested }),
   setSplit: (split) => set({ split }),
-  setCoverage: (coverage) => set({ coverage }),
   setSettings: (settings) => set({ settings }),
   setPalette: (palette) => set({ palette }),
 }))

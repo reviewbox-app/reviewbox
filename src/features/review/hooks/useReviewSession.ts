@@ -6,6 +6,7 @@ import type {
   Coverage,
   Repository,
   ReviewAction,
+  ReadingPosition,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 import {
@@ -15,7 +16,14 @@ import {
   setActiveRepository,
 } from "@/lib/desktop/review.commands"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
-import { anchorFor, readingStep } from "../helpers/review.helpers"
+import {
+  anchorFor,
+  nextReaderTarget,
+  readingStep,
+  readerIdentity,
+  readerCursorKey,
+  readingUnits,
+} from "../helpers/review.helpers"
 
 export function useReviewSession() {
   const [repositories, setRepositories] = useState<Repository[]>([])
@@ -31,23 +39,48 @@ export function useReviewSession() {
   const generation = useRef(0)
   const writing = useRef(false)
   const mutations = useRef<Promise<void>>(Promise.resolve())
-  const { setSpace, setCoverage: showCoverage } = useReviewWorkspaceStore()
-  const accept = useCallback((value: Workspace) => {
+  const pendingPosition = useRef<{
+    identity: string
+    position: ReadingPosition
+  } | null>(null)
+  const { setSpace } = useReviewWorkspaceStore()
+  const accept = useCallback((received: Workspace) => {
+    const pending = pendingPosition.current
+    const value =
+      pending?.identity === readerIdentity(received)
+        ? {
+            ...received,
+            review: { ...received.review, position: pending.position },
+          }
+        : received
     current.current = value
     setWorkspace(value)
     reviewCommands
       .coverage(value.review.id)
       .then((result) => {
         if (
-          current.current?.review.id === value.review.id &&
+          current.current &&
+          readerIdentity(current.current) === readerIdentity(value) &&
           current.current.review.revision === value.review.revision
         )
           setCoverage(result)
       })
       .catch((e) => setError(errorMessage(e)))
   }, [])
+  const acceptCurrent = useCallback(
+    (value: Workspace) => {
+      if (
+        current.current &&
+        readerIdentity(current.current) === readerIdentity(value) &&
+        value.review.revision >= current.current.review.revision
+      )
+        accept(value)
+    },
+    [accept]
+  )
   const install = useCallback(
     (value: Workspace) => {
+      pendingPosition.current = null
       accept(value)
       const position = value.review.position
       const c =
@@ -58,9 +91,8 @@ export function useReviewSession() {
       setSelected(c && p ? anchorFor(value.snapshot, c.id, p) : null)
       setChanged(false)
       setSpace("review")
-      showCoverage(false)
     },
-    [accept, setSpace, showCoverage]
+    [accept, setSpace]
   )
   useEffect(() => {
     if (!desktopAvailable()) return
@@ -192,57 +224,111 @@ export function useReviewSession() {
     },
     [accept]
   )
+  const selectPosition = useCallback(
+    (position: ReadingPosition) => {
+      const value = current.current
+      if (!value) return
+      const pending = { identity: readerIdentity(value), position }
+      pendingPosition.current = pending
+      accept(value)
+      const change = value.snapshot.changes.find(
+        (item) => item.id === position.changeId
+      )
+      const passage = change?.passages.find(
+        (item) => item.id === position.passageId
+      )
+      setSelected(
+        change && passage ? anchorFor(value.snapshot, change.id, passage) : null
+      )
+      void action({ kind: "savePosition", position }).then((saved) => {
+        if (pendingPosition.current !== pending) return
+        pendingPosition.current = null
+        if (
+          !saved &&
+          current.current &&
+          readerIdentity(current.current) === readerIdentity(value)
+        ) {
+          void reviewCommands
+            .load(value.review.id)
+            .then((latest) => {
+              if (
+                current.current &&
+                readerIdentity(current.current) === readerIdentity(latest) &&
+                !pendingPosition.current
+              )
+                accept(latest)
+            })
+            .catch((cause) => setError(errorMessage(cause)))
+        }
+      })
+    },
+    [accept, action]
+  )
+  const selectStep = useCallback(
+    (stepId: string, anchor?: CodeAnchor) => {
+      const value = current.current
+      if (!value) return
+      const unit = readingUnits(value).find(
+        (item) => item.step.step.id === stepId
+      )
+      if (!unit) return
+      const target = anchor ?? unit.anchors[0]
+      selectPosition({
+        ...value.review.position,
+        context: "guided",
+        stepId,
+        changeId: target?.changeId ?? null,
+        passageId: target?.passageId ?? null,
+        line: 0,
+        scrollTop: 0,
+      })
+    },
+    [selectPosition]
+  )
+  const selectFile = useCallback(
+    (fileId: string, changeId?: string) => {
+      const value = current.current
+      const file = value?.review.files.find((item) => item.id === fileId)
+      if (!value || !file) return
+      const change = value.snapshot.changes.find(
+        (item) => item.id === (changeId ?? file.changeIds[0])
+      )
+      selectPosition({
+        ...value.review.position,
+        context: "files",
+        fileId,
+        changeId: change?.id ?? null,
+        passageId: change?.passages[0]?.id ?? null,
+        line: 0,
+        scrollTop: 0,
+      })
+    },
+    [selectPosition]
+  )
   const select = useCallback(
     (anchor: CodeAnchor, stepId?: string) => {
-      // Re-selecting the current passage is also an explicit navigation request.
-      setSelected({ ...anchor })
-      showCoverage(false)
-      const value = current.current
-      if (value && anchor.snapshotId === value.snapshot.id)
-        void action({
-          kind: "savePosition",
-          position: {
-            ...value.review.position,
-            changeId: anchor.changeId,
-            passageId: anchor.passageId,
-            stepId: stepId ?? null,
-            line: 0,
-            scrollTop: 0,
-          },
-        })
+      if (stepId) selectStep(stepId, anchor)
+      else {
+        const file = current.current?.review.files.find((item) =>
+          item.changeIds.includes(anchor.changeId)
+        )
+        if (file) selectFile(file.id, anchor.changeId)
+      }
     },
-    [action, showCoverage]
+    [selectStep, selectFile]
   )
+  const isCurrentCursor = useCallback((key: string) => {
+    return !!current.current && readerCursorKey(current.current) === key
+  }, [])
   const next = useCallback(
     (direction: number) => {
-      if (!workspace) return
-      // Reading order: the steps of the tour, then what is outside it.
-      const steps = workspace.review.topics.flatMap((t) =>
-        t.steps.flatMap((s) =>
-          s.anchors
-            .filter((a) => a.snapshotId === workspace.snapshot.id)
-            .map((a) => ({ anchor: a, stepId: s.id }))
-        )
-      )
-      const inTour = new Set(steps.map((s) => s.anchor.passageId))
-      const rest = workspace.snapshot.changes.flatMap((c) =>
-        c.passages
-          .filter((p) => !inTour.has(p.id))
-          .map((p) => ({
-            anchor: anchorFor(workspace.snapshot, c.id, p),
-            stepId: undefined,
-          }))
-      )
-      const order = [...steps, ...rest]
-      const stepId = readingStep(workspace.review, selected)?.step.id
-      const index = order.findIndex(
-        (a) => a.anchor.passageId === selected?.passageId && a.stepId === stepId
-      )
-      const target =
-        order[Math.max(0, Math.min(order.length - 1, index + direction))]
-      if (target) select(target.anchor, target.stepId)
+      const value = current.current
+      if (!value) return
+      const target = nextReaderTarget(value, direction)
+      if (target?.kind === "file") selectFile(target.fileId)
+      else if (target?.kind === "step") selectStep(target.stepId)
     },
-    [workspace, selected, select]
+    [selectStep, selectFile]
   )
   const refresh = useCallback(async () => {
     if (writing.current) return
@@ -259,7 +345,11 @@ export function useReviewSession() {
         value.review.id,
         value.review.revision
       )
-      if (current.current?.review.id === value.review.id) install(next)
+      if (
+        current.current &&
+        readerIdentity(current.current) === readerIdentity(value)
+      )
+        install(next)
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -268,6 +358,7 @@ export function useReviewSession() {
     }
   }, [install])
   const watchedReviewId = workspace?.review.id
+  const watchedRepositoryId = workspace?.review.repositoryId
   useEffect(() => {
     if (!watchedReviewId) return
     let alive = true
@@ -301,7 +392,7 @@ export function useReviewSession() {
       clearInterval(timer)
       window.removeEventListener("focus", check)
     }
-  }, [watchedReviewId, accept, install])
+  }, [watchedReviewId, watchedRepositoryId, accept, install])
   const watchedSnapshotId = workspace?.snapshot.id
   useEffect(() => {
     if (!watchedSnapshotId) return
@@ -327,12 +418,12 @@ export function useReviewSession() {
       clearInterval(timer)
       window.removeEventListener("focus", check)
     }
-  }, [watchedSnapshotId]) // Snapshot is immutable; revisions must not restart the watcher.
+  }, [watchedSnapshotId, watchedRepositoryId]) // Snapshot is immutable; revisions must not restart the watcher.
   const nextTopic = useCallback(
     (direction: number) => {
       if (!workspace) return
       const topics = workspace.review.topics
-      const currentTopic = readingStep(workspace.review, selected)?.topic.id
+      const currentTopic = readingStep(workspace.review)?.topic.id
       const index = topics.findIndex((t) => t.id === currentTopic)
       const topic =
         topics[Math.max(0, Math.min(topics.length - 1, index + direction))]
@@ -342,9 +433,9 @@ export function useReviewSession() {
       const anchor = step?.anchors.find(
         (a) => a.snapshotId === workspace.snapshot.id
       )
-      if (step && anchor) select(anchor, step.id)
+      if (step && anchor) selectStep(step.id, anchor)
     },
-    [workspace, selected, select]
+    [workspace, selectStep]
   )
   const home = useCallback(async () => {
     await mutations.current
@@ -354,6 +445,7 @@ export function useReviewSession() {
     setRepository(null)
     setWorkspace(null)
     setSelected(null)
+    pendingPosition.current = null
     setNewReview(false)
     setBusy(false)
   }, [])
@@ -375,12 +467,16 @@ export function useReviewSession() {
     create,
     action,
     select,
+    selectStep,
+    selectFile,
     next,
+    isCurrentCursor,
     nextTopic,
     refresh,
     home,
     install,
     accept,
+    acceptCurrent,
     deleted: (id: string) => {
       if (current.current?.review.id !== id) return
       generation.current++

@@ -1,10 +1,11 @@
-import type { ReadingStatus } from "../components/ReviewStatus"
+import { resolveCodeLanguage } from "@/lib/code/languages"
 import type {
   CodeAnchor,
-  Change,
   Passage,
   Review,
   Snapshot,
+  Step,
+  Topic,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 export function anchorFor(
@@ -14,98 +15,137 @@ export function anchorFor(
 ): CodeAnchor {
   return { snapshotId: snapshot.id, changeId, passageId: passage.id }
 }
-/** Several reading steps may deliberately discuss the same source passage. */
-export function readingStep(
-  review: Pick<Review, "topics" | "position">,
-  anchor: CodeAnchor | null
-) {
-  const matches = review.topics.flatMap((topic) =>
-    topic.steps.flatMap((step, index) =>
-      step.anchors.some(
-        (a) =>
-          a.passageId === anchor?.passageId &&
-          a.snapshotId === anchor.snapshotId &&
-          a.changeId === anchor.changeId
-      )
-        ? [{ topic, step, index }]
-        : []
-    )
-  )
-  return (
-    matches.find(({ step }) => step.id === review.position.stepId) ?? matches[0]
-  )
+/** Guided order is independent of the optional file review. */
+export type ReadingUnit = {
+  key: string
+  step: { topic: Topic; step: Step; index: number }
+  anchors: CodeAnchor[]
 }
-export function isValidated(
-  review: Review,
-  anchor: CodeAnchor,
-  fingerprint: string
-) {
-  return review.decisions.some(
-    (d) =>
-      d.anchor.snapshotId === anchor.snapshotId &&
-      d.anchor.passageId === anchor.passageId &&
-      d.fingerprint === fingerprint
-  )
-}
-export function passageStatus(
-  workspace: Workspace,
-  anchor: CodeAnchor
-): ReadingStatus {
-  const passage = workspace.snapshot.changes
-    .find((c) => c.id === anchor.changeId)
-    ?.passages.find((p) => p.id === anchor.passageId)
-  if (anchor.snapshotId !== workspace.snapshot.id || !passage)
-    return "Re-review"
-  if (
-    workspace.review.annotations.some(
-      (n) =>
-        n.question && !n.resolved && n.anchor.passageId === anchor.passageId
-    )
-  )
-    return "Question"
-  if (isValidated(workspace.review, anchor, passage.fingerprint))
-    return "Validated"
-  return workspace.review.examined.includes(passage.id)
-    ? "In progress"
-    : "Unread"
-}
-export function languageFor(path: string) {
-  const ext = path.split(".").at(-1) ?? ""
-  return (
-    (
-      {
-        ts: "typescript",
-        tsx: "typescript",
-        js: "javascript",
-        jsx: "javascript",
-        rs: "rust",
-        py: "python",
-        json: "json",
-        md: "markdown",
-        css: "css",
-        html: "html",
-        go: "go",
-        java: "java",
-        sh: "shell",
-        yml: "yaml",
-        yaml: "yaml",
-        toml: "ini",
-        cpp: "cpp",
-        h: "cpp",
-      } as Record<string, string>
-    )[ext] ?? "plaintext"
+
+export function readingUnits(workspace: Workspace): ReadingUnit[] {
+  return workspace.review.topics.flatMap((topic) =>
+    topic.steps.map((step, index) => ({
+      key: `step:${step.id}`,
+      step: { topic, step, index },
+      anchors: step.anchors.filter(
+        (anchor) =>
+          anchor.snapshotId === workspace.snapshot.id &&
+          workspace.snapshot.changes.some(
+            (change) =>
+              change.id === anchor.changeId &&
+              change.passages.some((passage) => passage.id === anchor.passageId)
+          )
+      ),
+    }))
   )
 }
 
-/** Aggregated state of a topic: attention first, then questions, then progress. */
-export function topicStatus(statuses: ReadingStatus[]): ReadingStatus {
-  if (statuses.includes("Re-review")) return "Re-review"
-  if (statuses.includes("Question")) return "Question"
-  if (statuses.length && statuses.every((s) => s === "Validated"))
-    return "Validated"
-  if (statuses.some((s) => s !== "Unread")) return "In progress"
-  return "Unread"
+/** Only an explicit guided cursor may select a step, never anchor overlap. */
+export function currentUnit(workspace: Workspace) {
+  if (workspace.review.position.context === "files") return null
+  const units = readingUnits(workspace)
+  const index = units.findIndex(
+    (unit) => unit.step.step.id === workspace.review.position.stepId
+  )
+  return index < 0 ? null : { unit: units[index], index }
 }
+
+export function readingStep(review: Pick<Review, "topics" | "position">) {
+  if (review.position.context === "files") return undefined
+  for (const topic of review.topics) {
+    const index = topic.steps.findIndex(
+      (step) => step.id === review.position.stepId
+    )
+    if (index >= 0) return { topic, step: topic.steps[index], index }
+  }
+  return undefined
+}
+
+export function stepDecision(review: Review, stepId: string) {
+  return review.decisions.findLast(
+    (decision) =>
+      decision.target.kind === "step" &&
+      decision.target.stepId === stepId &&
+      decision.state === "validated"
+  )
+}
+export function fileDecision(review: Review, fileId: string) {
+  return review.decisions.findLast(
+    (decision) =>
+      decision.target.kind === "file" &&
+      decision.target.fileId === fileId &&
+      decision.state === "validated"
+  )
+}
+
+export function guidedProgress(review: Review) {
+  const steps = review.topics.flatMap((topic) => topic.steps)
+  const validated = steps.filter((step) => stepDecision(review, step.id)).length
+  return {
+    total: steps.length,
+    validated,
+    complete: steps.length > 0 && validated === steps.length,
+  }
+}
+
+/** Snapshot order is fixed; validation never reorders the file list. */
+export function orderedReviewFiles(workspace: Workspace) {
+  return workspace.review.files
+}
+
+export function pseudoAvailable(
+  file: Workspace["review"]["files"][number],
+  snapshot: Snapshot
+) {
+  if (file.pseudocodeSelected === false || file.pseudocodeSkipReason?.trim())
+    return true
+  const sources = snapshot.changes
+    .filter((change) => file.changeIds.includes(change.id))
+    .flatMap((change) => [
+      ...(change.before ? [`change:${change.id}:before`] : []),
+      ...(change.after ? [`change:${change.id}:after`] : []),
+    ])
+  return (
+    sources.length > 0 &&
+    sources.every((sourceId) =>
+      file.translations.some(
+        (translation) =>
+          translation.sourceId === sourceId && translation.available
+      )
+    )
+  )
+}
+
+export function previousFilePaths(changes: Snapshot["changes"]) {
+  return [
+    ...new Set(
+      changes.flatMap((change) =>
+        change.previousPath ? [change.previousPath] : []
+      )
+    ),
+  ]
+}
+
+export function changeStatus(change: Snapshot["changes"][number]) {
+  if (change.previousPath) return "R"
+  if (!change.after) return "D"
+  if (!change.before) return change.untracked ? "U" : "A"
+  return "M"
+}
+
+export function readerIdentity(workspace: Workspace) {
+  return `${workspace.review.repositoryId}/${workspace.review.id}/${workspace.snapshot.id}`
+}
+
+export function readerCursorKey(workspace: Workspace) {
+  const position = workspace.review.position
+  return `${readerIdentity(workspace)}/${position.context}/${position.context === "files" ? position.fileId : position.stepId}`
+}
+
+export function languageFor(path: string) {
+  return resolveCodeLanguage(path).id
+}
+
 export function fileName(path: string) {
   return path.split("/").at(-1) ?? path
 }
@@ -131,36 +171,10 @@ export function anchorLabel(workspace: Workspace, anchor?: CodeAnchor) {
   if (!change || !passage) return null
   return `${fileName(change.path)} · ${lineRange(passage)}`
 }
-/** Git status letter shown in file rows. */
-export function changeLetter(change: Change) {
-  if (change.binary) return "B"
-  if (change.previousPath) return "R"
-  if (!change.before) return change.layer === "untracked" ? "U" : "A"
-  if (!change.after) return "D"
-  return "M"
-}
-const languageNames: Record<string, string> = {
-  typescript: "TypeScript",
-  javascript: "JavaScript",
-  rust: "Rust",
-  python: "Python",
-  json: "JSON",
-  markdown: "Markdown",
-  css: "CSS",
-  html: "HTML",
-  go: "Go",
-  java: "Java",
-  shell: "Shell",
-  yaml: "YAML",
-  ini: "TOML",
-  cpp: "C++",
-  plaintext: "Plain text",
-}
 export function languageName(path: string) {
-  const language = languageFor(path)
-  return languageNames[language] ?? language
+  return resolveCodeLanguage(path).name
 }
-/** Agent notes are stored as `agent:<harness>:<run>`; humans as `human:<id>`. */
+/** Agent content is attributed as `agent:<harness>:<run>`; humans as `human:<id>`. */
 export function authorOf(author: string) {
   if (author.startsWith("agent:")) return { name: "Rev", agent: true }
   return {
@@ -179,64 +193,20 @@ export function shortTime(timestamp: string | number) {
   if (date.toDateString() === yesterday.toDateString()) return "Yesterday"
   return date.toLocaleDateString([], { month: "short", day: "numeric" })
 }
-/** Plain text of a note body stored as Tiptap JSON (or legacy plain text). */
-export function plainText(body: string) {
-  try {
-    const walk = (node: { text?: string; content?: unknown[] }): string =>
-      (node.text ?? "") +
-      (node.content ?? [])
-        .map((child) => walk(child as { text?: string; content?: unknown[] }))
-        .join(node.content && node.text === undefined ? " " : "")
-    return walk(JSON.parse(body)).replace(/\s+/g, " ").trim()
-  } catch {
-    return body
-  }
-}
 
-/** One row per captured path, even when staged and unstaged layers coexist. */
-export function groupFileAnchors(snapshot: Snapshot, anchors: CodeAnchor[]) {
-  const selected = new Set(
-    anchors
-      .filter((a) => a.snapshotId === snapshot.id)
-      .map((a) => `${a.changeId}/${a.passageId}`)
-  )
-  const files = new Map<
-    string,
-    { path: string; anchors: CodeAnchor[]; layers: string[]; total: number }
-  >()
-  for (const change of snapshot.changes) {
-    const group = files.get(change.path) ?? {
-      path: change.path,
-      anchors: [],
-      layers: [],
-      total: 0,
-    }
-    group.total += change.passages.length
-    for (const passage of change.passages) {
-      if (selected.has(`${change.id}/${passage.id}`)) {
-        group.anchors.push(anchorFor(snapshot, change.id, passage))
-        if (!group.layers.includes(change.layer))
-          group.layers.push(change.layer)
-      }
-    }
-    files.set(change.path, group)
+export function nextReaderTarget(
+  workspace: Workspace,
+  direction: number
+): { kind: "step"; stepId: string } | { kind: "file"; fileId: string } | null {
+  const position = workspace.review.position
+  if (position.context === "files") {
+    const files = orderedReviewFiles(workspace)
+    const index = files.findIndex((file) => file.id === position.fileId)
+    const target = files[index + direction]
+    return target ? { kind: "file", fileId: target.id } : null
   }
-  return [...files.values()].filter((file) => file.anchors.length > 0)
-}
-
-export function outsideReviewFiles(workspace: Workspace) {
-  const covered = new Set(
-    workspace.review.topics
-      .flatMap((topic) => topic.steps.flatMap((step) => step.anchors))
-      .filter((a) => a.snapshotId === workspace.snapshot.id)
-      .map((a) => `${a.changeId}/${a.passageId}`)
-  )
-  return groupFileAnchors(
-    workspace.snapshot,
-    workspace.snapshot.changes.flatMap((change) =>
-      change.passages
-        .filter((passage) => !covered.has(`${change.id}/${passage.id}`))
-        .map((passage) => anchorFor(workspace.snapshot, change.id, passage))
-    )
-  )
+  const units = readingUnits(workspace)
+  const index = currentUnit(workspace)?.index ?? -1
+  const target = units[index + direction]
+  return target ? { kind: "step", stepId: target.step.step.id } : null
 }

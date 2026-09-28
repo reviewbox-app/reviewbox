@@ -8,6 +8,7 @@ import {
   Delete02Icon,
   GitCommitIcon,
   MoreHorizontalIcon,
+  Download01Icon,
 } from "@hugeicons/core-free-icons"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -36,23 +37,16 @@ import type {
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
 import { ReviewStatus } from "../components/ReviewStatus"
-import { plainText, shortTime } from "../helpers/review.helpers"
+import { shortTime } from "../helpers/review.helpers"
+import { readerCommands } from "../services/reader.commands"
+import { getReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 
-function stepOf(
-  review: Review,
-  passageId?: string | null,
-  stepId?: string | null
-) {
-  if (stepId) {
-    for (const topic of review.topics) {
-      const index = topic.steps.findIndex((step) => step.id === stepId)
-      if (index >= 0) return { topic, step: topic.steps[index], index }
-    }
+function stepOf(review: Review, stepId?: string | null) {
+  if (!stepId) return null
+  for (const topic of review.topics) {
+    const index = topic.steps.findIndex((step) => step.id === stepId)
+    if (index >= 0) return { topic, step: topic.steps[index], index }
   }
-  for (const topic of review.topics)
-    for (const [index, step] of topic.steps.entries())
-      if (step.anchors.some((a) => a.passageId === passageId))
-        return { topic, step, index }
   return null
 }
 
@@ -168,9 +162,9 @@ export function ResumeReviews({
     },
   ]
   const position =
-    review && stepOf(review, review.position.passageId, review.position.stepId)
-  const questions =
-    review?.annotations.filter((n) => n.question && !n.resolved) ?? []
+    review &&
+    review.position.context === "guided" &&
+    stepOf(review, review.position.stepId)
   const complete = review ? coverage[review.id]?.complete : false
   return (
     <div
@@ -215,11 +209,7 @@ export function ResumeReviews({
                           status={
                             coverage[item.id]?.complete
                               ? "Validated"
-                              : item.annotations.some(
-                                    (n) => n.question && !n.resolved
-                                  )
-                                ? "Question"
-                                : "In progress"
+                              : "In progress"
                           }
                         />
                       </span>
@@ -248,8 +238,8 @@ export function ResumeReviews({
           <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center gap-4 p-8 text-center">
             <h2 className="text-lg font-medium">No reviews yet</h2>
             <p className="text-sm leading-6 text-muted-foreground">
-              Start by freezing the changes you want to understand. Reviews,
-              questions and decisions are shared in .reviewbox.
+              Start by freezing the changes you want to understand. Reviews and
+              decisions are shared in .reviewbox.
             </p>
             <Button onClick={onNew}>New review</Button>
           </div>
@@ -278,6 +268,19 @@ export function ResumeReviews({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem
+                      onClick={() => {
+                        void readerCommands
+                          .exportSummary(
+                            review.id,
+                            getReadingPreferences().level
+                          )
+                          .catch((cause) => onError(errorMessage(cause)))
+                      }}
+                    >
+                      <HugeiconsIcon icon={Download01Icon} size={16} />
+                      Export Markdown
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
                       variant="destructive"
                       onClick={() => setDeleting(review)}
                     >
@@ -301,7 +304,13 @@ export function ResumeReviews({
                   You stopped here
                 </p>
                 <p className="mt-1 truncate font-medium">
-                  {position?.step.title ?? "Start of the review"}
+                  {position
+                    ? position.step.title
+                    : review.position.context === "files"
+                      ? (review.files.find(
+                          (file) => file.id === review.position.fileId
+                        )?.path ?? "Start of the file review")
+                      : "Start of the review"}
                 </p>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   {position
@@ -314,28 +323,6 @@ export function ResumeReviews({
               </Button>
               <Kbd>↵</Kbd>
             </section>
-            {questions.length > 0 && (
-              <section className="space-y-2">
-                <h3 className="text-sm font-medium">
-                  Open questions{" "}
-                  <span className="font-normal text-muted-foreground">
-                    {questions.length}
-                  </span>
-                </h3>
-                {questions.map((note) => {
-                  const where = stepOf(review, note.anchor.passageId)
-                  return (
-                    <ListRow
-                      key={note.id}
-                      status="Question"
-                      title={plainText(note.body)}
-                      meta={`${where ? `Step ${where.index + 1} · ${where.step.title}` : "Outside the tour"} · asked ${shortTime(note.createdAt)} · waiting for your decision`}
-                      onClick={() => onOpen(review.id)}
-                    />
-                  )
-                })}
-              </section>
-            )}
             {review.decisions.length > 0 && (
               <section className="space-y-2">
                 <h3 className="text-sm font-medium">
@@ -348,20 +335,27 @@ export function ResumeReviews({
                   .slice()
                   .reverse()
                   .map((decision) => {
-                    const where = stepOf(review, decision.anchor.passageId)
-                    const outdated =
-                      decision.anchor.snapshotId !== review.snapshotId
+                    const where =
+                      decision.target.kind === "step"
+                        ? stepOf(review, decision.target.stepId)
+                        : null
+                    const file =
+                      decision.target.kind === "file"
+                        ? review.files.find(
+                            (file) =>
+                              decision.target.kind === "file" &&
+                              file.id === decision.target.fileId
+                          )
+                        : null
+                    const validated = decision.state === "validated"
                     return (
                       <ListRow
                         key={decision.id}
-                        status={outdated ? "Re-review" : "Validated"}
-                        muted={outdated}
+                        status={validated ? "Validated" : "In progress"}
                         title={
-                          where
-                            ? `${where.step.title} · step ${where.index + 1}`
-                            : "Passage outside the tour"
+                          where?.step.title ?? file?.path ?? "Previous decision"
                         }
-                        meta={`Validated ${shortTime(decision.createdAt)} · content ${decision.fingerprint.slice(0, 6)}${outdated ? " · older snapshot" : " · still current"}`}
+                        meta={`${validated ? "Validated" : "Examined"} ${shortTime(decision.createdAt)} · ${decision.target.kind}`}
                         onClick={() => onOpen(review.id)}
                       />
                     )
@@ -382,8 +376,8 @@ export function ResumeReviews({
             <AlertDialogHeader>
               <AlertDialogTitle>Delete “{deleting.title}”?</AlertDialogTitle>
               <AlertDialogDescription>
-                This removes the shared review, its notes and its decisions from
-                .reviewbox. Your source files remain unchanged.
+                This removes the shared review, its documents and its decisions
+                from .reviewbox. Your source files remain unchanged.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

@@ -1,18 +1,20 @@
 "use client"
 import { useEffect, useState } from "react"
 import { useTheme } from "next-themes"
+import { FileIcon } from "@/features/file-icons/components/FileIcon"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   Alert02Icon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
-  CodeIcon,
   Download01Icon,
+  InformationCircleIcon,
   Route01Icon,
   Tick02Icon,
   Upload01Icon,
 } from "@hugeicons/core-free-icons"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -161,10 +163,13 @@ export function OnboardingWorkspace({
           className="min-h-0 flex-1 space-y-0.5 overflow-auto px-1"
         >
           {tours.length === 0 && (
-            <p className="px-2 text-sm leading-6 text-muted-foreground">
-              Durable reading paths through the current code. Create one or
-              import a CodeTour.
-            </p>
+            <Alert size="sm" variant="faded">
+              <HugeiconsIcon icon={InformationCircleIcon} />
+              <AlertDescription>
+                Durable reading paths through the current code. Create one or
+                import a CodeTour.
+              </AlertDescription>
+            </Alert>
           )}
           {tours.map((item) => {
             const visited = item.steps.filter((s) => s.visited).length
@@ -230,11 +235,7 @@ export function OnboardingWorkspace({
       <main className="flex min-w-0 flex-1 overflow-hidden rounded-panel border bg-card">
         <section className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center gap-3 border-b pr-3 pl-4">
-            <HugeiconsIcon
-              icon={CodeIcon}
-              size={16}
-              className="shrink-0 text-muted-foreground"
-            />
+            <FileIcon path={step?.path ?? ""} />
             <span className="min-w-0 truncate text-sm" title={step?.path}>
               {step ? (
                 <>
@@ -299,6 +300,8 @@ export function OnboardingWorkspace({
                   padding: { top: 8 },
                   folding: false,
                   renderLineHighlight: "none",
+                  wordWrap: "on",
+                  wrappingIndent: "same",
                   scrollBeyondLastLine: false,
                 }}
               />

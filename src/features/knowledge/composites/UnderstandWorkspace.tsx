@@ -9,17 +9,15 @@ import {
 } from "@/components/ui/dialog"
 import { useEffect, useState, useRef } from "react"
 import type { editor } from "monaco-editor"
-import { languageServerCommands } from "@/features/language-servers/services/languageServer.commands"
 import { useTheme } from "next-themes"
+import { FileIcon } from "@/features/file-icons/components/FileIcon"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   AiMagicIcon,
   Alert02Icon,
-  ArrowLeft01Icon,
   ArrowReloadHorizontalIcon,
   BookOpen01Icon,
-  CodeIcon,
   MoreHorizontalIcon,
   Search01Icon,
 } from "@hugeicons/core-free-icons"
@@ -75,9 +73,6 @@ export function UnderstandWorkspace({
   const [onboarding, setOnboarding] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
-  const [back, setBack] = useState<
-    { path: string; line: number; column: number }[]
-  >([])
   const [targetLine, setTargetLine] = useState(1)
   const [finding, setFinding] = useState(false)
   const [occurrenceSection, setOccurrenceSection] = useState<string | null>(
@@ -208,39 +203,10 @@ export function UnderstandWorkspace({
     })
   }
   const definition = async () => {
-    const position = editorRef.current?.getPosition()
-    if (!position || finding) return
+    if (finding) return
     setFinding(true)
     try {
-      const locations = await languageServerCommands.definition(
-        snapshot.id,
-        path,
-        position.lineNumber,
-        position.column
-      )
-      if (locations.length !== 1) {
-        onError(
-          locations.length
-            ? "Several definitions were returned; narrow the symbol before navigating."
-            : "No definition found in this snapshot."
-        )
-        return
-      }
-      const target = locations[0]
-      if (!snapshot.files.some((f) => f.path === target.path)) {
-        onError("This definition is outside the frozen snapshot.")
-        return
-      }
-      setBack([
-        ...back,
-        { path, line: position.lineNumber, column: position.column },
-      ])
-      setPath(target.path)
-      setTargetLine(target.line)
-      if (target.path === path)
-        editorRef.current?.revealLineInCenter(target.line)
-    } catch (error) {
-      onError(errorMessage(error))
+      await editorRef.current?.getAction("reviewbox.definitions")?.run()
     } finally {
       setFinding(false)
     }
@@ -336,11 +302,7 @@ export function UnderstandWorkspace({
           <>
             <div className="flex min-w-0 flex-1 flex-col">
               <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
-                <HugeiconsIcon
-                  icon={CodeIcon}
-                  size={16}
-                  className="shrink-0 text-muted-foreground"
-                />
+                <FileIcon path={path} />
                 <span
                   className="min-w-0 flex-1 basis-20 truncate text-sm"
                   title={path}
@@ -362,21 +324,6 @@ export function UnderstandWorkspace({
                   <Badge variant="secondary">{languageName(path)}</Badge>
                 )}
                 <span className="flex-1" />
-                {back.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      const target = back.at(-1)!
-                      setBack(back.slice(0, -1))
-                      setPath(target.path)
-                      setTargetLine(target.line)
-                    }}
-                  >
-                    <HugeiconsIcon icon={ArrowLeft01Icon} />
-                    Back
-                  </Button>
-                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -407,6 +354,17 @@ export function UnderstandWorkspace({
                     mounted.setPosition({ lineNumber: targetLine, column: 1 })
                   }}
                   value={code}
+                  languageDocument={
+                    file && loaded?.path === path
+                      ? {
+                          snapshotId: snapshot.id,
+                          path,
+                          changeId: null,
+                          side: null,
+                          contentHash: file.content.hash,
+                        }
+                      : undefined
+                  }
                   language={languageFor(path)}
                   theme={reviewboxTheme(resolvedTheme !== "light")}
                   options={{
@@ -420,6 +378,8 @@ export function UnderstandWorkspace({
                     padding: { top: 8 },
                     folding: false,
                     renderLineHighlight: "none",
+                    wordWrap: "on",
+                    wrappingIndent: "same",
                     scrollBeyondLastLine: false,
                     scrollbar: {
                       verticalScrollbarSize: 8,

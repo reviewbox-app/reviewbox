@@ -1,12 +1,7 @@
 import { cn } from "@/lib/utils"
 
 export type ReadingStatus =
-  | "Unread"
-  | "In progress"
-  | "Question"
-  | "Validated"
-  | "Re-review"
-  | "Uncovered"
+  "Unread" | "In progress" | "Validated" | "Re-review" | "Uncovered"
 
 /** 16px reading-state glyph (RB/Status); the label stays available to assistive tech. */
 export function ReviewStatus({
@@ -48,18 +43,9 @@ export function ReviewStatus({
             className="stroke-background"
           />
         </g>
-      ) : status === "Question" || status === "Re-review" ? (
+      ) : status === "Re-review" ? (
         <g>
-          <circle
-            cx="8"
-            cy="8"
-            r="7"
-            className={
-              status === "Question"
-                ? "fill-review-question"
-                : "fill-review-attention"
-            }
-          />
+          <circle cx="8" cy="8" r="7" className="fill-review-attention" />
           <text
             x="8"
             y="11.5"
@@ -68,7 +54,7 @@ export function ReviewStatus({
             fontWeight="600"
             className="fill-background font-sans"
           >
-            {status === "Question" ? "?" : "!"}
+            !
           </text>
         </g>
       ) : (

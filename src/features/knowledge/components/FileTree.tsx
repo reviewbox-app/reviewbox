@@ -4,10 +4,11 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowDown01Icon,
   ArrowRight01Icon,
-  File01Icon,
-  Folder01Icon,
+  InformationCircleIcon,
+  Tick02Icon,
 } from "@hugeicons/core-free-icons"
 import { cn } from "@/lib/utils"
+import { FileIcon, FolderIcon } from "@/features/file-icons/components/FileIcon"
 
 interface Folder {
   name: string
@@ -48,7 +49,19 @@ function buildTree(paths: string[]) {
   return compact(root)
 }
 
-/** Snapshot files as a tree; a dot marks an explanation (blue) or an outdated one (amber). */
+export type FileMark = "explained" | "outdated" | "validated" | "unavailable"
+
+const markLabels: Record<FileMark, string> = {
+  explained: "Explained",
+  outdated: "Explanation outdated",
+  validated: "Validated",
+  unavailable: "Pseudo-code unavailable",
+}
+
+/**
+ * Snapshot files as a tree, every folder closed at first. A dot marks an
+ * explanation (blue) or an outdated one (amber); a tick, a validated file.
+ */
 export function FileTree({
   paths,
   selected,
@@ -57,13 +70,13 @@ export function FileTree({
 }: {
   paths: string[]
   selected: string
-  marks: Record<string, "explained" | "outdated">
+  marks: Record<string, FileMark>
   onSelect: (path: string) => void
 }) {
   const tree = useMemo(() => buildTree(paths), [paths])
-  const [closed, setClosed] = useState<Set<string>>(new Set())
+  const [opened, setOpened] = useState<Set<string>>(new Set())
   const toggle = (path: string) =>
-    setClosed((value) => {
+    setOpened((value) => {
       const next = new Set(value)
       if (next.has(path)) next.delete(path)
       else next.add(path)
@@ -76,7 +89,7 @@ export function FileTree({
       {[...folder.folders.values()]
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((child) => {
-          const open = !closed.has(child.path)
+          const open = opened.has(child.path)
           return (
             <li key={child.path}>
               <button
@@ -90,11 +103,7 @@ export function FileTree({
                   size={14}
                   className="shrink-0 text-muted-foreground"
                 />
-                <HugeiconsIcon
-                  icon={Folder01Icon}
-                  size={16}
-                  className="shrink-0 text-muted-foreground"
-                />
+                <FolderIcon path={child.path} open={open} />
                 <span className="truncate">{child.name}</span>
               </button>
               {open && <ul>{render(child, depth + 1)}</ul>}
@@ -113,28 +122,36 @@ export function FileTree({
             style={{ paddingLeft: 26 + depth * 14 }}
             onClick={() => onSelect(path)}
           >
-            <HugeiconsIcon
-              icon={File01Icon}
-              size={16}
-              className="shrink-0 text-muted-foreground"
-            />
+            <FileIcon path={path} />
             <span className="min-w-0 flex-1 truncate">
               {path.split("/").at(-1)}
             </span>
-            {marks[path] && (
-              <span
-                aria-label={
-                  marks[path] === "outdated"
-                    ? "Explanation outdated"
-                    : "Explained"
-                }
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  marks[path] === "outdated"
-                    ? "bg-review-attention"
-                    : "bg-primary"
-                )}
+            {marks[path] === "validated" ? (
+              <HugeiconsIcon
+                icon={Tick02Icon}
+                size={14}
+                aria-label={markLabels.validated}
+                className="shrink-0 text-review-validated"
               />
+            ) : marks[path] === "unavailable" ? (
+              <HugeiconsIcon
+                icon={InformationCircleIcon}
+                size={14}
+                aria-label={markLabels.unavailable}
+                className="shrink-0 text-review-attention"
+              />
+            ) : (
+              marks[path] && (
+                <span
+                  aria-label={markLabels[marks[path]]}
+                  className={cn(
+                    "size-1.5 shrink-0 rounded-full",
+                    marks[path] === "outdated"
+                      ? "bg-review-attention"
+                      : "bg-primary"
+                  )}
+                />
+              )
             )}
           </button>
         </li>
