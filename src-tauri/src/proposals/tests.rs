@@ -49,7 +49,21 @@ fn draft_anchor_diagnostics_allow_repair_but_never_allow_invalid_application() {
         steps: vec![Step {
             id: "step".into(),
             title: "Read assignment".into(),
-            explanation: "Check behavior".into(),
+            documents: {
+                let doc = ReviewDocument {
+                    term_aliases: Default::default(),
+                    body: "Check behavior".into(),
+                    references: vec![],
+                    terms: vec![],
+                    reading_seconds: 10,
+                };
+                LevelDocuments {
+                    glossary: vec![],
+                    beginner: doc.clone(),
+                    intermediate: doc.clone(),
+                    developer: doc,
+                }
+            },
             anchors: vec![CodeAnchor {
                 snapshot_id: workspace.snapshot.id.clone(),
                 change_id: "invented".into(),

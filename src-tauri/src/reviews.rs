@@ -6,7 +6,10 @@ pub fn create(storage: &Storage, request: CaptureRequest) -> AppResult<Workspace
     publish_creation(storage, snapshot)
 }
 pub(crate) fn publish_creation(storage: &Storage, snapshot: Snapshot) -> AppResult<Workspace> {
+    let files = crate::reader::files(&snapshot);
+    let position = file_position(&snapshot, &files);
     let review = Review {
+        glossary: vec![],
         id: id(),
         title: match snapshot.request.scope {
             Scope::Local => "Local changes",
@@ -21,10 +24,12 @@ pub(crate) fn publish_creation(storage: &Storage, snapshot: Snapshot) -> AppResu
         previous_snapshot_ids: vec![],
         revision: 0,
         topics: vec![],
-        annotations: vec![],
+        mode: ReviewMode::Manual,
+        preparation_id: None,
+        files,
         decisions: vec![],
         examined: vec![],
-        position: ReadingPosition::default(),
+        position,
         created_at: now(),
         updated_at: now(),
     };
@@ -38,6 +43,21 @@ pub(crate) fn publish_creation(storage: &Storage, snapshot: Snapshot) -> AppResu
         ("review", &review.id, None, serde_json::to_value(&review)?),
     ])?;
     Ok(Workspace { review, snapshot })
+}
+pub(crate) fn file_position(snapshot: &Snapshot, files: &[ReviewFile]) -> ReadingPosition {
+    let first_change = files
+        .first()
+        .and_then(|f| f.change_ids.first())
+        .and_then(|id| snapshot.changes.iter().find(|c| &c.id == id));
+    ReadingPosition {
+        context: ReadingContext::Files,
+        file_id: files.first().map(|f| f.id.clone()),
+        change_id: first_change.map(|c| c.id.clone()),
+        passage_id: first_change
+            .and_then(|c| c.passages.first())
+            .map(|p| p.id.clone()),
+        ..ReadingPosition::default()
+    }
 }
 pub fn load(storage: &Storage, id: &str) -> AppResult<Workspace> {
     let review: Review = storage.get("review", id)?;
@@ -64,29 +84,15 @@ pub fn apply(
     revision: u32,
     action: ReviewAction,
 ) -> AppResult<Workspace> {
-    if matches!(
-        action,
-        ReviewAction::SavePosition { .. } | ReviewAction::Examine { .. }
-    ) {
+    if let ReviewAction::SavePosition { position } = action {
         let mut workspace = load(storage, id)?;
-        match action {
-            ReviewAction::SavePosition { position } => {
-                if !position.scroll_top.is_finite() || position.scroll_top < 0.0 {
-                    return Err(AppError::new(
-                        "invalid_position",
-                        "Invalid scroll position.",
-                    ));
-                }
-                workspace.review.position = position;
-            }
-            ReviewAction::Examine { anchor } => {
-                passage(&workspace.snapshot, &anchor)?;
-                if !workspace.review.examined.contains(&anchor.passage_id) {
-                    workspace.review.examined.push(anchor.passage_id);
-                }
-            }
-            _ => unreachable!(),
+        if !position.scroll_top.is_finite() || position.scroll_top < 0.0 {
+            return Err(AppError::new(
+                "invalid_position",
+                "Invalid scroll position.",
+            ));
         }
+        workspace.review.position = position;
         storage.save_reading(&workspace.review)?;
         return Ok(workspace);
     }
@@ -114,7 +120,7 @@ pub fn prepare_action(
             }
             review.title = title.trim().into();
         }
-        ReviewAction::SaveTopics { topics } => {
+        ReviewAction::SaveTopics { mut topics } => {
             let mut ids = HashSet::new();
             for topic in &topics {
                 if topic.title.trim().is_empty() || !ids.insert(&topic.id) {
@@ -136,99 +142,106 @@ pub fn prepare_action(
                     for anchor in &step.anchors {
                         passage(&workspace.snapshot, anchor)?;
                     }
+                    crate::reader::validate_documents_with_glossary(
+                        storage,
+                        &workspace.snapshot,
+                        &step.documents,
+                        &review.glossary,
+                    )?;
                 }
             }
+            for topic in &mut topics {
+                for step in &mut topic.steps {
+                    crate::reader::estimate_reading_time(&mut step.documents);
+                }
+            }
+            review.mode = if topics.is_empty() {
+                ReviewMode::Manual
+            } else {
+                ReviewMode::Guided
+            };
             review.topics = topics;
         }
-        ReviewAction::Validate { anchor } => {
-            let fingerprint = passage(&workspace.snapshot, &anchor)?.fingerprint.clone();
-            if !review.decisions.iter().any(|d| {
-                d.anchor.snapshot_id == anchor.snapshot_id
-                    && d.anchor.passage_id == anchor.passage_id
-            }) {
+        ReviewAction::ExamineStep { step_id } => {
+            let target = DecisionTarget::Step { step_id };
+            let fingerprint = target_fingerprint(&workspace.snapshot, review, &target)?;
+            if !review.decisions.iter().any(|d| d.target == target) {
                 review.decisions.push(Decision {
-                    author: storage.author()?,
                     id: crate::contracts::id(),
-                    anchor,
+                    author: storage.author()?,
+                    target,
+                    state: DecisionState::Examined,
                     fingerprint,
                     created_at: now(),
                 });
             }
         }
-        ReviewAction::Reopen { anchor } => {
-            passage(&workspace.snapshot, &anchor)?;
-            review.decisions.retain(|d| {
-                d.anchor.snapshot_id != anchor.snapshot_id
-                    || d.anchor.passage_id != anchor.passage_id
-            });
-        }
-        ReviewAction::Examine { anchor } => {
-            passage(&workspace.snapshot, &anchor)?;
-            if !review.examined.contains(&anchor.passage_id) {
-                review.examined.push(anchor.passage_id);
+        ReviewAction::ExamineFile { file_id } => {
+            let target = DecisionTarget::File { file_id };
+            let fingerprint = target_fingerprint(&workspace.snapshot, review, &target)?;
+            if !review.decisions.iter().any(|d| d.target == target) {
+                review.decisions.push(Decision {
+                    id: crate::contracts::id(),
+                    author: storage.author()?,
+                    target,
+                    state: DecisionState::Examined,
+                    fingerprint,
+                    created_at: now(),
+                });
             }
         }
-        ReviewAction::AddAnnotation {
-            anchor,
-            body,
-            question,
-        } => {
-            passage(&workspace.snapshot, &anchor)?;
-            if body.trim().is_empty() || body.len() > 128 * 1024 {
-                return Err(AppError::new(
-                    "invalid_note",
-                    "A note must contain between 1 and 131072 bytes.",
-                ));
+        ReviewAction::ValidateStep { step_id } => {
+            let target = DecisionTarget::Step { step_id };
+            let fingerprint =
+                decision_fingerprint(storage, &workspace.snapshot, review, &target, None)?;
+            if !review.decisions.iter().any(|d| {
+                d.target == target
+                    && d.fingerprint == fingerprint
+                    && d.state == DecisionState::Validated
+            }) {
+                review.decisions.retain(|d| d.target != target);
+                review.decisions.push(Decision {
+                    id: crate::contracts::id(),
+                    author: storage.author()?,
+                    target,
+                    state: DecisionState::Validated,
+                    fingerprint,
+                    created_at: now(),
+                });
             }
-            review.annotations.push(Annotation {
-                resolved_by: None,
-                resolved_at: None,
-                id: crate::contracts::id(),
-                anchor,
-                body,
-                question,
-                resolved: false,
-                author: storage.author()?,
-                created_at: now(),
-            });
         }
-        ReviewAction::KeepAgentNote { anchor, run_id } => {
-            passage(&workspace.snapshot, &anchor)?;
-            let run: AgentRun = storage.get("agent_run", &run_id)?;
-            if run.review_id != review.id
-                || run.snapshot_id != workspace.snapshot.id
-                || run.status != "completed"
-                || run.output.trim().is_empty()
-                || run.output.len() > 128 * 1024
-            {
-                return Err(AppError::new(
-                    "invalid_agent_note",
-                    "Only a completed response for this snapshot can be kept.",
-                ));
+        ReviewAction::ValidateFile { file_id, level } => {
+            let target = DecisionTarget::File { file_id };
+            let fingerprint =
+                decision_fingerprint(storage, &workspace.snapshot, review, &target, Some(level))?;
+            if !review.decisions.iter().any(|d| {
+                d.target == target
+                    && d.fingerprint == fingerprint
+                    && d.state == DecisionState::Validated
+            }) {
+                review.decisions.retain(|d| d.target != target);
+                review.decisions.push(Decision {
+                    id: crate::contracts::id(),
+                    author: storage.author()?,
+                    target,
+                    state: DecisionState::Validated,
+                    fingerprint,
+                    created_at: now(),
+                });
             }
-            review.annotations.push(Annotation {
-                resolved_by: None,
-                resolved_at: None,
-                id: crate::contracts::id(),
-                anchor,
-                body: run.output,
-                question: false,
-                resolved: false,
-                author: format!("agent:{}:{}", run.provider, run.id),
-                created_at: now(),
-            });
         }
-        ReviewAction::ResolveQuestion { id, resolved } => {
-            let note = review
-                .annotations
-                .iter_mut()
-                .find(|n| n.id == id && n.question)
-                .ok_or_else(|| AppError::new("not_found", "Question not found."))?;
-            note.resolved = resolved;
-            note.resolved_by = Some(storage.author()?);
-            note.resolved_at = Some(now());
-        }
-        ReviewAction::DeleteAnnotation { id } => review.annotations.retain(|n| n.id != id),
+        ReviewAction::ReopenStep { step_id } => review.decisions.retain(|d| {
+            d.target
+                != DecisionTarget::Step {
+                    step_id: step_id.clone(),
+                }
+        }),
+        ReviewAction::ReopenFile { file_id } => review.decisions.retain(|d| {
+            d.target
+                != DecisionTarget::File {
+                    file_id: file_id.clone(),
+                }
+        }),
         ReviewAction::SavePosition { position } => {
             if !position.scroll_top.is_finite() || position.scroll_top < 0.0 {
                 return Err(AppError::new(
@@ -243,46 +256,183 @@ pub fn prepare_action(
     review.updated_at = now();
     Ok(workspace)
 }
+fn target_fingerprint(
+    snapshot: &Snapshot,
+    review: &Review,
+    target: &DecisionTarget,
+) -> AppResult<String> {
+    let value = match target {
+        DecisionTarget::Step { step_id } => {
+            let step = review
+                .topics
+                .iter()
+                .flat_map(|t| &t.steps)
+                .find(|s| &s.id == step_id)
+                .ok_or_else(|| AppError::new("invalid_step", "Step does not exist."))?;
+            let mut bindings = Vec::new();
+            for anchor in &step.anchors {
+                let p = passage(snapshot, anchor)?;
+                bindings.push(p.fingerprint.clone());
+            }
+            serde_json::json!({"documents":step.documents,"bindings":bindings})
+        }
+        DecisionTarget::File { file_id } => {
+            let canonical = crate::reader::files(snapshot);
+            let file = canonical
+                .iter()
+                .find(|f| &f.id == file_id)
+                .ok_or_else(|| AppError::new("invalid_file", "File does not exist."))?;
+            let changes: Vec<_> = file
+                .change_ids
+                .iter()
+                .map(|id| {
+                    snapshot
+                        .changes
+                        .iter()
+                        .find(|c| &c.id == id)
+                        .ok_or_else(|| {
+                            AppError::new("stale_file", "File change is no longer captured.")
+                        })
+                })
+                .collect::<AppResult<_>>()?;
+            serde_json::json!(changes.iter().map(|c|serde_json::json!({"path":c.path,"previousPath":c.previous_path,"layer":c.layer,"before":c.before,"after":c.after})).collect::<Vec<_>>())
+        }
+    };
+    Ok(fingerprint(&serde_json::to_vec(&value)?))
+}
+fn decision_fingerprint(
+    storage: &Storage,
+    snapshot: &Snapshot,
+    review: &Review,
+    target: &DecisionTarget,
+    level: Option<ReadingLevel>,
+) -> AppResult<String> {
+    match target {
+        DecisionTarget::Step { step_id } => {
+            let step = review
+                .topics
+                .iter()
+                .flat_map(|t| &t.steps)
+                .find(|s| &s.id == step_id)
+                .ok_or_else(|| AppError::new("invalid_step", "Step does not exist."))?;
+            crate::reader::validate_documents_with_glossary(
+                storage,
+                snapshot,
+                &step.documents,
+                &review.glossary,
+            )?;
+            for anchor in &step.anchors {
+                passage(snapshot, anchor)?;
+                let c = snapshot
+                    .changes
+                    .iter()
+                    .find(|c| c.id == anchor.change_id)
+                    .ok_or_else(|| AppError::new("invalid_anchor", "Change is missing."))?;
+                for blob in [&c.before, &c.after].into_iter().flatten() {
+                    storage.read_blob(&blob.hash)?;
+                }
+            }
+        }
+        DecisionTarget::File { file_id } => {
+            let canonical = crate::reader::files(snapshot);
+            let file = canonical
+                .iter()
+                .find(|f| &f.id == file_id)
+                .ok_or_else(|| AppError::new("invalid_file", "File does not exist."))?;
+            if level == Some(ReadingLevel::Beginner) {
+                return Err(AppError::new(
+                    "reading_level",
+                    "File validation is unavailable in Beginner mode.",
+                ));
+            }
+            if level == Some(ReadingLevel::Intermediate) {
+                let content = crate::reader::read_file(storage, &review.id, file_id)?;
+                if content.pseudocode_selected != Some(false)
+                    && content.pseudocode_skip_reason.is_none()
+                    && file.translations.iter().any(|t| {
+                        !content.translations.iter().any(|v| {
+                            v.source_id == t.source_id
+                                && v.source_hash == t.source_hash
+                                && v.unavailable_reason.is_none()
+                        })
+                    })
+                {
+                    return Err(AppError::new(
+                        "missing_pseudocode",
+                        "Pseudocode is unavailable for part of this file.",
+                    ));
+                }
+            }
+            for t in &file.translations {
+                let source = crate::reader::sources(snapshot)
+                    .into_iter()
+                    .find(|source| source.source_id == t.source_id && source.hash == t.source_hash)
+                    .ok_or_else(|| {
+                        AppError::new("invalid_reference", "Captured source is missing.")
+                    })?;
+                let bytes = storage.read_blob(&source.hash)?;
+                if bytes.len() != source.size as usize {
+                    return Err(AppError::new(
+                        "corrupt_blob",
+                        "Captured source size does not match.",
+                    ));
+                }
+            }
+        }
+    }
+    target_fingerprint(snapshot, review, target)
+}
 pub fn coverage(workspace: &Workspace) -> Coverage {
     let review = &workspace.review;
-    let snapshot = &workspace.snapshot;
-    let all: HashSet<_> = snapshot
-        .changes
+    let targets: Vec<_> = if review.mode == ReviewMode::Guided {
+        review
+            .topics
+            .iter()
+            .flat_map(|t| {
+                t.steps.iter().map(|s| DecisionTarget::Step {
+                    step_id: s.id.clone(),
+                })
+            })
+            .collect()
+    } else {
+        review
+            .files
+            .iter()
+            .map(|f| DecisionTarget::File {
+                file_id: f.id.clone(),
+            })
+            .collect()
+    };
+    let validated = targets
         .iter()
-        .flat_map(|c| c.passages.iter().map(|p| p.id.as_str()))
-        .collect();
-    let covered: HashSet<_> = review
-        .topics
-        .iter()
-        .flat_map(|t| t.steps.iter())
-        .flat_map(|s| s.anchors.iter())
-        .filter(|a| a.snapshot_id == snapshot.id)
-        .map(|a| a.passage_id.as_str())
-        .collect();
-    let validated: HashSet<_> = review
-        .decisions
-        .iter()
-        .filter(|d| passage(snapshot, &d.anchor).is_ok_and(|p| p.fingerprint == d.fingerprint))
-        .map(|d| d.anchor.passage_id.as_str())
-        .collect();
-    let examined: HashSet<_> = review
-        .examined
-        .iter()
-        .map(String::as_str)
-        .chain(validated.iter().copied())
-        .collect();
-    let questions = review
-        .annotations
-        .iter()
-        .filter(|n| n.question && !n.resolved)
+        .filter(|target| {
+            target_fingerprint(&workspace.snapshot, review, target).is_ok_and(|fp| {
+                review.decisions.iter().any(|d| {
+                    &d.target == *target
+                        && d.fingerprint == fp
+                        && d.state == DecisionState::Validated
+                })
+            })
+        })
         .count() as u32;
+    let examined = targets
+        .iter()
+        .filter(|target| {
+            target_fingerprint(&workspace.snapshot, review, target).is_ok_and(|fp| {
+                review
+                    .decisions
+                    .iter()
+                    .any(|d| &d.target == *target && d.fingerprint == fp)
+            })
+        })
+        .count() as u32;
+    let total = targets.len() as u32;
     Coverage {
-        total: all.len() as u32,
-        examined: all.intersection(&examined).count() as u32,
-        validated: validated.len() as u32,
-        outside: all.difference(&covered).count() as u32,
-        questions,
-        complete: !all.is_empty() && all == validated && questions == 0,
+        total,
+        examined,
+        validated,
+        outside: 0,
+        complete: total > 0 && total == validated,
     }
 }
 pub fn refresh(storage: &Storage, id: &str, revision: u32) -> AppResult<Workspace> {
@@ -295,67 +445,17 @@ pub fn refresh(storage: &Storage, id: &str, revision: u32) -> AppResult<Workspac
     }
     let previous_review = workspace.review.clone();
     let next = snapshots::capture(storage, workspace.snapshot.request.clone())?;
-    // Conservatively retain a decision only when the changed content matches uniquely
-    // in the same file and layer. Ambiguous matches retain history, never validation.
-    let remap = |anchor: &CodeAnchor| -> Option<CodeAnchor> {
-        let old = workspace
-            .snapshot
-            .changes
-            .iter()
-            .find(|c| c.id == anchor.change_id)?;
-        let old_passage = passage(&workspace.snapshot, anchor).ok()?;
-        let matches: Vec<_> = next
-            .changes
-            .iter()
-            .filter(|c| c.path == old.path && c.layer == old.layer)
-            .flat_map(|c| {
-                c.passages
-                    .iter()
-                    .filter(|p| p.fingerprint == old_passage.fingerprint)
-                    .map(move |p| (c, p))
-            })
-            .collect();
-        let old_count = old
-            .passages
-            .iter()
-            .filter(|p| p.fingerprint == old_passage.fingerprint)
-            .count();
-        if matches.len() != 1 || old_count != 1 {
-            return None;
-        }
-        Some(CodeAnchor {
-            snapshot_id: next.id.clone(),
-            change_id: matches[0].0.id.clone(),
-            passage_id: matches[0].1.id.clone(),
-        })
-    };
-    let mut inherited = Vec::new();
-    for decision in &workspace.review.decisions {
-        if let Some(anchor) = remap(&decision.anchor) {
-            inherited.push(Decision {
-                author: decision.author.clone(),
-                id: crate::contracts::id(),
-                anchor,
-                fingerprint: decision.fingerprint.clone(),
-                created_at: decision.created_at.clone(),
-            });
-        }
-    }
-    for topic in &mut workspace.review.topics {
-        for step in &mut topic.steps {
-            for anchor in &mut step.anchors {
-                if let Some(new) = remap(anchor) {
-                    *anchor = new;
-                }
-            }
-        }
-    }
-    for note in &mut workspace.review.annotations {
-        if let Some(new) = remap(&note.anchor) {
-            note.anchor = new;
-        }
-    }
-    workspace.review.decisions.extend(inherited);
+    // Generated documents and references belong to their exact capture. Keep
+    // them in history; a new capture starts on its own frozen file catalogue.
+    workspace.review.topics.clear();
+    workspace.review.mode = ReviewMode::Manual;
+    workspace.review.files = crate::reader::files(&next);
+    workspace.review.preparation_id = None;
+    workspace.review.decisions.retain(|d| {
+        matches!(d.target, DecisionTarget::File { .. })
+            && target_fingerprint(&next, &previous_review, &d.target)
+                .is_ok_and(|fp| fp == d.fingerprint)
+    });
     workspace
         .review
         .previous_snapshot_ids
@@ -363,7 +463,7 @@ pub fn refresh(storage: &Storage, id: &str, revision: u32) -> AppResult<Workspac
     workspace.review.snapshot_id = next.id.clone();
     workspace.review.revision += 1;
     workspace.review.examined.clear();
-    workspace.review.position = ReadingPosition::default();
+    workspace.review.position = file_position(&next, &workspace.review.files);
     workspace.review.updated_at = now();
     let history_id = format!("{id}@{revision}");
     storage.write_batch(vec![

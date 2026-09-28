@@ -242,10 +242,6 @@ fn working_tree_observed(
 fn tree_hash(tree: &Tree) -> AppResult<String> {
     Ok(fingerprint(&serde_json::to_vec(tree)?))
 }
-pub fn workspace_fingerprint(storage: &Storage, root: &Path, untracked: bool) -> AppResult<String> {
-    let index = git_tree(storage, root, "INDEX")?;
-    tree_hash(&working_tree(storage, root, &index, untracked)?)
-}
 pub(crate) fn content_is_binary(
     old: &[u8],
     new: &[u8],
@@ -325,6 +321,7 @@ fn changed(storage: &Storage, before: &Tree, after: &Tree, layer: &str) -> AppRe
             });
         }
         changes.push(Change {
+            untracked: layer == "unstaged" && left.is_none(),
             id: id(),
             path: path.clone(),
             previous_path: None,
