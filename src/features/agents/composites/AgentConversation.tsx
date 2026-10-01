@@ -71,6 +71,7 @@ function RevHeader({ time }: { time?: string }) {
 /** Code Explain generates structured explanations and glossary proposals. */
 export function AgentConversation({
   reviewId,
+  contextId,
   snapshot,
   initialPath,
   contextLabel,
@@ -79,6 +80,7 @@ export function AgentConversation({
   className,
 }: {
   reviewId: string
+  contextId?: string
   snapshot: Snapshot
   initialPath?: string
   /** Current reading position shown in the context, e.g. "Step 2 · validation.rs · 18–34". */
@@ -117,8 +119,8 @@ export function AgentConversation({
         if (alive) setError(errorMessage(e))
       })
     Promise.all([
-      agentCommands.history(reviewId),
-      agentCommands.proposals(reviewId),
+      agentCommands.history(reviewId, contextId),
+      agentCommands.proposals(reviewId, contextId),
     ])
       .then(([runs, drafts]) => {
         if (alive) {
@@ -132,7 +134,7 @@ export function AgentConversation({
     return () => {
       alive = false
     }
-  }, [reviewId, snapshot.repositoryId])
+  }, [reviewId, contextId, snapshot.repositoryId])
   const [instructions, setInstructions] = useState("")
   const [asked, setAsked] = useState("")
   const paths = initialPath ? [initialPath] : []
@@ -158,6 +160,7 @@ export function AgentConversation({
   const request = (id: string): AgentRequest => ({
     id,
     reviewId,
+    contextId,
     provider,
     action,
     request: instructions,
@@ -217,7 +220,7 @@ export function AgentConversation({
     >
       <div className="min-h-0 flex-1 space-y-5 overflow-auto px-5 pt-5 pb-44">
         <section className="space-y-2.5 rounded-2xl bg-muted/60 p-3">
-          <h3 className="text-xs font-medium">Review context</h3>
+          <h3 className="text-xs font-medium">Source context</h3>
           <div className="flex flex-wrap gap-1.5">
             {contextLabel && <Badge variant="secondary">{contextLabel}</Badge>}
             {paths.map((path) => (
@@ -227,7 +230,9 @@ export function AgentConversation({
             ))}
             <Badge variant="secondary">
               <HugeiconsIcon icon={GitCommitIcon} />
-              snapshot {snapshot.id.slice(0, 6)}
+              {contextId
+                ? "Captured source"
+                : `snapshot ${snapshot.id.slice(0, 6)}`}
             </Badge>
           </div>
         </section>
@@ -269,7 +274,9 @@ export function AgentConversation({
                     <Button
                       variant="secondary"
                       size="xs"
-                      disabled={completed.snapshotId !== snapshot.id}
+                      disabled={
+                        !contextId && completed.snapshotId !== snapshot.id
+                      }
                       onClick={() =>
                         void agentCommands
                           .proposal(completed.id)
@@ -449,7 +456,7 @@ export function AgentConversation({
           </div>
         </div>
         <p className="mt-2 text-center text-xs text-muted-foreground">
-          Generated explanations do not validate the review.
+          Explanations are saved to Code Explain after acceptance.
         </p>
       </footer>
       {proposal && (
@@ -459,7 +466,7 @@ export function AgentConversation({
           onClose={() => {
             setProposal(null)
             void agentCommands
-              .proposals(reviewId)
+              .proposals(reviewId, contextId)
               .then(setProposals)
               .catch((e) => setError(errorMessage(e)))
           }}

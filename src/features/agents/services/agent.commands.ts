@@ -33,8 +33,8 @@ export const agentCommands = {
   proposal(runId: string) {
     return invoke<Proposal>("proposal_from_run", { runId })
   },
-  proposals(reviewId: string) {
-    return invoke<Proposal[]>("list_proposals", { reviewId })
+  proposals(reviewId: string, contextId?: string) {
+    return invoke<Proposal[]>("list_proposals", { reviewId, contextId })
   },
   answer(
     id: string,
@@ -49,7 +49,7 @@ export const agentCommands = {
       accepted,
     })
   },
-  history(reviewId: string) {
-    return invoke<AgentRun[]>("list_agent_runs", { reviewId })
+  history(reviewId: string, contextId?: string) {
+    return invoke<AgentRun[]>("list_agent_runs", { reviewId, contextId })
   },
 }

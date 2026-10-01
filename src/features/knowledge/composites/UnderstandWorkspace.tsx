@@ -63,17 +63,25 @@ import { GlossaryText } from "./GlossaryText"
 import { OccurrenceDialog } from "./OccurrenceDialog"
 export function UnderstandWorkspace({
   snapshot,
-  reviewId,
+  reviewId = "",
+  contextId,
+  onFreezeChange,
   onApplied,
   onError,
 }: {
   snapshot: Snapshot
-  reviewId: string
+  reviewId?: string
+  contextId?: string
+  onFreezeChange?: (frozen: boolean) => void
   onApplied: () => void
   onError: (error: string) => void
 }) {
   const [onboarding, setOnboarding] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
+  const setAgentDialog = (open: boolean) => {
+    onFreezeChange?.(open)
+    setAgentOpen(open)
+  }
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const [targetLine, setTargetLine] = useState(1)
   const [finding, setFinding] = useState(false)
@@ -132,7 +140,11 @@ export function UnderstandWorkspace({
     }
   }, [snapshot.id, path, onError])
   const document = knowledge?.documents.filter((d) => d.path === path).at(-1)
-  const hoveredSection = document?.sections.find((s) => s.id === hovered)
+  const currentFile = snapshot.files.find((f) => f.path === path)
+  const hoveredSection =
+    document?.fingerprint === currentFile?.content.hash
+      ? document?.sections.find((s) => s.id === hovered)
+      : undefined
   // Hovering a section of the explanation highlights its lines in the code.
   useEffect(() => {
     if (!hoveredSection) {
@@ -328,7 +340,7 @@ export function UnderstandWorkspace({
                       </span>
                     </>
                   ) : (
-                    "No files in this snapshot"
+                    "No project files"
                   )}
                 </span>
                 {path && (
@@ -347,7 +359,7 @@ export function UnderstandWorkspace({
                   size="sm"
                   variant="ghost"
                   disabled={!file}
-                  onClick={() => setAgentOpen(true)}
+                  onClick={() => setAgentDialog(true)}
                 >
                   <HugeiconsIcon icon={AiMagicIcon} />
                   Explain with Rev
@@ -355,8 +367,8 @@ export function UnderstandWorkspace({
               </header>
               <div className="min-h-0 flex-1">
                 <CodeEditor
-                  key={`${snapshot.id}/${path}`}
-                  path={`reviewbox://${snapshot.id}/understand/${path}`}
+                  key={path}
+                  path={`reviewbox://current/${snapshot.repositoryId}/understand/${path}`}
                   height="100%"
                   onMount={(mounted) => {
                     editorRef.current = mounted
@@ -410,7 +422,7 @@ export function UnderstandWorkspace({
                   size="sm"
                   variant="ghost"
                   disabled={!file}
-                  onClick={() => setAgentOpen(true)}
+                  onClick={() => setAgentDialog(true)}
                 >
                   <HugeiconsIcon icon={ArrowReloadHorizontalIcon} />
                   {document ? "Refresh" : "Explain"}
@@ -454,8 +466,7 @@ export function UnderstandWorkspace({
                 {document && (
                   <p className="pb-2 text-xs text-muted-foreground">
                     {path.split("/").at(-1)} · {languageName(path)} · written in{" "}
-                    {document.language} · snapshot{" "}
-                    {document.snapshotId.slice(0, 6)}
+                    {document.language} · captured source
                   </p>
                 )}
                 {stale && (
@@ -491,6 +502,7 @@ export function UnderstandWorkspace({
                       <h3 className="mb-1.5 flex flex-wrap items-baseline gap-3 text-sm font-medium">
                         <button
                           className="min-w-0 flex-1 text-left outline-none focus-visible:underline"
+                          disabled={!!stale}
                           onClick={() =>
                             editorRef.current?.revealLineInCenter(
                               section.startLine
@@ -594,7 +606,7 @@ export function UnderstandWorkspace({
           </>
         )}
       </main>
-      <Dialog open={agentOpen} onOpenChange={setAgentOpen}>
+      <Dialog open={agentOpen} onOpenChange={setAgentDialog}>
         <DialogContent className="flex h-[min(720px,85vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
           <div className="border-b px-6 pt-5 pb-4">
             <DialogTitle>Explain {path.split("/").at(-1)} with Rev</DialogTitle>
@@ -607,6 +619,7 @@ export function UnderstandWorkspace({
             className="min-h-0 flex-1"
             key={path}
             reviewId={reviewId}
+            contextId={contextId}
             snapshot={snapshot}
             initialPath={path}
             actions={["file", "block", "glossary", "refresh"]}
