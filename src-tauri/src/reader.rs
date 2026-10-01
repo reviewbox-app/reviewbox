@@ -42,6 +42,7 @@ pub(crate) fn source(
     snapshot: &Snapshot,
     source_id: &str,
 ) -> AppResult<FrozenSource> {
+    let _snapshot = storage.pin_snapshot(&snapshot.id);
     let descriptor = sources(snapshot)
         .into_iter()
         .find(|s| s.source_id == source_id)
@@ -121,26 +122,13 @@ pub(crate) fn files(snapshot: &Snapshot) -> Vec<ReviewFile> {
         changes.sort_by_key(|c| if c.layer == "unstaged" { 1 } else { 0 });
         let path = changes.last().expect("non-empty file group").path.clone();
         let mut file = ReviewFile {
-            pseudocode_selected: None,
-            pseudocode_skip_reason: None,
             id: file_id(&path),
             path,
             change_ids: Vec::new(),
             has_documents: false,
-            translations: Vec::new(),
         };
         for change in changes {
             file.change_ids.push(change.id.clone());
-            for (side, blob) in [("before", &change.before), ("after", &change.after)] {
-                if let Some(blob) = blob {
-                    file.translations.push(PseudoTranslationInfo {
-                        source_id: format!("change:{}:{side}", change.id),
-                        source_hash: blob.hash.clone(),
-                        available: false,
-                        unavailable_reason: Some("Pseudocode has not been prepared.".into()),
-                    });
-                }
-            }
         }
         result.push(file);
     }
@@ -186,6 +174,7 @@ pub(crate) fn validate_documents_with_glossary(
     docs: &LevelDocuments,
     glossary: &[DocumentTerm],
 ) -> AppResult<()> {
+    let _snapshot = storage.pin_snapshot(&snapshot.id);
     let mut shared_ids = HashSet::new();
     for term in docs.glossary.iter().chain(glossary) {
         if !valid_id(&term.id)
@@ -200,9 +189,9 @@ pub(crate) fn validate_documents_with_glossary(
         }
     }
     for (level, doc) in [
-        (ReadingLevel::Beginner, &docs.beginner),
-        (ReadingLevel::Intermediate, &docs.intermediate),
-        (ReadingLevel::Developer, &docs.developer),
+        (ReadingLevel::Essential, &docs.essential),
+        (ReadingLevel::Explained, &docs.explained),
+        (ReadingLevel::Technical, &docs.technical),
     ] {
         if doc.body.trim().is_empty() || doc.reading_seconds == 0 {
             return Err(AppError::new(
@@ -327,7 +316,7 @@ pub(crate) fn validate_documents_with_glossary(
                     let allowed = matches!(
                         language,
                         "summary" | "before-after" | "mermaid" | "pseudocode" | "html"
-                    ) || (level == ReadingLevel::Developer && language == "source");
+                    ) || (level == ReadingLevel::Technical && language == "source");
                     if !allowed {
                         return Err(AppError::new(
                             "invalid_document",
@@ -352,73 +341,15 @@ pub(crate) fn validate_documents_with_glossary(
 }
 pub(crate) fn estimate_reading_time(documents: &mut LevelDocuments) {
     for document in [
-        &mut documents.beginner,
-        &mut documents.intermediate,
-        &mut documents.developer,
+        &mut documents.essential,
+        &mut documents.explained,
+        &mut documents.technical,
     ] {
         // A consistent local estimate, independent of the provider's suggestion.
         document.reading_seconds = (document.body.split_whitespace().count() as u32)
             .div_ceil(3)
             .max(1);
     }
-}
-fn translation(storage: &Storage, snapshot: &Snapshot, value: &PseudoTranslation) -> AppResult<()> {
-    let descriptor = sources(snapshot)
-        .into_iter()
-        .find(|s| s.source_id == value.source_id && s.hash == value.source_hash)
-        .ok_or_else(|| {
-            AppError::new(
-                "invalid_translation",
-                "Pseudocode source does not match the snapshot.",
-            )
-        })?;
-    if let Some(reason) = &value.unavailable_reason {
-        if reason.trim().is_empty() || !value.blocks.is_empty() {
-            return Err(AppError::new(
-                "invalid_translation",
-                "Unavailable pseudocode must have a reason and no partial blocks.",
-            ));
-        }
-        return Ok(());
-    }
-    let frozen = source(storage, snapshot, &descriptor.source_id)?;
-    let text = frozen.text.ok_or_else(|| {
-        AppError::new(
-            "unavailable_source",
-            frozen.unavailable_reason.unwrap_or_default(),
-        )
-    })?;
-    if text.is_empty() && value.blocks.is_empty() {
-        return Ok(());
-    }
-    let lines = text.lines().count().max(1) as u32;
-    let mut next = 1;
-    for block in &value.blocks {
-        if block.start_line < next
-            || block.end_line < block.start_line
-            || block.end_line > lines
-            || block.text.trim().is_empty()
-        {
-            return Err(AppError::new(
-                "invalid_translation",
-                "Pseudocode ranges must be ordered, non-overlapping and inside the source.",
-            ));
-        }
-        next = block.end_line + 1;
-    }
-    Ok(())
-}
-
-fn validate_pseudocode_skip(content: &ReviewFileContent) -> AppResult<()> {
-    if let Some(reason) = &content.pseudocode_skip_reason
-        && (reason.trim().is_empty() || reason.len() > 1200 || !content.translations.is_empty())
-    {
-        return Err(AppError::new(
-            "invalid_translation",
-            "An unnecessary translation needs a short reason and no translated blocks.",
-        ));
-    }
-    Ok(())
 }
 pub(crate) fn publish_preparation(
     storage: &Storage,
@@ -429,7 +360,9 @@ pub(crate) fn publish_preparation(
     mut topics: Vec<Topic>,
     mut contents: Vec<ReviewFileContent>,
 ) -> AppResult<Workspace> {
+    let _snapshot = storage.pin_snapshot(snapshot_id);
     let mut workspace = reviews::load(storage, review_id)?;
+    reviews::require_draft(&workspace.review)?;
     if workspace.snapshot.id != snapshot_id {
         return Err(AppError::new(
             "stale_preparation",
@@ -467,7 +400,6 @@ pub(crate) fn publish_preparation(
     let mut files = files(&workspace.snapshot);
     let mut seen = HashSet::new();
     for content in &mut contents {
-        validate_pseudocode_skip(content)?;
         let file = files
             .iter_mut()
             .find(|f| f.id == content.file_id)
@@ -489,27 +421,6 @@ pub(crate) fn publish_preparation(
             )?;
             estimate_reading_time(docs);
             file.has_documents = true;
-        }
-        file.pseudocode_selected = content.pseudocode_selected;
-        file.pseudocode_skip_reason = content.pseudocode_skip_reason.clone();
-        let mut translations = HashSet::new();
-        for value in &content.translations {
-            if !translations.insert(&value.source_id) {
-                return Err(AppError::new(
-                    "invalid_translation",
-                    "Duplicate pseudocode source.",
-                ));
-            }
-            let info = file
-                .translations
-                .iter_mut()
-                .find(|v| v.source_id == value.source_id)
-                .ok_or_else(|| {
-                    AppError::new("invalid_translation", "Pseudocode belongs to another file.")
-                })?;
-            translation(storage, &workspace.snapshot, value)?;
-            info.available = value.unavailable_reason.is_none();
-            info.unavailable_reason = value.unavailable_reason.clone();
         }
     }
     if seen.len() != files.len() {
@@ -541,7 +452,9 @@ pub(crate) fn read_file(
     review_id: &str,
     file_id: &str,
 ) -> AppResult<ReviewFileContent> {
+    let _read = storage.read_consistently();
     let workspace = reviews::load(storage, review_id)?;
+    let _snapshot = storage.pin_snapshot(&workspace.snapshot.id);
     if !workspace.review.files.iter().any(|f| f.id == file_id) {
         return Err(AppError::new(
             "invalid_file",
@@ -549,20 +462,18 @@ pub(crate) fn read_file(
         ));
     }
     if workspace.review.preparation_id.is_none()
-        && workspace.review.files.iter().any(|f| {
-            f.id == file_id && !f.has_documents && f.translations.iter().all(|t| !t.available)
-        })
+        && workspace
+            .review
+            .files
+            .iter()
+            .any(|f| f.id == file_id && !f.has_documents)
     {
         return Ok(ReviewFileContent {
-            pseudocode_selected: None,
-            pseudocode_skip_reason: None,
             file_id: file_id.into(),
             documents: None,
-            translations: vec![],
         });
     }
     let content = storage.read_review_asset(review_id, file_id)?;
-    validate_pseudocode_skip(&content)?;
     if let Some(docs) = &content.documents {
         validate_documents_with_glossary(
             storage,
@@ -570,9 +481,6 @@ pub(crate) fn read_file(
             docs,
             &workspace.review.glossary,
         )?;
-    }
-    for value in &content.translations {
-        translation(storage, &workspace.snapshot, value)?;
     }
     Ok(content)
 }

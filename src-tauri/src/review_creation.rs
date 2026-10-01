@@ -107,6 +107,7 @@ pub fn create(
     task: Arc<CaptureTask>,
     mut progress: impl FnMut(CaptureProgress) -> AppResult<()>,
 ) -> AppResult<Workspace> {
+    let _sources = storage.pin_source_cache();
     let mut last_phase = String::new();
     let mut last_update = std::time::Instant::now();
     let mut notify = |phase: &str, completed, total, path: Option<&str>| {

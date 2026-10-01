@@ -81,6 +81,7 @@ pub(crate) fn dispatch(storage: &Storage, request: Value) -> AppResult<Value> {
     }
     match method {
         "propose" | "enrich" => {
+            reviews::require_draft(&workspace.review)?;
             let proposal = proposals::parse(
                 storage,
                 &review.id,

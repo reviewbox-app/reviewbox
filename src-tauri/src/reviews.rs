@@ -2,6 +2,7 @@ use crate::{contracts::*, snapshots, storage::Storage};
 use std::collections::HashSet;
 
 pub fn create(storage: &Storage, request: CaptureRequest) -> AppResult<Workspace> {
+    let _sources = storage.pin_source_cache();
     let snapshot = snapshots::prepare_capture(storage, request, &mut |_, _, _, _| Ok(()))?;
     publish_creation(storage, snapshot)
 }
@@ -9,6 +10,9 @@ pub(crate) fn publish_creation(storage: &Storage, snapshot: Snapshot) -> AppResu
     let files = crate::reader::files(&snapshot);
     let position = file_position(&snapshot, &files);
     let review = Review {
+        update_origin: None,
+        needs_update_confirmation: false,
+        publication: ReviewPublication::default(),
         glossary: vec![],
         id: id(),
         title: match snapshot.request.scope {
@@ -60,6 +64,7 @@ pub(crate) fn file_position(snapshot: &Snapshot, files: &[ReviewFile]) -> Readin
     }
 }
 pub fn load(storage: &Storage, id: &str) -> AppResult<Workspace> {
+    let _read = storage.read_consistently();
     let review: Review = storage.get("review", id)?;
     let snapshot = storage.get("snapshot", &review.snapshot_id)?;
     Ok(Workspace { review, snapshot })
@@ -85,7 +90,18 @@ pub fn apply(
     action: ReviewAction,
 ) -> AppResult<Workspace> {
     if let ReviewAction::SavePosition { position } = action {
+        let _read = storage.read_consistently();
         let mut workspace = load(storage, id)?;
+        if position
+            .change_id
+            .as_ref()
+            .is_some_and(|id| !workspace.snapshot.changes.iter().any(|c| &c.id == id))
+        {
+            return Err(AppError::new(
+                "stale_position",
+                "This reading position belongs to another capture.",
+            ));
+        }
         if !position.scroll_top.is_finite() || position.scroll_top < 0.0 {
             return Err(AppError::new(
                 "invalid_position",
@@ -96,9 +112,113 @@ pub fn apply(
         storage.save_reading(&workspace.review)?;
         return Ok(workspace);
     }
-    let workspace = prepare_action(storage, load(storage, id)?, revision, action)?;
+    let current = load(storage, id)?;
+    storage.check_update_write(&current.review.repository_id, id)?;
+    if current.review.publication.is_complete() {
+        if matches!(
+            action,
+            ReviewAction::ReopenReview
+                | ReviewAction::ReopenStep { .. }
+                | ReviewAction::ReopenFile { .. }
+        ) {
+            return reopen(storage, current, revision, action);
+        }
+        // A repeated click after the final validation acknowledges the durable
+        // result. It must not publish a second bundle or record another decision.
+        let repeated_completion = matches!(
+            action,
+            ReviewAction::CompleteManualReview | ReviewAction::CompleteUpdatedReview
+        ) && current.review.publication.completion.as_ref().is_some_and(
+            |completion| {
+                completion.kind == ReviewCompletionKind::Manual
+                    || matches!(action, ReviewAction::CompleteUpdatedReview)
+            },
+        );
+        let repeated_step = if let ReviewAction::ValidateStep { ref step_id } = action {
+            let target = DecisionTarget::Step {
+                step_id: step_id.clone(),
+            };
+            current.review.decisions.iter().any(|decision| {
+                decision.target == target && decision.state == DecisionState::Validated
+            })
+        } else {
+            false
+        };
+        if repeated_completion
+            || repeated_step
+            || (matches!(action, ReviewAction::RetryPublication)
+                && current.review.publication.is_shared())
+        {
+            return Ok(current);
+        }
+    }
+    let workspace = prepare_action(storage, current, revision, action)?;
     storage.replace("review", id, revision, &workspace.review)?;
+    publish_if_ready(storage, workspace)
+}
+
+fn publish_if_ready(storage: &Storage, workspace: Workspace) -> AppResult<Workspace> {
+    if workspace.review.publication.status == PublicationStatus::PublicationPending {
+        storage.publish_review(&workspace.review.id)
+    } else {
+        if workspace.review.publication.status == PublicationStatus::CompletedLocal {
+            storage.collect_review_garbage(&workspace.review.repository_id)?;
+        }
+        Ok(workspace)
+    }
+}
+
+pub(crate) fn require_draft(review: &Review) -> AppResult<()> {
+    if review.publication.is_complete() {
+        return Err(AppError::new(
+            "immutable_review",
+            "This completed review is read-only. Reopen it to create a local draft.",
+        ));
+    }
+    Ok(())
+}
+
+fn reopen(
+    storage: &Storage,
+    mut workspace: Workspace,
+    revision: u32,
+    action: ReviewAction,
+) -> AppResult<Workspace> {
+    if workspace.review.revision != revision {
+        return Err(AppError::new(
+            "conflict",
+            "Reload before reopening this review.",
+        ));
+    }
+    fork_review(&mut workspace.review);
+    // A full reopening invalidates the completion rather than manufacturing
+    // unchecked file decisions or modifying the old published attestation.
+    if matches!(action, ReviewAction::ReopenReview) {
+        workspace.review.decisions.clear();
+    } else {
+        workspace = prepare_action(storage, workspace, 0, action)?;
+        workspace.review.revision = 0;
+    }
+    let mut value = serde_json::to_value(&workspace.review)?;
+    value["forkRevision"] = revision.into();
+    storage.insert("review", &workspace.review.id, &value)?;
     Ok(workspace)
+}
+
+fn fork_review(review: &mut Review) {
+    review.needs_update_confirmation = false;
+    let origin = review.id.clone();
+    let keep_local = review.publication.keep_local;
+    review.id = id();
+    review.revision = 0;
+    review.created_at = now();
+    review.updated_at = now();
+    review.previous_snapshot_ids.clear();
+    review.publication = ReviewPublication {
+        keep_local,
+        origin_review_id: Some(origin),
+        ..ReviewPublication::default()
+    };
 }
 pub fn prepare_action(
     storage: &Storage,
@@ -107,13 +227,87 @@ pub fn prepare_action(
     action: ReviewAction,
 ) -> AppResult<Workspace> {
     let review = &mut workspace.review;
+    storage.check_update_write(&review.repository_id, &review.id)?;
     if review.revision != revision {
         return Err(AppError::new(
             "conflict",
             "Reload the review before editing it.",
         ));
     }
+    let publication_only = matches!(
+        action,
+        ReviewAction::SetKeepLocal { .. } | ReviewAction::RetryPublication
+    );
+    if !publication_only {
+        require_draft(review)?;
+    } else if review.publication.is_shared() {
+        return Err(AppError::new(
+            "immutable_review",
+            "A shared review cannot be made local. Reopen it to create a local draft.",
+        ));
+    }
+    let validates_step = matches!(action, ReviewAction::ValidateStep { .. });
+    if matches!(action, ReviewAction::CompleteUpdatedReview)
+        && (!review.needs_update_confirmation || !coverage(&workspace).complete)
+    {
+        return Err(AppError::new(
+            "review_incomplete",
+            "Validate the remaining steps before completing this update.",
+        ));
+    }
+    let review = &mut workspace.review;
     match action {
+        ReviewAction::CompleteUpdatedReview => {
+            verify_captured_scope(storage, &workspace.snapshot)?;
+            complete(
+                storage,
+                review,
+                &workspace.snapshot,
+                ReviewCompletionKind::Guided,
+            )?;
+        }
+        ReviewAction::CompleteManualReview => {
+            if review.mode != ReviewMode::Manual {
+                return Err(AppError::new(
+                    "review_mode",
+                    "Validate the guided steps to complete this review.",
+                ));
+            }
+            verify_captured_scope(storage, &workspace.snapshot)?;
+            complete(
+                storage,
+                review,
+                &workspace.snapshot,
+                ReviewCompletionKind::Manual,
+            )?;
+        }
+        ReviewAction::SetKeepLocal { keep_local } => {
+            review.publication.keep_local = keep_local;
+            review.publication.publication_error = None;
+            if review.publication.completion.is_some() {
+                review.publication.status = if keep_local {
+                    PublicationStatus::CompletedLocal
+                } else {
+                    PublicationStatus::PublicationPending
+                };
+            }
+        }
+        ReviewAction::RetryPublication => {
+            if review.publication.completion.is_none() || review.publication.keep_local {
+                return Err(AppError::new(
+                    "publication_state",
+                    "Only a validated review awaiting publication can be retried.",
+                ));
+            }
+            review.publication.status = PublicationStatus::PublicationPending;
+            review.publication.publication_error = None;
+        }
+        ReviewAction::ReopenReview => {
+            return Err(AppError::new(
+                "review_state",
+                "This review is already a local draft.",
+            ));
+        }
         ReviewAction::Rename { title } => {
             if title.trim().is_empty() {
                 return Err(AppError::new("invalid_title", "A title is required."));
@@ -167,6 +361,7 @@ pub fn prepare_action(
             let fingerprint = target_fingerprint(&workspace.snapshot, review, &target)?;
             if !review.decisions.iter().any(|d| d.target == target) {
                 review.decisions.push(Decision {
+                    carried_from: None,
                     id: crate::contracts::id(),
                     author: storage.author()?,
                     target,
@@ -181,6 +376,7 @@ pub fn prepare_action(
             let fingerprint = target_fingerprint(&workspace.snapshot, review, &target)?;
             if !review.decisions.iter().any(|d| d.target == target) {
                 review.decisions.push(Decision {
+                    carried_from: None,
                     id: crate::contracts::id(),
                     author: storage.author()?,
                     target,
@@ -192,8 +388,7 @@ pub fn prepare_action(
         }
         ReviewAction::ValidateStep { step_id } => {
             let target = DecisionTarget::Step { step_id };
-            let fingerprint =
-                decision_fingerprint(storage, &workspace.snapshot, review, &target, None)?;
+            let fingerprint = decision_fingerprint(storage, &workspace.snapshot, review, &target)?;
             if !review.decisions.iter().any(|d| {
                 d.target == target
                     && d.fingerprint == fingerprint
@@ -201,6 +396,7 @@ pub fn prepare_action(
             }) {
                 review.decisions.retain(|d| d.target != target);
                 review.decisions.push(Decision {
+                    carried_from: None,
                     id: crate::contracts::id(),
                     author: storage.author()?,
                     target,
@@ -210,10 +406,9 @@ pub fn prepare_action(
                 });
             }
         }
-        ReviewAction::ValidateFile { file_id, level } => {
+        ReviewAction::ValidateFile { file_id } => {
             let target = DecisionTarget::File { file_id };
-            let fingerprint =
-                decision_fingerprint(storage, &workspace.snapshot, review, &target, Some(level))?;
+            let fingerprint = decision_fingerprint(storage, &workspace.snapshot, review, &target)?;
             if !review.decisions.iter().any(|d| {
                 d.target == target
                     && d.fingerprint == fingerprint
@@ -221,6 +416,7 @@ pub fn prepare_action(
             }) {
                 review.decisions.retain(|d| d.target != target);
                 review.decisions.push(Decision {
+                    carried_from: None,
                     id: crate::contracts::id(),
                     author: storage.author()?,
                     target,
@@ -230,18 +426,21 @@ pub fn prepare_action(
                 });
             }
         }
-        ReviewAction::ReopenStep { step_id } => review.decisions.retain(|d| {
-            d.target
-                != DecisionTarget::Step {
-                    step_id: step_id.clone(),
-                }
-        }),
-        ReviewAction::ReopenFile { file_id } => review.decisions.retain(|d| {
-            d.target
-                != DecisionTarget::File {
-                    file_id: file_id.clone(),
-                }
-        }),
+        ReviewAction::ReopenStep { step_id } => {
+            review.needs_update_confirmation = false;
+            let target = DecisionTarget::Step { step_id };
+            target_fingerprint(&workspace.snapshot, review, &target)?;
+            review
+                .decisions
+                .retain(|decision| decision.target != target);
+        }
+        ReviewAction::ReopenFile { file_id } => {
+            let target = DecisionTarget::File { file_id };
+            target_fingerprint(&workspace.snapshot, review, &target)?;
+            review
+                .decisions
+                .retain(|decision| decision.target != target);
+        }
         ReviewAction::SavePosition { position } => {
             if !position.scroll_top.is_finite() || position.scroll_top < 0.0 {
                 return Err(AppError::new(
@@ -254,9 +453,84 @@ pub fn prepare_action(
     }
     review.revision += 1;
     review.updated_at = now();
+    if validates_step
+        && !workspace.review.needs_update_confirmation
+        && workspace.review.mode == ReviewMode::Guided
+        && coverage(&workspace).complete
+    {
+        complete(
+            storage,
+            &mut workspace.review,
+            &workspace.snapshot,
+            ReviewCompletionKind::Guided,
+        )?;
+    }
     Ok(workspace)
 }
-fn target_fingerprint(
+
+fn complete(
+    storage: &Storage,
+    review: &mut Review,
+    snapshot: &Snapshot,
+    kind: ReviewCompletionKind,
+) -> AppResult<()> {
+    review.needs_update_confirmation = false;
+    review.publication.completion = Some(ReviewCompletion {
+        kind,
+        author: storage.author()?,
+        completed_at: now(),
+        scope_fingerprint: scope_fingerprint(snapshot)?,
+        scope: snapshot.request.scope.clone(),
+        include_untracked: snapshot.request.include_untracked,
+        base_commit_id: matches!(snapshot.request.scope, Scope::Commit | Scope::Range)
+            .then(|| snapshot.git_refs.get(1).cloned())
+            .flatten(),
+        target_commit_id: matches!(snapshot.request.scope, Scope::Commit | Scope::Range)
+            .then(|| snapshot.git_refs.get(2).cloned())
+            .flatten(),
+    });
+    review.publication.status = if review.publication.keep_local {
+        PublicationStatus::CompletedLocal
+    } else {
+        PublicationStatus::PublicationPending
+    };
+    review.publication.publication_error = None;
+    review.publication.file_count = Some(review.files.len() as u32);
+    review.publication.step_count = Some(
+        review
+            .topics
+            .iter()
+            .map(|topic| topic.steps.len() as u32)
+            .sum(),
+    );
+    Ok(())
+}
+
+pub(crate) fn scope_fingerprint(snapshot: &Snapshot) -> AppResult<String> {
+    crate::project_storage::publication::scope_fingerprint(snapshot)
+}
+
+fn verify_captured_scope(storage: &Storage, snapshot: &Snapshot) -> AppResult<()> {
+    let mut checked = HashSet::new();
+    for blob in snapshot.files.iter().map(|file| &file.content).chain(
+        snapshot
+            .changes
+            .iter()
+            .flat_map(|change| [&change.before, &change.after].into_iter().flatten()),
+    ) {
+        if checked.insert(&blob.hash) {
+            let bytes = storage.read_blob(&blob.hash)?;
+            if bytes.len() != blob.size as usize || fingerprint(&bytes) != blob.hash {
+                return Err(AppError::new(
+                    "corrupt_blob",
+                    "The captured scope could not be verified.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+pub(crate) fn target_fingerprint(
     snapshot: &Snapshot,
     review: &Review,
     target: &DecisionTarget,
@@ -305,7 +579,6 @@ fn decision_fingerprint(
     snapshot: &Snapshot,
     review: &Review,
     target: &DecisionTarget,
-    level: Option<ReadingLevel>,
 ) -> AppResult<String> {
     match target {
         DecisionTarget::Step { step_id } => {
@@ -339,37 +612,14 @@ fn decision_fingerprint(
                 .iter()
                 .find(|f| &f.id == file_id)
                 .ok_or_else(|| AppError::new("invalid_file", "File does not exist."))?;
-            if level == Some(ReadingLevel::Beginner) {
-                return Err(AppError::new(
-                    "reading_level",
-                    "File validation is unavailable in Beginner mode.",
-                ));
-            }
-            if level == Some(ReadingLevel::Intermediate) {
-                let content = crate::reader::read_file(storage, &review.id, file_id)?;
-                if content.pseudocode_selected != Some(false)
-                    && content.pseudocode_skip_reason.is_none()
-                    && file.translations.iter().any(|t| {
-                        !content.translations.iter().any(|v| {
-                            v.source_id == t.source_id
-                                && v.source_hash == t.source_hash
-                                && v.unavailable_reason.is_none()
-                        })
-                    })
-                {
-                    return Err(AppError::new(
-                        "missing_pseudocode",
-                        "Pseudocode is unavailable for part of this file.",
-                    ));
-                }
-            }
-            for t in &file.translations {
-                let source = crate::reader::sources(snapshot)
-                    .into_iter()
-                    .find(|source| source.source_id == t.source_id && source.hash == t.source_hash)
-                    .ok_or_else(|| {
-                        AppError::new("invalid_reference", "Captured source is missing.")
-                    })?;
+            for source in crate::reader::sources(snapshot)
+                .into_iter()
+                .filter(|source| {
+                    file.change_ids
+                        .iter()
+                        .any(|id| source.source_id.starts_with(&format!("change:{id}:")))
+                })
+            {
                 let bytes = storage.read_blob(&source.hash)?;
                 if bytes.len() != source.size as usize {
                     return Err(AppError::new(
@@ -436,51 +686,64 @@ pub fn coverage(workspace: &Workspace) -> Coverage {
     }
 }
 pub fn refresh(storage: &Storage, id: &str, revision: u32) -> AppResult<Workspace> {
+    let _sources = storage.pin_source_cache();
     let mut workspace = load(storage, id)?;
+    storage.check_update_write(&workspace.review.repository_id, id)?;
     if workspace.review.revision != revision {
         return Err(AppError::new(
             "conflict",
             "Reload before capturing a new version.",
         ));
     }
-    let previous_review = workspace.review.clone();
-    let next = snapshots::capture(storage, workspace.snapshot.request.clone())?;
-    // Generated documents and references belong to their exact capture. Keep
-    // them in history; a new capture starts on its own frozen file catalogue.
+    let completed = workspace.review.publication.is_complete();
+    let next = snapshots::prepare_capture(
+        storage,
+        workspace.snapshot.request.clone(),
+        &mut |_, _, _, _| Ok(()),
+    )?;
+    if completed {
+        fork_review(&mut workspace.review);
+    }
+    // Preparing the capture does not publish it. The old capture stays usable
+    // until the optimistic transaction installs both the new review and sources.
+    workspace.review.needs_update_confirmation = false;
     workspace.review.topics.clear();
+    workspace.review.glossary.clear();
     workspace.review.mode = ReviewMode::Manual;
     workspace.review.files = crate::reader::files(&next);
     workspace.review.preparation_id = None;
-    workspace.review.decisions.retain(|d| {
-        matches!(d.target, DecisionTarget::File { .. })
-            && target_fingerprint(&next, &previous_review, &d.target)
-                .is_ok_and(|fp| fp == d.fingerprint)
-    });
-    workspace
-        .review
-        .previous_snapshot_ids
-        .push(workspace.snapshot.id.clone());
+    workspace.review.decisions.clear();
+    workspace.review.previous_snapshot_ids.clear();
     workspace.review.snapshot_id = next.id.clone();
-    workspace.review.revision += 1;
+    if !completed {
+        workspace.review.revision += 1;
+    }
     workspace.review.examined.clear();
     workspace.review.position = file_position(&next, &workspace.review.files);
     workspace.review.updated_at = now();
-    let history_id = format!("{id}@{revision}");
+    let mut review_value = serde_json::to_value(&workspace.review)?;
+    if completed {
+        review_value["forkRevision"] = revision.into();
+    }
     storage.write_batch(vec![
-        (
-            "review_history",
-            &history_id,
-            None,
-            serde_json::to_value(&previous_review)?,
-        ),
+        ("snapshot", &next.id, None, serde_json::to_value(&next)?),
         (
             "review",
-            id,
-            Some(revision),
-            serde_json::to_value(&workspace.review)?,
+            &workspace.review.id,
+            if completed { None } else { Some(revision) },
+            review_value,
         ),
     ])?;
     workspace.snapshot = next;
+    // Commands quiesce the native preparation before entering this mutation;
+    // its old checkpoint must not resurrect the discarded generated content.
+    if !completed {
+        storage.remove(
+            "review_preparation",
+            &format!("{}:{id}", workspace.review.repository_id),
+        )?;
+    }
+    storage.collect_review_garbage(&workspace.review.repository_id)?;
     Ok(workspace)
 }
 

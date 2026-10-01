@@ -16,9 +16,9 @@ pub(crate) fn inherit(documents: &mut LevelDocuments, known: &[DocumentTerm]) {
     for term in known {
         if !documents.glossary.iter().any(|entry| entry.id == term.id)
             && [
-                &documents.beginner,
-                &documents.intermediate,
-                &documents.developer,
+                &documents.essential,
+                &documents.explained,
+                &documents.technical,
             ]
             .iter()
             .any(|doc| doc.body.contains(&format!("reviewbox:term/{}", term.id)))
@@ -36,9 +36,9 @@ pub(crate) fn assemble(topics: &mut [Topic], existing: &[DocumentTerm]) -> Vec<D
         for step in &mut topic.steps {
             let shared = &step.documents.glossary;
             for document in [
-                &mut step.documents.beginner,
-                &mut step.documents.intermediate,
-                &mut step.documents.developer,
+                &mut step.documents.essential,
+                &mut step.documents.explained,
+                &mut step.documents.technical,
             ] {
                 let mut definitions = existing.to_vec();
                 for term in shared.iter().chain(&document.terms) {
@@ -126,26 +126,32 @@ mod tests {
             ..Default::default()
         };
         let first = canonicalize(LevelDocuments {
+            dependencies: None,
+            context_sources: vec![],
             glossary: vec![term("local", "Component")],
-            beginner: doc("local"),
-            intermediate: doc("local"),
-            developer: doc("local"),
+            essential: doc("local"),
+            explained: doc("local"),
+            technical: doc("local"),
         });
         assert_eq!(first.glossary.len(), 1);
-        assert!(first.beginner.terms.is_empty());
-        assert!(first.beginner.body.contains(&first.glossary[0].id));
+        assert!(first.essential.terms.is_empty());
+        assert!(first.essential.body.contains(&first.glossary[0].id));
         let equivalent = canonicalize(LevelDocuments {
+            dependencies: None,
+            context_sources: vec![],
             glossary: vec![term("another", "component")],
-            beginner: doc("another"),
-            intermediate: doc("another"),
-            developer: doc("another"),
+            essential: doc("another"),
+            explained: doc("another"),
+            technical: doc("another"),
         });
         assert_eq!(first.glossary[0].id, equivalent.glossary[0].id);
         let other = canonicalize(LevelDocuments {
+            dependencies: None,
+            context_sources: vec![],
             glossary: vec![term("another", "Workflow")],
-            beginner: doc("another"),
-            intermediate: doc("another"),
-            developer: doc("another"),
+            essential: doc("another"),
+            explained: doc("another"),
+            technical: doc("another"),
         });
         assert_ne!(first.glossary[0].id, other.glossary[0].id);
     }

@@ -525,12 +525,13 @@ fn post_publication_index_failure_returns_saved_review_and_defers_cache_rebuild(
     let workspace = create(&storage, request, task, |_| Ok(())).unwrap();
     manager.finish("index-fails-after-commit");
     let root = Path::new(&repo.path).join(".reviewbox");
+    let bundle = root.join(format!(".local/reviews/{}", workspace.review.id));
     let review: serde_json::Value = serde_json::from_slice(
-        &fs::read(root.join(format!("reviews/{}/review.json", workspace.review.id))).unwrap(),
+        &fs::read(bundle.join(format!("reviews/{}/review.json", workspace.review.id))).unwrap(),
     )
     .unwrap();
     let snapshot: serde_json::Value = serde_json::from_slice(
-        &fs::read(root.join(format!("snapshots/{}.json", workspace.snapshot.id))).unwrap(),
+        &fs::read(bundle.join(format!("snapshots/{}.json", workspace.snapshot.id))).unwrap(),
     )
     .unwrap();
     assert_eq!(review["data"]["snapshotId"], snapshot["data"]["id"]);

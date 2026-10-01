@@ -1,6 +1,7 @@
 use crate::{contracts::*, knowledge, reviews, storage::Storage};
 
 fn validate(storage: &Storage, workspace: &Workspace, content: &ProposalContent) -> AppResult<()> {
+    reviews::require_draft(&workspace.review)?;
     if serde_json::to_vec(content)?.len() > 512 * 1024 {
         return Err(AppError::new("proposal_limit", "Proposal exceeds 512 KiB."));
     }
@@ -62,6 +63,7 @@ fn validate_draft(
     workspace: &Workspace,
     content: &ProposalContent,
 ) -> AppResult<()> {
+    reviews::require_draft(&workspace.review)?;
     if serde_json::to_vec(content)?.len() > 512 * 1024 {
         return Err(AppError::new("proposal_limit", "Proposal exceeds 512 KiB."));
     }
@@ -104,6 +106,7 @@ pub(crate) fn diagnostics(
     content: &ProposalContent,
 ) -> AppResult<Vec<ProposalDiagnostic>> {
     let workspace = reviews::load(storage, review_id)?;
+    reviews::require_draft(&workspace.review)?;
     validate_draft(storage, &workspace, content)?;
     let mut diagnostics = vec![];
     if let ProposalContent::Topics { topics } = content {
@@ -248,6 +251,7 @@ pub fn answer(
         ));
     }
     let workspace = reviews::load(storage, &proposal.review_id)?;
+    reviews::require_draft(&workspace.review)?;
     proposal.revision += 1;
     proposal.status = if accepted { "accepted" } else { "rejected" }.into();
     if !accepted {

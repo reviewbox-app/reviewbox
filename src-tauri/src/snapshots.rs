@@ -372,7 +372,9 @@ pub(crate) fn comparison_refs(
     Ok((base, target))
 }
 
+#[cfg(test)]
 pub fn capture(storage: &Storage, request: CaptureRequest) -> AppResult<Snapshot> {
+    let _sources = storage.pin_source_cache();
     let snapshot = prepare_capture(storage, request, &mut |_, _, _, _| Ok(()))?;
     storage.insert("snapshot", &snapshot.id, &snapshot)?;
     Ok(snapshot)
@@ -519,4 +521,119 @@ pub fn repository_changed(storage: &Storage, snapshot: &Snapshot) -> AppResult<b
             &index,
             snapshot.request.include_untracked,
         )?)? != snapshot.workspace_fingerprint)
+}
+
+/// Compare the live trees without changing the captured review or its decisions.
+pub fn review_freshness(storage: &Storage, workspace: &Workspace) -> AppResult<ReviewFreshness> {
+    let _sources = storage.pin_source_cache();
+    let snapshot = &workspace.snapshot;
+    let root = root(storage, &snapshot.repository_id)?;
+    let head =
+        text(&root, &["rev-parse", "--verify", "HEAD"]).unwrap_or_else(|_| EMPTY_TREE.into());
+    let head_tree = git_tree(storage, &root, &head)?;
+    let index = git_tree(storage, &root, "INDEX")?;
+    let working = working_tree(storage, &root, &index, snapshot.request.include_untracked)?;
+    let old_head = if snapshot.head_fingerprint.is_empty() {
+        tree_hash(&git_tree(storage, &root, &snapshot.head)?)?
+    } else {
+        snapshot.head_fingerprint.clone()
+    };
+    let changed = tree_hash(&head_tree)? != old_head
+        || (!snapshot.index_fingerprint.is_empty()
+            && tree_hash(&index)? != snapshot.index_fingerprint)
+        || tree_hash(&working)? != snapshot.workspace_fingerprint;
+    let committed = if matches!(snapshot.request.scope, Scope::Commit | Scope::Range) {
+        let (base, target) = comparison_refs(&root, &snapshot.request)?;
+        Some((
+            git_tree(storage, &root, &base)?,
+            git_tree(storage, &root, &target)?,
+        ))
+    } else {
+        None
+    };
+    let same = |a: Option<&BlobRef>, b: Option<&BlobRef>| {
+        a.map(|v| (&v.hash, v.size, &v.mode)) == b.map(|v| (&v.hash, v.size, &v.mode))
+    };
+    let mut altered = std::collections::BTreeSet::new();
+    for change in &snapshot.changes {
+        let (before, after) = match change.layer.as_str() {
+            "staged" => (&head_tree, &index),
+            "unstaged" => (&index, &working),
+            _ => committed
+                .as_ref()
+                .map(|(a, b)| (a, b))
+                .unwrap_or((&head_tree, &working)),
+        };
+        if !same(change.before.as_ref(), before.get(&change.path))
+            || !same(change.after.as_ref(), after.get(&change.path))
+        {
+            altered.insert(format!("change:{}:before", change.id));
+            altered.insert(format!("change:{}:after", change.id));
+        }
+    }
+    let context = match snapshot.request.scope {
+        Scope::Staged => &index,
+        Scope::Commit | Scope::Range => {
+            &committed
+                .as_ref()
+                .ok_or_else(|| {
+                    AppError::new("missing_commit", "Captured comparison is unavailable.")
+                })?
+                .1
+        }
+        _ => &working,
+    };
+    for file in &snapshot.files {
+        if !same(Some(&file.content), context.get(&file.path)) {
+            altered.insert(format!("file:{}", file.path));
+        }
+    }
+    let available: std::collections::BTreeSet<_> = crate::reader::sources(snapshot)
+        .into_iter()
+        .map(|s| s.source_id)
+        .collect();
+    let stale_step_ids = workspace
+        .review
+        .topics
+        .iter()
+        .flat_map(|t| &t.steps)
+        .filter(|step| {
+            let broken_anchor = step.anchors.iter().any(|a| {
+                a.snapshot_id != snapshot.id
+                    || !snapshot.changes.iter().any(|c| {
+                        c.id == a.change_id && c.passages.iter().any(|p| p.id == a.passage_id)
+                    })
+                    || altered.contains(&format!("change:{}:after", a.change_id))
+            });
+            let documents = &step.documents;
+            let sources = documents
+                .context_sources
+                .iter()
+                .map(String::as_str)
+                .chain(
+                    documents
+                        .dependencies
+                        .iter()
+                        .flat_map(|d| d.sources.iter().map(|s| s.source_id.as_str())),
+                )
+                .chain(
+                    [
+                        &documents.essential,
+                        &documents.explained,
+                        &documents.technical,
+                    ]
+                    .into_iter()
+                    .flat_map(|d| d.references.iter().map(|r| r.source_id.as_str())),
+                );
+            broken_anchor
+                || sources
+                    .into_iter()
+                    .any(|id| altered.contains(id) || !available.contains(id))
+        })
+        .map(|step| step.id.clone())
+        .collect();
+    Ok(ReviewFreshness {
+        changed,
+        stale_step_ids,
+    })
 }

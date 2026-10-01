@@ -58,10 +58,12 @@ fn draft_anchor_diagnostics_allow_repair_but_never_allow_invalid_application() {
                     reading_seconds: 10,
                 };
                 LevelDocuments {
+                    dependencies: None,
+                    context_sources: vec![],
                     glossary: vec![],
-                    beginner: doc.clone(),
-                    intermediate: doc.clone(),
-                    developer: doc,
+                    essential: doc.clone(),
+                    explained: doc.clone(),
+                    technical: doc,
                 }
             },
             anchors: vec![CodeAnchor {
@@ -140,4 +142,50 @@ fn preparation_scope_includes_deleted_binary_and_large_changes_without_curating_
     assert_eq!(context.changed_files, 4);
     assert_eq!(context.snapshot_id, workspace.snapshot.id);
     assert_eq!(context.project_path, root.to_string_lossy());
+}
+
+#[test]
+fn agent_enrichment_and_new_proposals_cannot_modify_completed_reviews() {
+    let (dir, storage, workspace) = fixture();
+    let content = serde_json::json!({"kind":"explanation","path":"code.ts","sections":[{"id":"section","title":"Answer","body":"Read the assignment.","startLine":1,"endLine":1}]});
+    let proposal = parse(&storage, &workspace.review.id, &content.to_string(), None).unwrap();
+    let completed = reviews::apply(
+        &storage,
+        &workspace.review.id,
+        workspace.review.revision,
+        ReviewAction::CompleteManualReview,
+    )
+    .unwrap();
+    assert_eq!(
+        parse(&storage, &workspace.review.id, &content.to_string(), None)
+            .unwrap_err()
+            .code,
+        "immutable_review"
+    );
+    assert_eq!(
+        answer(
+            &storage,
+            &proposal.id,
+            proposal.revision,
+            proposal.content,
+            true
+        )
+        .unwrap_err()
+        .code,
+        "immutable_review"
+    );
+    for method in ["propose", "enrich", "completeManualReview", "validateStep"] {
+        let result = crate::integrations::dispatch(
+            &storage,
+            serde_json::json!({"method": method, "repo":dir.path().join("repo"), "reviewId":workspace.review.id,"snapshotId":workspace.snapshot.id,"content":content}),
+        );
+        assert!(result.is_err());
+    }
+    assert_eq!(
+        reviews::load(&storage, &completed.review.id)
+            .unwrap()
+            .review
+            .publication,
+        completed.review.publication
+    );
 }
