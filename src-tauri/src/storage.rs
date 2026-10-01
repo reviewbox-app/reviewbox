@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+mod contexts;
 mod publications;
 mod readers;
 mod updates;
@@ -121,6 +122,13 @@ impl Storage {
                 "not_found",
                 "Legacy review history is not supported.",
             ));
+        }
+        if kind == "snapshot" && id.starts_with("source-") {
+            match self.source_context(id) {
+                Ok(value) => return Ok(serde_json::from_value(serde_json::to_value(value)?)?),
+                Err(error) if error.code == "not_found" => {}
+                Err(error) => return Err(error),
+            }
         }
         if project_storage::KINDS.contains(&kind) {
             self.sync_projects(false)?;
@@ -358,6 +366,9 @@ impl Storage {
             Ok(bytes) => return Ok(bytes),
             Err(e) if e.code == "io" => {}
             Err(e) => return Err(e),
+        }
+        if let Some(bytes) = self.context_blob(hash)? {
+            return Ok(bytes);
         }
         let projects: Vec<_> = self
             .projects

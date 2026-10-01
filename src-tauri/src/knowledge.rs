@@ -1,3 +1,4 @@
+pub(crate) mod context;
 use crate::{contracts::*, storage::Storage};
 use std::collections::HashSet;
 pub fn load(storage: &Storage, repository_id: &str) -> AppResult<ProjectKnowledge> {
@@ -133,6 +134,7 @@ pub fn prepare(
     Ok((knowledge, exists.then_some(revision)))
 }
 pub fn save(storage: &Storage, knowledge: ProjectKnowledge) -> AppResult<ProjectKnowledge> {
+    let _pin = storage.pin_source_cache();
     let (knowledge, revision) = prepare(storage, knowledge)?;
     let mut writes: Vec<(&str, &str, Option<u32>, serde_json::Value)> = vec![(
         "knowledge",
@@ -150,6 +152,31 @@ pub fn save(storage: &Storage, knowledge: ProjectKnowledge) -> AppResult<Project
             &knowledge.repository_id,
             Some(previous),
             serde_json::to_value(settings)?,
+        ));
+    }
+    let contexts: Vec<Snapshot> = knowledge
+        .documents
+        .iter()
+        .map(|d| &d.snapshot_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|id| id.starts_with("source-"))
+        .filter_map(|id| match storage.shared_snapshot_exists(id) {
+            Ok(true) => None,
+            Ok(false) => Some(storage.source_context(id)),
+            Err(e) => Some(Err(e)),
+        })
+        .collect::<AppResult<_>>()?;
+    for snapshot in &contexts {
+        // Warm/pin every captured source before the existing shared writer builds packs.
+        for source in crate::reader::sources(snapshot) {
+            storage.read_blob(&source.hash)?;
+        }
+        writes.push((
+            "snapshot",
+            &snapshot.id,
+            None,
+            serde_json::to_value(snapshot)?,
         ));
     }
     storage.write_batch(writes)?;

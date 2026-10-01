@@ -43,6 +43,10 @@ impl Drop for SnapshotLease {
                 .unwrap()
                 .remove(&self.id)
         {
+            if self.id.starts_with("source-") && self.storage.source_context(&self.id).is_ok() {
+                let _ = self.storage.release_context(&self.id);
+                return;
+            }
             let repositories: Vec<_> = self
                 .storage
                 .projects

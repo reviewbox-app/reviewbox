@@ -429,6 +429,7 @@ fn proposals_stay_local_with_draft_then_follow_their_review_into_git_archive() {
     fs::write(root.join("a.ts"), "first source with a proposal\n").unwrap();
     let first = capture(&storage, &repo);
     let proposal = Proposal {
+        context_id: None,
         id: "applied-proposal".into(),
         review_id: first.review.id.clone(),
         snapshot_id: first.snapshot.id.clone(),

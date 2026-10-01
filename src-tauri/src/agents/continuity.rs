@@ -4,11 +4,18 @@ use serde_json::json;
 use std::{fs, path::Path};
 
 fn history(storage: &Storage, request: &AgentRequest) -> AppResult<Vec<AgentRun>> {
-    let mut runs: Vec<AgentRun> = storage
-        .list::<AgentRun>("agent_run")?
+    let candidates = if let Some(context) = &request.context_id {
+        knowledge::context::history(storage, context)?
+    } else {
+        storage.list::<AgentRun>("agent_run")?
+    };
+    let mut runs: Vec<AgentRun> = candidates
         .into_iter()
         .filter(|run| {
-            run.review_id == request.review_id && run.id != request.id && run.status != "running"
+            run.review_id == request.review_id
+                && (request.context_id.is_some() || run.context_id.is_none())
+                && run.id != request.id
+                && run.status != "running"
         })
         .collect();
     runs.sort_by(|left, right| (&left.created_at, &left.id).cmp(&(&right.created_at, &right.id)));

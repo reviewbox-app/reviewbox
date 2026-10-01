@@ -26,11 +26,24 @@ pub(super) fn descriptor(
     workspace: &Workspace,
     request: &AgentRequest,
 ) -> AppResult<String> {
-    let repository: Repository = storage.get("repository", &workspace.review.repository_id)?;
+    descriptor_for(
+        storage,
+        &workspace.snapshot,
+        Some(&workspace.review),
+        request,
+    )
+}
+pub(super) fn descriptor_for(
+    storage: &Storage,
+    snapshot: &Snapshot,
+    review: Option<&Review>,
+    request: &AgentRequest,
+) -> AppResult<String> {
+    let repository: Repository = storage.get("repository", &snapshot.repository_id)?;
     Ok(serde_json::to_string_pretty(&json!({
         "projectRoot": repository.path,
-        "reviewId": workspace.review.id,
-        "snapshotId": workspace.snapshot.id,
+        "reviewId": review.map(|r| &r.id),
+        "snapshotId": snapshot.id,
         "reviewManifest": directory(storage, request).join("manifest.json"),
         "focusPaths": request.paths,
         "conversationContext": continuity::descriptor(storage, request, &directory(storage, request))?,
@@ -64,7 +77,22 @@ pub(super) fn materialize(
     request: &AgentRequest,
     cancel: &AtomicBool,
 ) -> AppResult<Exploration> {
-    let repository: Repository = storage.get("repository", &workspace.review.repository_id)?;
+    materialize_for(
+        storage,
+        &workspace.snapshot,
+        Some(&workspace.review),
+        request,
+        cancel,
+    )
+}
+pub(super) fn materialize_for(
+    storage: &Storage,
+    snapshot: &Snapshot,
+    review: Option<&Review>,
+    request: &AgentRequest,
+    cancel: &AtomicBool,
+) -> AppResult<Exploration> {
+    let repository: Repository = storage.get("repository", &snapshot.repository_id)?;
     let directory = directory(storage, request);
     fs::create_dir_all(directory.parent().unwrap())?;
     // A running operation owns this directory exclusively. Never replace a
@@ -77,11 +105,11 @@ pub(super) fn materialize(
     continuity::materialize(storage, request, &exploration.directory, cancel)?;
     write(
         &exploration.directory.join("review.json"),
-        &serde_json::to_value(&workspace.review)?,
+        &serde_json::to_value(review)?,
     )?;
     fs::create_dir(exploration.directory.join("changes"))?;
     let mut changes = Vec::new();
-    for (index, change) in workspace.snapshot.changes.iter().enumerate() {
+    for (index, change) in snapshot.changes.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::new("cancelled", "Agent request stopped."));
         }
@@ -93,7 +121,7 @@ pub(super) fn materialize(
             .passages
             .iter()
             .map(|passage| CodeAnchor {
-                snapshot_id: workspace.snapshot.id.clone(),
+                snapshot_id: snapshot.id.clone(),
                 change_id: change.id.clone(),
                 passage_id: passage.id.clone(),
             })
@@ -112,8 +140,7 @@ pub(super) fn materialize(
         )?;
         changes.push(json!({"path":change.path,"layer":change.layer,"metadata":metadata}));
     }
-    let focus: Vec<_> = workspace
-        .snapshot
+    let focus: Vec<_> = snapshot
         .files
         .iter()
         .filter(|file| request.paths.contains(&file.path))
@@ -126,7 +153,7 @@ pub(super) fn materialize(
         })
         .collect();
     let sources = if request.action == "preparation" {
-        crate::reader::sources(&workspace.snapshot)
+        crate::reader::sources(snapshot)
             .into_iter()
             .map(|source| {
                 if cancel.load(Ordering::Relaxed) {
@@ -153,9 +180,9 @@ pub(super) fn materialize(
     write(
         &exploration.directory.join("manifest.json"),
         &json!({
-            "snapshotId": workspace.snapshot.id,
-            "scope": workspace.snapshot.request,
-            "head": workspace.snapshot.head,
+            "snapshotId": snapshot.id,
+            "scope": snapshot.request,
+            "head": snapshot.head,
             "reviewState": exploration.directory.join("review.json"),
             "changes": changes,
             "focus": focus,

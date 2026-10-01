@@ -55,6 +55,7 @@ fn fixture() -> (
     )
     .unwrap();
     let request = AgentRequest {
+        context_id: None,
         id: id(),
         review_id: workspace.review.id.clone(),
         provider: "codex".into(),

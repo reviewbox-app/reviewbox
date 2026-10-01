@@ -1,3 +1,5 @@
+#[path = "proposals/knowledge.rs"]
+pub(crate) mod code_explain;
 use crate::{contracts::*, knowledge, reviews, storage::Storage};
 
 fn validate(storage: &Storage, workspace: &Workspace, content: &ProposalContent) -> AppResult<()> {
@@ -35,9 +37,12 @@ fn validate(storage: &Storage, workspace: &Workspace, content: &ProposalContent)
                 ));
             }
             let mut value = knowledge::load(storage, &workspace.review.repository_id)?;
-            value
-                .documents
-                .push(document(workspace, path, sections, &value.language)?);
+            value.documents.push(document(
+                &workspace.snapshot,
+                path,
+                sections,
+                &value.language,
+            )?);
             knowledge::prepare(storage, value)?;
         }
         ProposalContent::Glossary { terms } => {
@@ -137,13 +142,12 @@ pub(crate) fn diagnostics(
 }
 
 fn document(
-    workspace: &Workspace,
+    snapshot: &Snapshot,
     path: &str,
     sections: &[ExplanationSection],
     language: &str,
 ) -> AppResult<ExplanationDocument> {
-    let file = workspace
-        .snapshot
+    let file = snapshot
         .files
         .iter()
         .find(|f| f.path == path)
@@ -159,8 +163,8 @@ fn document(
     }
     Ok(ExplanationDocument {
         id: id(),
-        repository_id: workspace.review.repository_id.clone(),
-        snapshot_id: workspace.snapshot.id.clone(),
+        repository_id: snapshot.repository_id.clone(),
+        snapshot_id: snapshot.id.clone(),
         path: path.into(),
         fingerprint: file.content.hash.clone(),
         language: language.into(),
@@ -224,6 +228,7 @@ pub fn parse(
     }
     validate_draft(storage, &workspace, &content)?;
     let proposal = Proposal {
+        context_id: None,
         id: id(),
         review_id: review_id.into(),
         snapshot_id: workspace.snapshot.id,
@@ -243,6 +248,9 @@ pub fn answer(
     content: ProposalContent,
     accepted: bool,
 ) -> AppResult<Proposal> {
+    if proposal_id.starts_with("knowledge-") {
+        return code_explain::answer(storage, proposal_id, revision, content, accepted);
+    }
     let mut proposal: Proposal = storage.get("proposal", proposal_id)?;
     if proposal.revision != revision || proposal.status != "pending" {
         return Err(AppError::new(
@@ -301,11 +309,12 @@ pub fn answer(
         other => {
             let mut value = knowledge::load(storage, &workspace.review.repository_id)?;
             match other {
-                ProposalContent::Explanation { path, sections } => {
-                    value
-                        .documents
-                        .push(document(&workspace, &path, &sections, &value.language)?)
-                }
+                ProposalContent::Explanation { path, sections } => value.documents.push(document(
+                    &workspace.snapshot,
+                    &path,
+                    &sections,
+                    &value.language,
+                )?),
                 ProposalContent::Glossary { mut terms } => {
                     fresh_term_ids(&mut terms);
                     value.terms.extend(terms);
