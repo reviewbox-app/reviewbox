@@ -12,9 +12,11 @@ mod reader;
 pub use reader::*;
 mod preparation;
 mod provider_setup;
+mod publication;
 pub use creation::*;
 pub use preparation::*;
 pub use provider_setup::*;
+pub use publication::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +51,46 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewMenuAction {
+    Refresh,
+    CompleteManual,
+    CompleteUpdated,
+    KeepLocal,
+    RetryPublication,
+    Reopen,
+    Details,
+    Summary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewMenuEntry {
+    pub action: ReviewMenuAction,
+    pub enabled: bool,
+}
+
+/// Presentation state of the review currently open in the main reader.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewMenuState {
+    pub review_id: String,
+    pub snapshot_id: String,
+    pub status: PublicationStatus,
+    pub update_with_rev: bool,
+    pub keep_local: bool,
+    pub entries: Vec<ReviewMenuEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewMenuEvent {
+    pub review_id: String,
+    pub snapshot_id: String,
+    pub action: ReviewMenuAction,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Repository {
@@ -58,7 +100,7 @@ pub struct Repository {
     pub branch: String,
     pub opened_at: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Scope {
     Local,
@@ -157,6 +199,9 @@ pub struct Topic {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Decision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub carried_from: Option<DecisionOrigin>,
     #[serde(default = "legacy_author")]
     pub author: String,
     pub id: String,
@@ -164,6 +209,13 @@ pub struct Decision {
     pub state: DecisionState,
     pub fingerprint: String,
     pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionOrigin {
+    pub review_id: String,
+    pub snapshot_id: String,
+    pub decision_id: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, Default)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +232,12 @@ pub struct ReadingPosition {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Review {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub update_origin: Option<ReviewAdaptation>,
+    #[serde(default)]
+    pub needs_update_confirmation: bool,
+    pub publication: ReviewPublication,
     #[serde(default)]
     pub glossary: Vec<DocumentTerm>,
     pub id: String,
@@ -206,6 +264,13 @@ pub struct Workspace {
     pub review: Review,
     pub snapshot: Snapshot,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewFreshness {
+    pub changed: bool,
+    pub stale_step_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FileContent {
@@ -216,6 +281,14 @@ pub struct FileContent {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ReviewAction {
+    CompleteUpdatedReview,
+    CompleteManualReview,
+    ReopenReview,
+    SetKeepLocal {
+        #[serde(rename = "keepLocal")]
+        keep_local: bool,
+    },
+    RetryPublication,
     Rename {
         title: String,
     },
@@ -241,7 +314,6 @@ pub enum ReviewAction {
     ValidateFile {
         #[serde(rename = "fileId")]
         file_id: String,
-        level: ReadingLevel,
     },
     ReopenFile {
         #[serde(rename = "fileId")]
@@ -414,6 +486,10 @@ pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
         AppError::decl(&cfg),
+        ReviewMenuAction::decl(&cfg),
+        ReviewMenuEntry::decl(&cfg),
+        ReviewMenuState::decl(&cfg),
+        ReviewMenuEvent::decl(&cfg),
         ProjectSettings::decl(&cfg),
         PreparationMode::decl(&cfg),
         ReviewPreview::decl(&cfg),
@@ -424,13 +500,16 @@ pub fn typescript() -> String {
         ProviderInstallationMethod::decl(&cfg),
         ProviderInstallation::decl(&cfg),
         ProviderSetupRequest::decl(&cfg),
+        ProviderUpdateCheck::decl(&cfg),
         ProviderSetupEvent::decl(&cfg),
         ProviderSetupPhase::decl(&cfg),
         AgentPreparationContext::decl(&cfg),
         ProposalDiagnostic::decl(&cfg),
         PreparationRequest::decl(&cfg),
         PreparationState::decl(&cfg),
-        TranslationSelection::decl(&cfg),
+        PreparationStep::decl(&cfg),
+        PreparationStepStatus::decl(&cfg),
+        ReviewAdaptation::decl(&cfg),
         PreparationBatch::decl(&cfg),
         PreparationBatchStatus::decl(&cfg),
         PreparationPhaseCount::decl(&cfg),
@@ -450,11 +529,9 @@ pub fn typescript() -> String {
         ReadingContext::decl(&cfg),
         ReviewDocument::decl(&cfg),
         LevelDocuments::decl(&cfg),
+        DocumentDependencies::decl(&cfg),
         DocumentReference::decl(&cfg),
         DocumentTerm::decl(&cfg),
-        PseudoBlock::decl(&cfg),
-        PseudoTranslation::decl(&cfg),
-        PseudoTranslationInfo::decl(&cfg),
         ReviewFile::decl(&cfg),
         ReviewFileContent::decl(&cfg),
         SourceDescriptor::decl(&cfg),
@@ -464,9 +541,16 @@ pub fn typescript() -> String {
         Step::decl(&cfg),
         Topic::decl(&cfg),
         Decision::decl(&cfg),
+        DecisionOrigin::decl(&cfg),
         ReadingPosition::decl(&cfg),
+        PublicationStatus::decl(&cfg),
+        ReviewCompletionKind::decl(&cfg),
+        ReviewCompletion::decl(&cfg),
+        ReviewArchive::decl(&cfg),
+        ReviewPublication::decl(&cfg),
         Review::decl(&cfg),
         Workspace::decl(&cfg),
+        ReviewFreshness::decl(&cfg),
         FileContent::decl(&cfg),
         ReviewAction::decl(&cfg),
         Coverage::decl(&cfg),

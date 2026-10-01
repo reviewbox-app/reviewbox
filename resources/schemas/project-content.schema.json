@@ -33,7 +33,7 @@
     },
     "format": { "const": "reviewbox" },
     "snapshotId": { "type": "string" },
-    "version": { "const": 3 }
+    "version": { "const": 4 }
   },
   "required": ["format", "version", "snapshotId", "entries"],
   "title": "ContentPack",

@@ -1,5 +1,17 @@
 {
   "$defs": {
+    "DocumentDependencies": {
+      "additionalProperties": false,
+      "properties": {
+        "signature": { "type": "string" },
+        "sources": {
+          "items": { "$ref": "#/$defs/SourceDescriptor" },
+          "type": "array"
+        }
+      },
+      "required": ["signature", "sources"],
+      "type": "object"
+    },
     "DocumentReference": {
       "additionalProperties": false,
       "properties": {
@@ -43,16 +55,27 @@
     "LevelDocuments": {
       "additionalProperties": false,
       "properties": {
-        "beginner": { "$ref": "#/$defs/ReviewDocument" },
-        "developer": { "$ref": "#/$defs/ReviewDocument" },
+        "contextSources": {
+          "default": [],
+          "items": { "type": "string" },
+          "type": "array"
+        },
+        "dependencies": {
+          "anyOf": [
+            { "$ref": "#/$defs/DocumentDependencies" },
+            { "type": "null" }
+          ]
+        },
+        "essential": { "$ref": "#/$defs/ReviewDocument" },
+        "explained": { "$ref": "#/$defs/ReviewDocument" },
         "glossary": {
           "default": [],
           "items": { "$ref": "#/$defs/DocumentTerm" },
           "type": "array"
         },
-        "intermediate": { "$ref": "#/$defs/ReviewDocument" }
+        "technical": { "$ref": "#/$defs/ReviewDocument" }
       },
-      "required": ["beginner", "intermediate", "developer"],
+      "required": ["essential", "explained", "technical"],
       "type": "object"
     },
     "Part": {
@@ -66,52 +89,12 @@
                 { "type": "null" }
               ]
             },
-            "kind": { "const": "document", "type": "string" },
-            "pseudocodeSelected": {
-              "default": null,
-              "type": ["boolean", "null"]
-            },
-            "pseudocodeSkipReason": {
-              "default": null,
-              "type": ["string", "null"]
-            }
+            "kind": { "const": "document", "type": "string" }
           },
           "required": ["kind"],
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": { "const": "translation", "type": "string" },
-            "sourceHash": { "type": "string" },
-            "sourceId": { "type": "string" },
-            "unavailableReason": { "type": ["string", "null"] }
-          },
-          "required": ["kind", "sourceId", "sourceHash"],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "block": { "$ref": "#/$defs/PseudoBlock" },
-            "index": { "format": "uint32", "minimum": 0, "type": "integer" },
-            "kind": { "const": "block", "type": "string" },
-            "sourceId": { "type": "string" }
-          },
-          "required": ["kind", "sourceId", "index", "block"],
-          "type": "object"
         }
       ]
-    },
-    "PseudoBlock": {
-      "additionalProperties": false,
-      "properties": {
-        "endLine": { "format": "uint32", "minimum": 0, "type": "integer" },
-        "startLine": { "format": "uint32", "minimum": 0, "type": "integer" },
-        "text": { "type": "string" }
-      },
-      "required": ["startLine", "endLine", "text"],
-      "type": "object"
     },
     "ReviewDocument": {
       "additionalProperties": false,
@@ -138,6 +121,16 @@
       },
       "required": ["body", "references", "terms", "readingSeconds"],
       "type": "object"
+    },
+    "SourceDescriptor": {
+      "properties": {
+        "hash": { "type": "string" },
+        "path": { "type": "string" },
+        "size": { "format": "uint32", "minimum": 0, "type": "integer" },
+        "sourceId": { "type": "string" }
+      },
+      "required": ["sourceId", "path", "hash", "size"],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -150,7 +143,7 @@
     "format": { "const": "reviewbox" },
     "preparationId": { "type": "string" },
     "reviewId": { "type": "string" },
-    "version": { "const": 3 }
+    "version": { "const": 4 }
   },
   "required": ["format", "version", "reviewId", "preparationId", "entries"],
   "title": "Pack",

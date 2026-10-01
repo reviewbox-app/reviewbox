@@ -1,0 +1,27 @@
+{
+  "$defs": {
+    "BundleEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "hash": { "type": "string" },
+        "size": { "format": "uint64", "minimum": 0, "type": "integer" }
+      },
+      "required": ["hash", "size"],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "files": {
+      "additionalProperties": { "$ref": "#/$defs/BundleEntry" },
+      "type": "object"
+    },
+    "format": { "const": "reviewbox-publication" },
+    "reviewId": { "type": "string" },
+    "version": { "const": 4 }
+  },
+  "required": ["format", "version", "reviewId", "files"],
+  "title": "BundleManifest",
+  "type": "object"
+}

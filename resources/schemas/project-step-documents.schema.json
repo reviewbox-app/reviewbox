@@ -1,5 +1,17 @@
 {
   "$defs": {
+    "DocumentDependencies": {
+      "additionalProperties": false,
+      "properties": {
+        "signature": { "type": "string" },
+        "sources": {
+          "items": { "$ref": "#/$defs/SourceDescriptor" },
+          "type": "array"
+        }
+      },
+      "required": ["signature", "sources"],
+      "type": "object"
+    },
     "DocumentReference": {
       "additionalProperties": false,
       "properties": {
@@ -34,16 +46,27 @@
     "LevelDocuments": {
       "additionalProperties": false,
       "properties": {
-        "beginner": { "$ref": "#/$defs/ReviewDocument" },
-        "developer": { "$ref": "#/$defs/ReviewDocument" },
+        "contextSources": {
+          "default": [],
+          "items": { "type": "string" },
+          "type": "array"
+        },
+        "dependencies": {
+          "anyOf": [
+            { "$ref": "#/$defs/DocumentDependencies" },
+            { "type": "null" }
+          ]
+        },
+        "essential": { "$ref": "#/$defs/ReviewDocument" },
+        "explained": { "$ref": "#/$defs/ReviewDocument" },
         "glossary": {
           "default": [],
           "items": { "$ref": "#/$defs/DocumentTerm" },
           "type": "array"
         },
-        "intermediate": { "$ref": "#/$defs/ReviewDocument" }
+        "technical": { "$ref": "#/$defs/ReviewDocument" }
       },
-      "required": ["beginner", "intermediate", "developer"],
+      "required": ["essential", "explained", "technical"],
       "type": "object"
     },
     "ReviewDocument": {
@@ -71,6 +94,16 @@
       },
       "required": ["body", "references", "terms", "readingSeconds"],
       "type": "object"
+    },
+    "SourceDescriptor": {
+      "properties": {
+        "hash": { "type": "string" },
+        "path": { "type": "string" },
+        "size": { "format": "uint32", "minimum": 0, "type": "integer" },
+        "sourceId": { "type": "string" }
+      },
+      "required": ["sourceId", "path", "hash", "size"],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -82,7 +115,7 @@
     },
     "format": { "const": "reviewbox" },
     "reviewId": { "type": "string" },
-    "version": { "const": 3 }
+    "version": { "const": 4 }
   },
   "required": ["format", "version", "reviewId", "documents"],
   "title": "Pack",

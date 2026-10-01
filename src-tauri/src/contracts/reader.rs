@@ -6,10 +6,13 @@ use ts_rs::TS;
 )]
 #[serde(rename_all = "camelCase")]
 pub enum ReadingLevel {
-    Beginner,
+    #[serde(alias = "beginner")]
+    Essential,
     #[default]
-    Intermediate,
-    Developer,
+    #[serde(alias = "intermediate")]
+    Explained,
+    #[serde(alias = "developer")]
+    Technical,
 }
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, TS, Default,
@@ -42,18 +45,32 @@ pub struct ReviewDocument {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LevelDocuments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dependencies: Option<DocumentDependencies>,
+    #[serde(default)]
+    pub context_sources: Vec<String>,
     #[serde(default)]
     pub glossary: Vec<DocumentTerm>,
-    pub beginner: ReviewDocument,
-    pub intermediate: ReviewDocument,
-    pub developer: ReviewDocument,
+    #[serde(alias = "beginner")]
+    pub essential: ReviewDocument,
+    #[serde(alias = "intermediate")]
+    pub explained: ReviewDocument,
+    #[serde(alias = "developer")]
+    pub technical: ReviewDocument,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentDependencies {
+    pub signature: String,
+    pub sources: Vec<SourceDescriptor>,
 }
 impl LevelDocuments {
     pub fn get(&self, level: ReadingLevel) -> &ReviewDocument {
         match level {
-            ReadingLevel::Beginner => &self.beginner,
-            ReadingLevel::Intermediate => &self.intermediate,
-            ReadingLevel::Developer => &self.developer,
+            ReadingLevel::Essential => &self.essential,
+            ReadingLevel::Explained => &self.explained,
+            ReadingLevel::Technical => &self.technical,
         }
     }
 }
@@ -76,53 +93,18 @@ pub struct DocumentTerm {
     pub context: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PseudoBlock {
-    pub start_line: u32,
-    pub end_line: u32,
-    pub text: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PseudoTranslation {
-    pub source_id: String,
-    pub source_hash: String,
-    pub blocks: Vec<PseudoBlock>,
-    pub unavailable_reason: Option<String>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PseudoTranslationInfo {
-    pub source_id: String,
-    pub source_hash: String,
-    pub available: bool,
-    pub unavailable_reason: Option<String>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFile {
-    #[serde(default)]
-    #[ts(optional)]
-    pub pseudocode_selected: Option<bool>,
-    #[serde(default)]
-    pub pseudocode_skip_reason: Option<String>,
     pub id: String,
     pub path: String,
     pub change_ids: Vec<String>,
     pub has_documents: bool,
-    pub translations: Vec<PseudoTranslationInfo>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewFileContent {
-    #[serde(default)]
-    #[ts(optional)]
-    pub pseudocode_selected: Option<bool>,
-    #[serde(default)]
-    pub pseudocode_skip_reason: Option<String>,
     pub file_id: String,
     pub documents: Option<LevelDocuments>,
-    pub translations: Vec<PseudoTranslation>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -159,4 +141,26 @@ pub enum DecisionTarget {
 pub enum DecisionState {
     Examined,
     Validated,
+}
+
+impl<'de> Deserialize<'de> for ReviewFileContent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Stored {
+            file_id: String,
+            documents: Option<LevelDocuments>,
+            #[serde(default, rename = "pseudocodeSelected")]
+            _selected: serde::de::IgnoredAny,
+            #[serde(default, rename = "pseudocodeSkipReason")]
+            _reason: serde::de::IgnoredAny,
+            #[serde(default, rename = "translations")]
+            _translations: serde::de::IgnoredAny,
+        }
+        let stored = Stored::deserialize(deserializer)?;
+        Ok(Self {
+            file_id: stored.file_id,
+            documents: stored.documents,
+        })
+    }
 }

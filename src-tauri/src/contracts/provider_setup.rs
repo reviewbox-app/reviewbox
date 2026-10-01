@@ -34,6 +34,8 @@ pub struct ProviderInstallation {
 pub struct ProviderSetupRequest {
     pub operation_id: String,
     pub provider: String,
+    #[serde(default)]
+    pub expected_executable: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
@@ -55,4 +57,12 @@ pub struct ProviderSetupEvent {
     pub provider: String,
     pub phase: ProviderSetupPhase,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUpdateCheck {
+    pub status: super::ProviderStatus,
+    pub latest_version: String,
+    pub update_available: bool,
 }
