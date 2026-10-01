@@ -1,3 +1,4 @@
+import { InlineMarkdown } from "@/features/markdown/components/InlineMarkdown"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   InformationCircleIcon,
@@ -32,7 +33,6 @@ export function StepDocument({
   validatedBy,
   compact = false,
   level,
-  sourceMode,
   onOpenCode,
   onOpenReference,
 }: {
@@ -45,7 +45,6 @@ export function StepDocument({
   validatedBy?: { author: string; createdAt: string }
   compact?: boolean
   level: ReadingLevel
-  sourceMode: "real" | "pseudo"
   onOpenCode: (anchor: CodeAnchor) => void
   onOpenReference: (reference: DocumentReference) => void
 }) {
@@ -60,7 +59,8 @@ export function StepDocument({
     >
       <header className="space-y-3">
         <p className="text-xs font-medium text-muted-foreground">
-          Step {index + 1} of {total} · {topic.title} ·{" "}
+          Step {index + 1} of {total} ·{" "}
+          <InlineMarkdown>{topic.title}</InlineMarkdown> ·{" "}
           {Math.max(1, Math.ceil(document.readingSeconds / 60))} min read
         </p>
         <h1
@@ -69,7 +69,7 @@ export function StepDocument({
             compact ? "text-xl leading-7" : "text-3xl leading-10"
           )}
         >
-          {step.title}
+          <InlineMarkdown>{step.title}</InlineMarkdown>
         </h1>
         {validatedBy && (
           <Badge className="max-w-full bg-review-validated-soft whitespace-normal text-review-validated">
@@ -99,11 +99,10 @@ export function StepDocument({
         reviewId={workspace.review.id}
         snapshotId={workspace.snapshot.id}
         files={workspace.review.files}
-        sourceMode={sourceMode}
-        onOpenReference={level === "beginner" ? undefined : onOpenReference}
+        onOpenReference={onOpenReference}
         className={compact ? "text-sm leading-6" : "text-base leading-7"}
       />
-      {level !== "beginner" && unit.anchors.length > 0 && (
+      {unit.anchors.length > 0 && (
         <section className="space-y-2" aria-label="Code for this step">
           <h2 className="text-xs font-medium text-muted-foreground">
             Code for this step

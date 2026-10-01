@@ -34,6 +34,11 @@ export function useReviewSession() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [changed, setChanged] = useState(false)
+  const refreshFreshness = useRef<() => Promise<void>>(async () => {})
+  const [freshnessSnapshot, setFreshnessSnapshot] = useState<string | null>(
+    null
+  )
+  const [staleStepIds, setStaleStepIds] = useState<string[]>([])
   const [newReview, setNewReview] = useState(false)
   const current = useRef<Workspace | null>(null)
   const generation = useRef(0)
@@ -79,7 +84,11 @@ export function useReviewSession() {
     [accept]
   )
   const install = useCallback(
-    (value: Workspace) => {
+    (value: Workspace, navigate = true) => {
+      const sourceChanged =
+        current.current?.review.id !== value.review.id ||
+        current.current?.snapshot.id !== value.snapshot.id ||
+        current.current?.review.preparationId !== value.review.preparationId
       pendingPosition.current = null
       accept(value)
       const position = value.review.position
@@ -89,8 +98,12 @@ export function useReviewSession() {
       const p =
         c?.passages.find((p) => p.id === position.passageId) ?? c?.passages[0]
       setSelected(c && p ? anchorFor(value.snapshot, c.id, p) : null)
-      setChanged(false)
-      setSpace("review")
+      if (sourceChanged) {
+        setChanged(false)
+        setFreshnessSnapshot(null)
+        setStaleStepIds([])
+      }
+      if (navigate) setSpace("review")
     },
     [accept, setSpace]
   )
@@ -191,12 +204,20 @@ export function useReviewSession() {
   const action = useCallback(
     (action: ReviewAction) => {
       if (writing.current) return Promise.resolve(false)
+      const ownerIdentity = current.current
+        ? readerIdentity(current.current)
+        : null
       const owner = current.current?.review.id
       const epoch = generation.current
       if (!owner) return Promise.resolve(false)
       const task = mutations.current.then(async () => {
         const value = current.current
-        if (!value || value.review.id !== owner || generation.current !== epoch)
+        if (
+          !value ||
+          readerIdentity(value) !== ownerIdentity ||
+          value.review.id !== owner ||
+          generation.current !== epoch
+        )
           return false
         if (action.kind !== "savePosition") setBusy(true)
         try {
@@ -206,11 +227,16 @@ export function useReviewSession() {
             action
           )
           if (
-            current.current?.review.id === owner &&
+            current.current &&
+            readerIdentity(current.current) === ownerIdentity &&
+            current.current.review.id === owner &&
             generation.current === epoch
-          )
-            accept(next)
-          return true
+          ) {
+            if (next.review.id !== owner) install(next)
+            else accept(next)
+            return true
+          }
+          return false
         } catch (e) {
           setError(errorMessage(e))
           return false
@@ -222,7 +248,7 @@ export function useReviewSession() {
       mutations.current = task.then(() => undefined)
       return task
     },
-    [accept]
+    [accept, install]
   )
   const selectPosition = useCallback(
     (position: ReadingPosition) => {
@@ -305,6 +331,23 @@ export function useReviewSession() {
     },
     [selectPosition]
   )
+  const selectView = useCallback(
+    (view: "document" | "code") => {
+      const value = current.current
+      if (view === "document" && value?.review.position.context === "files") {
+        // File exploration retains stepId as the independent guided cursor.
+        // Returning to the explanation resumes that step, not the explored file.
+        const units = readingUnits(value)
+        const remembered =
+          units.find(
+            (item) => item.step.step.id === value.review.position.stepId
+          ) ?? units[0]
+        if (remembered) selectStep(remembered.step.step.id)
+      }
+      useReviewWorkspaceStore.getState().setView(view)
+    },
+    [selectStep]
+  )
   const select = useCallback(
     (anchor: CodeAnchor, stepId?: string) => {
       if (stepId) selectStep(stepId, anchor)
@@ -374,9 +417,11 @@ export function useReviewSession() {
           alive &&
           !writing.current &&
           current.current === before &&
-          value.review.revision !== before?.review.revision
+          (value.review.revision !== before?.review.revision ||
+            JSON.stringify(value.review.publication) !==
+              JSON.stringify(before?.review.publication))
         ) {
-          if (value.snapshot.id !== before?.snapshot.id) install(value)
+          if (value.snapshot.id !== before?.snapshot.id) install(value, false)
           else accept(value)
         }
       } catch (e) {
@@ -394,31 +439,54 @@ export function useReviewSession() {
     }
   }, [watchedReviewId, watchedRepositoryId, accept, install])
   const watchedSnapshotId = workspace?.snapshot.id
+  const watchedPreparationId = workspace?.review.preparationId
   useEffect(() => {
-    if (!watchedSnapshotId) return
+    if (!watchedSnapshotId || !watchedReviewId || !watchedRepositoryId) return
     let alive = true
     let checking = false
-    const check = async () => {
-      if (checking || document.visibilityState !== "visible") return
+    const check = async (force = false) => {
+      if (checking || (!force && document.visibilityState !== "visible")) return
       checking = true
+      if (force) setFreshnessSnapshot(null)
       try {
-        const value = await reviewCommands.changed(watchedSnapshotId)
-        if (alive) setChanged(value)
+        const value = await reviewCommands.freshness(
+          watchedReviewId,
+          watchedRepositoryId
+        )
+        if (alive && current.current?.snapshot.id === watchedSnapshotId) {
+          setChanged(value.changed)
+          setStaleStepIds((old) =>
+            JSON.stringify(old) === JSON.stringify(value.staleStepIds)
+              ? old
+              : value.staleStepIds
+          )
+          setFreshnessSnapshot(watchedSnapshotId)
+        }
       } catch (e) {
-        if (alive) setError(errorMessage(e))
+        if (alive) {
+          setFreshnessSnapshot(null)
+          setError(errorMessage(e))
+        }
       } finally {
         checking = false
       }
     }
-    void check()
-    window.addEventListener("focus", check)
+    const onFocus = () => void check(true)
+    refreshFreshness.current = () => check(true)
+    void check(true)
+    window.addEventListener("focus", onFocus)
     const timer = setInterval(check, 30000)
     return () => {
       alive = false
       clearInterval(timer)
-      window.removeEventListener("focus", check)
+      window.removeEventListener("focus", onFocus)
     }
-  }, [watchedSnapshotId, watchedRepositoryId]) // Snapshot is immutable; revisions must not restart the watcher.
+  }, [
+    watchedSnapshotId,
+    watchedRepositoryId,
+    watchedReviewId,
+    watchedPreparationId,
+  ]) // Snapshot is immutable; revisions must not restart the watcher.
   const nextTopic = useCallback(
     (direction: number) => {
       if (!workspace) return
@@ -458,6 +526,9 @@ export function useReviewSession() {
     busy,
     error,
     changed,
+    staleStepIds,
+    checkFreshness: () => refreshFreshness.current(),
+    freshnessChecked: freshnessSnapshot === workspace?.snapshot.id,
     newReview,
     setNewReview,
     setError,
@@ -469,6 +540,7 @@ export function useReviewSession() {
     select,
     selectStep,
     selectFile,
+    selectView,
     next,
     isCurrentCursor,
     nextTopic,

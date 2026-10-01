@@ -9,10 +9,10 @@ import {
   fileDecision,
   guidedProgress,
   nextReaderTarget,
-  pseudoAvailable,
   readerCursorKey,
   readingStep,
   readingUnits,
+  reviewedTreePaths,
   stepDecision,
   changeStatus,
   previousFilePaths,
@@ -31,10 +31,11 @@ const doc = {
   terms: [],
 }
 const documents: LevelDocuments = {
+  contextSources: [],
   glossary: [],
-  beginner: doc,
-  intermediate: doc,
-  developer: doc,
+  essential: doc,
+  explained: doc,
+  technical: doc,
 }
 const blob = { hash: "hash", size: 10, mode: "100644" }
 const passage = (id: string) => ({
@@ -48,6 +49,19 @@ const passage = (id: string) => ({
 function fixture(): Workspace {
   return {
     review: {
+      needsUpdateConfirmation: false,
+      publication: {
+        status: "draft",
+        keepLocal: false,
+        completion: null,
+        originReviewId: null,
+        archive: null,
+        matchingCommitIds: [],
+        publicationError: null,
+        archiveDeferredReason: null,
+        fileCount: null,
+        stepCount: null,
+      },
       glossary: [],
       id: "review",
       title: "Review",
@@ -74,16 +88,12 @@ function fixture(): Workspace {
           path: "a.ts",
           changeIds: ["change", "unstaged"],
           hasDocuments: true,
-          pseudocodeSkipReason: null,
-          translations: [],
         },
         {
           id: "file-b",
           path: "b.ts",
           changeIds: ["other"],
           hasDocuments: false,
-          pseudocodeSkipReason: null,
-          translations: [],
         },
       ],
       decisions: [],
@@ -224,32 +234,6 @@ test("stale and broken steps retain their place, without valid anchors", () => {
   expect(readingUnits(workspace)).toHaveLength(2)
   expect(currentUnit(workspace)?.unit.anchors).toHaveLength(0)
 })
-test("intermediate file validation requires every present side of every layer", () => {
-  const workspace = fixture()
-  const file = workspace.review.files[0]
-  for (const id of file.changeIds)
-    for (const side of ["before", "after"])
-      file.translations.push({
-        sourceId: `change:${id}:${side}`,
-        sourceHash: "hash",
-        available: true,
-        unavailableReason: null,
-      })
-  expect(pseudoAvailable(file, workspace.snapshot)).toBe(true)
-  file.translations.at(-1)!.available = false
-  expect(pseudoAvailable(file, workspace.snapshot)).toBe(false)
-  const added = workspace.review.files[1]
-  added.translations = [
-    {
-      sourceId: "change:other:after",
-      sourceHash: "hash",
-      available: true,
-      unavailableReason: null,
-    },
-  ]
-  expect(pseudoAvailable(added, workspace.snapshot)).toBe(true)
-  expect(changeStatus(workspace.snapshot.changes[2])).toBe("U")
-})
 
 test("cloned reviews retain distinct cursor ownership", () => {
   const first = fixture()
@@ -266,12 +250,93 @@ test("rename origins are unique across captured layers", () => {
   expect(changeStatus(workspace.snapshot.changes[0])).toBe("R")
 })
 
-test("an explicit model omission needs no file document, while missing translations remain blocked", () => {
+test("tree coverage waits for every associated step, independently of passage coverage or file decisions", () => {
   const workspace = fixture()
-  const file = workspace.review.files[0]
-  expect(pseudoAvailable(file, workspace.snapshot)).toBe(false)
-  file.pseudocodeSkipReason = "Only type declarations."
-  expect(pseudoAvailable(file, workspace.snapshot)).toBe(true)
-  file.hasDocuments = false
-  expect(pseudoAvailable(file, workspace.snapshot)).toBe(true)
+  const steps = workspace.review.topics[0].steps
+  workspace.review.files[0].path = "src/feature/a.ts"
+  workspace.review.files[1].path = "src/other/b.ts"
+  steps[1].anchors = [
+    { ...anchor, changeId: "unstaged", passageId: "unstaged" },
+  ]
+  const validate = (stepId: string) =>
+    workspace.review.decisions.push({
+      id: stepId,
+      author: "human:test",
+      fingerprint: "fp",
+      state: "validated",
+      createdAt: "0",
+      target: { kind: "step", stepId },
+    })
+  validate("first")
+  expect([...reviewedTreePaths(workspace)]).toEqual([])
+  validate("second")
+  expect([...reviewedTreePaths(workspace)].sort()).toEqual([
+    "src/feature",
+    "src/feature/a.ts",
+  ])
+  expect(fileDecision(workspace.review, "file-a")).toBeUndefined()
+  steps[1].anchors.push({ ...anchor, changeId: "other", passageId: "other" })
+  expect([...reviewedTreePaths(workspace)].sort()).toEqual([
+    "src",
+    "src/feature",
+    "src/feature/a.ts",
+    "src/other",
+    "src/other/b.ts",
+  ])
+  workspace.review.decisions.pop()
+  expect([...reviewedTreePaths(workspace)]).toEqual([])
+  validate("second")
+  steps[1].anchors[0].snapshotId = "previous"
+  expect([...reviewedTreePaths(workspace)]).toEqual([])
+})
+
+test("one associated step is enough despite uncovered passages and layers; unmentioned files remain visible", () => {
+  const workspace = fixture()
+  workspace.review.topics[0].steps.splice(1)
+  workspace.review.decisions.push({
+    id: "first",
+    author: "human:test",
+    fingerprint: "fp",
+    state: "validated",
+    createdAt: "0",
+    target: { kind: "step", stepId: "first" },
+  })
+  expect(reviewedTreePaths(workspace).has("a.ts")).toBe(true)
+  expect(reviewedTreePaths(workspace).has("b.ts")).toBe(false)
+  expect(fileDecision(workspace.review, "file-a")).toBeUndefined()
+  workspace.snapshot.changes[0].passages.push(passage("uncovered"))
+  expect(reviewedTreePaths(workspace).has("a.ts")).toBe(true)
+  workspace.review.decisions = []
+  expect(reviewedTreePaths(workspace).has("a.ts")).toBe(false)
+  workspace.review.decisions.push({
+    id: "file",
+    author: "human:test",
+    fingerprint: "fp",
+    state: "validated",
+    createdAt: "0",
+    target: { kind: "file", fileId: "file-b" },
+  })
+  expect(reviewedTreePaths(workspace).has("b.ts")).toBe(true)
+})
+
+test("overlapping steps must all be validated even when they point to the same passage", () => {
+  const workspace = fixture()
+  workspace.review.decisions.push({
+    id: "first",
+    author: "human:test",
+    fingerprint: "fp",
+    state: "validated",
+    createdAt: "0",
+    target: { kind: "step", stepId: "first" },
+  })
+  expect(reviewedTreePaths(workspace).has("a.ts")).toBe(false)
+  workspace.review.decisions.push({
+    id: "second",
+    author: "human:test",
+    fingerprint: "fp",
+    state: "validated",
+    createdAt: "0",
+    target: { kind: "step", stepId: "second" },
+  })
+  expect(reviewedTreePaths(workspace).has("a.ts")).toBe(true)
 })

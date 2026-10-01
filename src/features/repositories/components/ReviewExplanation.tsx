@@ -1,4 +1,9 @@
-import { HugeiconsIcon } from "@hugeicons/react"
+import type {
+  PreparationMode,
+  Scope,
+  ScopePreview,
+} from "@/lib/desktop/contracts.generated"
+import { cn } from "@/lib/utils"
 import {
   AiMagicIcon,
   File01Icon,
@@ -9,12 +14,7 @@ import {
   Route01Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons"
-import type {
-  PreparationMode,
-  Scope,
-  ScopePreview,
-} from "@/lib/desktop/contracts.generated"
-import { cn } from "@/lib/utils"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { fileCount } from "./ReviewScopeStep"
 
 const copy: Record<Scope, { title: string; text: string }> = {
@@ -207,7 +207,7 @@ export function ScopeExplanation({
           </>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2.5 rounded-2xl bg-secondary px-3.5 py-3">
+      <div className="flex flex-wrap items-center gap-2.5 rounded-2xl bg-accent px-3.5 py-3">
         <HugeiconsIcon icon={Layers01Icon} size={16} />
         <span className="flex-1 text-sm font-medium">Review files</span>
         <ReviewStats stats={stats} />
@@ -221,12 +221,12 @@ export function PreparationExplanation({ mode }: { mode: PreparationMode }) {
   const points = rev
     ? [
         "Rev reads the review files",
-        "It writes the steps for all three reading levels",
+        "It writes the steps for all three reading modes",
         "Start reading once the documents are ready",
       ]
     : [
         "Each file appears once, with all its captured changes",
-        "Read and validate files in Developer mode",
+        "Read and validate files in Technical mode",
         "Prepare a guided review with Rev whenever you need it",
       ]
   return (
@@ -240,8 +240,8 @@ export function PreparationExplanation({ mode }: { mode: PreparationMode }) {
         </h3>
         <p className="mt-2 text-sm leading-5 text-muted-foreground">
           {rev
-            ? "Rev explains the captured changes as an ordered reading path, with documents, references and pseudo-code ready before you begin."
-            : "Open the captured source directly, file by file. No documents or pseudo-code are generated for a manual review."}
+            ? "Rev explains the captured changes as an ordered reading path, with documents and references ready before you begin."
+            : "Open the captured source directly, file by file. No documents are generated for a manual review."}
         </p>
       </div>
       <ol className="space-y-3">

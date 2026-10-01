@@ -4,7 +4,7 @@ import type { ReadingLevel } from "@/lib/desktop/contracts.generated"
 
 const key = "reviewbox.reading-preferences"
 const event = "reviewbox:reading-preferences"
-const defaults = { level: "intermediate" as ReadingLevel, askEachReview: false }
+const defaults = { level: "explained" as ReadingLevel, askEachReview: false }
 let raw: string | null | undefined
 let cached = defaults
 export function getReadingPreferences() {
@@ -19,10 +19,19 @@ export function getReadingPreferences() {
     raw = next
     try {
       const value = JSON.parse(next ?? "null")
+      // Normalize preferences written before the reading modes were renamed.
+      const level =
+        value?.level === "beginner"
+          ? "essential"
+          : value?.level === "intermediate"
+            ? "explained"
+            : value?.level === "developer"
+              ? "technical"
+              : value?.level
       cached =
-        value && ["beginner", "intermediate", "developer"].includes(value.level)
+        value && ["essential", "explained", "technical"].includes(level)
           ? {
-              level: value.level as ReadingLevel,
+              level: level as ReadingLevel,
               askEachReview: value.askEachReview === true,
             }
           : defaults

@@ -13,13 +13,13 @@ export function ReadingLevelChoice({
 }) {
   return (
     <RadioGroup
-      aria-label="Reading level"
+      aria-label="Reading mode"
       value={level}
       onValueChange={(value) => {
         if (
-          value === "beginner" ||
-          value === "intermediate" ||
-          value === "developer"
+          value === "essential" ||
+          value === "explained" ||
+          value === "technical"
         )
           onChange(value)
       }}
@@ -27,17 +27,13 @@ export function ReadingLevelChoice({
     >
       {(
         [
-          ["beginner", "Beginner", "Plain explanations and helpful diagrams."],
           [
-            "intermediate",
-            "Intermediate",
-            "Technical explanations, definitions and pseudo-code.",
+            "essential",
+            "Essential",
+            "Plain explanations and helpful diagrams.",
           ],
-          [
-            "developer",
-            "Developer",
-            "Technical detail, captured source and pseudo-code.",
-          ],
+          ["explained", "Explained", "Technical explanations and definitions."],
+          ["technical", "Technical", "Technical detail and captured source."],
         ] as const
       ).map(([value, title, detail]) => (
         <label
@@ -65,7 +61,7 @@ export function ReadingSettings() {
       <div className="rounded-xl border px-4">
         <SettingRow
           title="Ask when starting a review"
-          description="Choose the initial level for each new review. You can always change it while reading."
+          description="Choose the initial reading mode for each new review. You can always change it while reading."
         >
           <Switch
             checked={preferences.askEachReview}

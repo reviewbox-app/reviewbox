@@ -1,4 +1,4 @@
-import type { ReactElement } from "react"
+import type { ComponentProps, ReactElement } from "react"
 import { Kbd } from "@/components/ui/kbd"
 import {
   Tooltip,
@@ -10,16 +10,20 @@ import {
 export function Hint({
   label,
   shortcut,
+  side = "bottom",
+  disableHoverablePopup = false,
   children,
 }: {
   label: string
   shortcut?: string
+  side?: ComponentProps<typeof TooltipContent>["side"]
+  disableHoverablePopup?: boolean
   children: ReactElement
 }) {
   return (
-    <Tooltip>
+    <Tooltip disableHoverablePopup={disableHoverablePopup}>
       <TooltipTrigger render={children} />
-      <TooltipContent side="bottom">
+      <TooltipContent side={side}>
         {label}
         {shortcut && <Kbd>{shortcut}</Kbd>}
       </TooltipContent>

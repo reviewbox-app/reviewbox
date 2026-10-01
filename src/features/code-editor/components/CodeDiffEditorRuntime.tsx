@@ -2,6 +2,7 @@
 
 import { DiffEditor } from "@monaco-editor/react"
 import type { editor } from "monaco-editor"
+import * as monaco from "monaco-editor/editor/editor.api"
 import { useEffect, useLayoutEffect, useRef } from "react"
 import { useCodeTheme } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
@@ -20,7 +21,8 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
   useEffect(() => {
     void ensureCodeLanguage(props.language).catch(() => {})
   }, [props.language])
-  const instance = useRef<editor.IStandaloneDiffEditor | null>(null)
+  const container = useRef<HTMLDivElement>(null)
+  const instance = useRef<editor.IDiffEditor | null>(null)
   const retainModels = useRef({
     original: props.keepCurrentOriginalModel ?? false,
     modified: props.keepCurrentModifiedModel ?? false,
@@ -28,7 +30,15 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
 
   useLayoutEffect(() => {
     const retention = retainModels.current
+    // The React wrapper's onMount runs in a later effect. A fast file/view
+    // switch may unmount it in between creation and that callback, so capture
+    // ownership synchronously, scoped to this container.
+    const created = monaco.editor.onDidCreateDiffEditor((current) => {
+      if (container.current?.contains(current.getContainerDomNode()))
+        instance.current = current
+    })
     return () => {
+      created.dispose()
       const current = instance.current
       if (!current) return
 
@@ -44,29 +54,35 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
 
   return (
     <>
-      <DiffEditor
-        height={320}
-        {...editorProps}
-        theme={theme}
-        options={{
-          ...props.options,
-          wordWrap: "on",
-          scrollbar: { ...props.options?.scrollbar, horizontal: "hidden" },
-          wrappingIndent: "same",
-          diffWordWrap: "on",
-        }}
-        onMount={(mountedEditor, monaco) => {
-          instance.current = mountedEditor
-          mountedEditor
-            .getOriginalEditor()
-            .updateOptions({ "semanticHighlighting.enabled": true })
-          mountedEditor
-            .getModifiedEditor()
-            .updateOptions({ "semanticHighlighting.enabled": true })
-          services.onMount(mountedEditor, monaco)
-          props.onMount?.(mountedEditor, monaco)
-        }}
-      />
+      <div
+        ref={container}
+        style={{ height: props.height ?? 320, width: props.width ?? "100%" }}
+      >
+        <DiffEditor
+          {...editorProps}
+          height="100%"
+          width="100%"
+          theme={theme}
+          options={{
+            ...props.options,
+            wordWrap: "on",
+            scrollbar: { ...props.options?.scrollbar, horizontal: "hidden" },
+            wrappingIndent: "same",
+            diffWordWrap: "on",
+          }}
+          onMount={(mountedEditor, monaco) => {
+            instance.current = mountedEditor
+            mountedEditor
+              .getOriginalEditor()
+              .updateOptions({ "semanticHighlighting.enabled": true })
+            mountedEditor
+              .getModifiedEditor()
+              .updateOptions({ "semanticHighlighting.enabled": true })
+            services.onMount(mountedEditor, monaco)
+            props.onMount?.(mountedEditor, monaco)
+          }}
+        />
+      </div>
       {services.exploration}
     </>
   )

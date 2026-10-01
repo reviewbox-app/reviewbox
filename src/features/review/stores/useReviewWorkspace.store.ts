@@ -7,7 +7,8 @@ interface WorkspaceState {
   space: Space
   view: ReaderView
   readerLevel: ReadingLevel
-  codeMode: "real" | "pseudo"
+  stepsOpen: boolean
+  setStepsOpen: (stepsOpen: boolean) => void
   filesOpen: boolean
   explanationRequested: boolean
   split: boolean
@@ -16,7 +17,6 @@ interface WorkspaceState {
   setSpace: (space: Space) => void
   setView: (view: ReaderView) => void
   setReaderLevel: (readerLevel: ReadingLevel) => void
-  setCodeMode: (codeMode: "real" | "pseudo") => void
   setFilesOpen: (filesOpen: boolean) => void
   setExplanationRequested: (explanationRequested: boolean) => void
   setSplit: (split: boolean) => void
@@ -26,17 +26,23 @@ interface WorkspaceState {
 export const useReviewWorkspaceStore = create<WorkspaceState>((set) => ({
   space: "review",
   view: "document",
-  readerLevel: "intermediate",
-  codeMode: "real",
+  readerLevel: "explained",
+  stepsOpen: true,
+  setStepsOpen: (stepsOpen) => set({ stepsOpen }),
   filesOpen: false,
   explanationRequested: true,
   split: false,
   settings: false,
   palette: false,
   setSpace: (space) => set({ space }),
-  setView: (view) => set({ view }),
+  setView: (view) =>
+    set((state) => ({
+      view,
+      // Entering Code reveals its navigation; ordinary updates in Code still
+      // respect a sidebar the reader has explicitly closed.
+      ...(view === "code" && state.view !== "code" ? { filesOpen: true } : {}),
+    })),
   setReaderLevel: (readerLevel) => set({ readerLevel }),
-  setCodeMode: (codeMode) => set({ codeMode }),
   setFilesOpen: (filesOpen) => set({ filesOpen }),
   setExplanationRequested: (explanationRequested) =>
     set({ explanationRequested }),

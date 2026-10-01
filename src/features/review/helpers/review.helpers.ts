@@ -78,6 +78,41 @@ export function fileDecision(review: Review, fileId: string) {
   )
 }
 
+/** A file is visually done when every associated step is validated. */
+export function reviewedTreePaths(workspace: Workspace) {
+  const stepsByChange = new Map<string, Map<string, boolean>>()
+  for (const unit of readingUnits(workspace)) {
+    const step = unit.step.step
+    const validated =
+      !!stepDecision(workspace.review, step.id) &&
+      unit.anchors.length === step.anchors.length
+    for (const anchor of step.anchors) {
+      const steps =
+        stepsByChange.get(anchor.changeId) ?? new Map<string, boolean>()
+      steps.set(step.id, validated)
+      stepsByChange.set(anchor.changeId, steps)
+    }
+  }
+  const reviewed = new Set<string>()
+  const folders = new Map<string, boolean>()
+  for (const file of workspace.review.files) {
+    const associatedSteps = file.changeIds.flatMap((id) => [
+      ...(stepsByChange.get(id)?.values() ?? []),
+    ])
+    const complete =
+      !!fileDecision(workspace.review, file.id) ||
+      (associatedSteps.length > 0 && associatedSteps.every(Boolean))
+    if (complete) reviewed.add(file.path)
+    const parts = file.path.split("/").slice(0, -1)
+    for (let length = 1; length <= parts.length; length++) {
+      const path = parts.slice(0, length).join("/")
+      folders.set(path, (folders.get(path) ?? true) && complete)
+    }
+  }
+  for (const [path, complete] of folders) if (complete) reviewed.add(path)
+  return reviewed
+}
+
 export function guidedProgress(review: Review) {
   const steps = review.topics.flatMap((topic) => topic.steps)
   const validated = steps.filter((step) => stepDecision(review, step.id)).length
@@ -91,29 +126,6 @@ export function guidedProgress(review: Review) {
 /** Snapshot order is fixed; validation never reorders the file list. */
 export function orderedReviewFiles(workspace: Workspace) {
   return workspace.review.files
-}
-
-export function pseudoAvailable(
-  file: Workspace["review"]["files"][number],
-  snapshot: Snapshot
-) {
-  if (file.pseudocodeSelected === false || file.pseudocodeSkipReason?.trim())
-    return true
-  const sources = snapshot.changes
-    .filter((change) => file.changeIds.includes(change.id))
-    .flatMap((change) => [
-      ...(change.before ? [`change:${change.id}:before`] : []),
-      ...(change.after ? [`change:${change.id}:after`] : []),
-    ])
-  return (
-    sources.length > 0 &&
-    sources.every((sourceId) =>
-      file.translations.some(
-        (translation) =>
-          translation.sourceId === sourceId && translation.available
-      )
-    )
-  )
 }
 
 export function previousFilePaths(changes: Snapshot["changes"]) {

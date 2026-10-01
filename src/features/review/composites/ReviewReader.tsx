@@ -1,17 +1,13 @@
 "use client"
-import { useCallback, useEffect, useRef, useState } from "react"
-import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  Book02Icon,
-  CodeIcon,
-  Cancel01Icon,
-  InformationCircleIcon,
-  MoreHorizontalIcon,
-  SidebarLeftIcon,
-  SidebarRightIcon,
-  TextIcon,
-} from "@hugeicons/core-free-icons"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Empty,
   EmptyContent,
@@ -21,60 +17,64 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "@/components/ui/dropdown-menu"
-import { Hint } from "../components/Hint"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { InlineMarkdown } from "@/features/markdown/components/InlineMarkdown"
 import { ReviewReferenceContent } from "@/features/markdown/components/ReviewMarkdown"
 import type {
   CodeAnchor,
   DocumentReference,
   ReadingLevel,
   ReviewAction,
-  ReviewFileContent,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
+import {
+  Book02Icon,
+  Cancel01Icon,
+  CodeIcon,
+  InformationCircleIcon,
+  SidebarLeftIcon,
+  SidebarRightIcon,
+} from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { DecisionBar } from "../components/DecisionBar"
-import { ReviewContents, type UnitState } from "../components/ReviewContents"
+import { Hint } from "../components/Hint"
+import { ReviewContents } from "../components/ReviewContents"
+import type { UnitState } from "../components/ReviewSteps"
+import { ReviewStepsPanel } from "../components/ReviewStepsPanel"
 import { ReviewFiles } from "../components/ReviewFiles"
+import { ReviewPublicationDetails } from "../components/ReviewPublicationDetails"
 import { ReviewSummary } from "../components/ReviewSummary"
 import { StepDocument } from "../components/StepDocument"
 import {
+  publicationLabel,
+  reviewIsComplete,
+} from "../helpers/publication.helpers"
+import {
   currentUnit,
-  guidedProgress,
   fileDecision,
-  pseudoAvailable,
+  guidedProgress,
   readerCursorKey,
   readerIdentity,
   readingUnits,
   stepDecision,
 } from "../helpers/review.helpers"
-import { pseudoDiff, pseudoPassage } from "../helpers/pseudocode.helpers"
+import { useReviewMenu } from "../hooks/useReviewMenu"
 import { readerCommands } from "../services/reader.commands"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
 import { ReviewCodePane } from "./ReviewCodePane"
 import { ReviewReferencePane } from "./ReviewReferencePane"
 
-const HEADER = 56
-const FOOTER = 64
+const HEADER = 48
+const FOOTER = 42
+const EXPLANATION_WIDTH =
+  "clamp(280px,var(--review-explanation-width,440px),50%)"
 const levelNames: Record<ReadingLevel, string> = {
-  beginner: "Beginner",
-  intermediate: "Intermediate",
-  developer: "Developer",
+  essential: "Essential",
+  explained: "Explained",
+  technical: "Technical",
 }
 
 export function ReviewReader({
@@ -84,10 +84,15 @@ export function ReviewReader({
   onSelect,
   onSelectStep,
   onSelectFile,
+  onViewChange: setView,
   onAction,
   isCurrentCursor,
   onStep,
   onPrepare,
+  onRefresh,
+  staleStepIds = [],
+  updatePending = false,
+  menuEnabled = true,
 }: {
   workspace: Workspace
   selected: CodeAnchor | null
@@ -95,18 +100,23 @@ export function ReviewReader({
   onSelect: (anchor: CodeAnchor, stepId?: string) => void
   onSelectStep: (stepId: string) => void
   onSelectFile: (fileId: string, changeId?: string) => void
+  onViewChange: (view: "document" | "code") => void
   onAction: (action: ReviewAction) => Promise<boolean>
   isCurrentCursor: (key: string) => boolean
   onStep: (direction: number) => void
   onPrepare: () => void
+  onRefresh?: () => void
+  staleStepIds?: string[]
+  updatePending?: boolean
+  menuEnabled?: boolean
 }) {
   const {
     view,
-    setView,
+    setSplit,
     readerLevel: level,
     setReaderLevel,
-    codeMode,
-    setCodeMode,
+    stepsOpen,
+    setStepsOpen,
     filesOpen,
     setFilesOpen,
     explanationRequested,
@@ -114,6 +124,7 @@ export function ReviewReader({
     setSpace,
   } = useReviewWorkspaceStore()
   const { review, snapshot } = workspace
+  const completed = reviewIsComplete(review)
   const units = readingUnits(workspace)
   const hasReviewDocuments = units.length > 0
   const current = currentUnit(workspace)
@@ -132,66 +143,65 @@ export function ReviewReader({
   const passage = change?.passages.find(
     (item) => item.id === selected?.passageId
   )
-  const [loaded, setLoaded] = useState<{
-    key: string
-    content: ReviewFileContent
-  } | null>(null)
   const [fileFailure, setFileFailure] = useState<{
     key: string
     message: string
   } | null>(null)
+  const navigationPanel = useRef<HTMLElement>(null)
   const [summary, setSummary] = useState(false)
-  const [codeMenu, setCodeMenu] = useState(false)
-  const codeTab = useRef<HTMLButtonElement>(null)
+  const [details, setDetails] = useState(false)
+  const menuError = useReviewMenu({
+    review,
+    snapshotId: snapshot.id,
+    hasDocuments: hasReviewDocuments,
+    busy,
+    updatePending,
+    enabled: menuEnabled && !details,
+    onRefresh,
+    onAction,
+    onDetails: () => setDetails(true),
+    onSummary: () => setSummary(true),
+  })
   const [pinned, setPinned] = useState<DocumentReference | null>(null)
+  // The tree locates the displayed source independently of the decision scope.
+  const displayedFile = pinned
+    ? review.files.find(
+        (item) =>
+          pinned.sourceId === `file:${item.path}` ||
+          item.changeIds.some(
+            (id) =>
+              pinned.sourceId === `change:${id}:before` ||
+              pinned.sourceId === `change:${id}:after`
+          )
+      )
+    : file
   const [deciding, setDeciding] = useState(false)
   const decidingRef = useRef(false)
   const cursorKey = readerCursorKey(workspace)
   const scroller = useRef<HTMLDivElement>(null)
   const contentKey = file ? `${readerIdentity(workspace)}/${file.id}` : ""
-  const manualWithoutDocument =
-    review.mode === "manual" && !review.preparationId
-  const fileContent =
-    manualWithoutDocument && file
-      ? {
-          fileId: file.id,
-          documents: null,
-          translations: [],
-          pseudocodeSkipReason: null,
-        }
-      : loaded?.key === contentKey
-        ? loaded.content
-        : null
   const fileError = fileFailure?.key === contentKey ? fileFailure.message : ""
-  const fileId = file?.id
   const [stateCursor, setStateCursor] = useState(cursorKey)
   if (stateCursor !== cursorKey) {
     setStateCursor(cursorKey)
     setPinned(null)
     setSummary(false)
+    setDetails(false)
   }
-  const representation = level === "intermediate" ? "pseudo" : codeMode
-  const pseudo = change ? pseudoDiff(change, fileContent) : undefined
-  const translatedPassage = change
-    ? pseudoPassage(change, passage, fileContent)
-    : undefined
   const decision = guided
     ? unit && stepDecision(review, unit.step.step.id)
     : file && fileDecision(review, file.id)
   const validated = !!decision
   const stale = !!unit && unit.anchors.length !== unit.step.step.anchors.length
-  const unavailable =
-    !guided &&
-    (level === "intermediate" || representation === "pseudo") &&
-    !!file &&
-    !pseudoAvailable(file, snapshot)
-  const showDecisionFooter = !summary && hasReviewDocuments
+  const showDecisionFooter =
+    !summary &&
+    hasReviewDocuments &&
+    !completed &&
+    !review.needsUpdateConfirmation
   const footerHeight = showDecisionFooter ? FOOTER : 0
   const canDecide =
     showDecisionFooter &&
-    (guided
-      ? !!unit && !!unit.anchors.length && !stale
-      : !!file && level !== "beginner" && !unavailable) &&
+    (guided ? !!unit && !!unit.anchors.length && !stale : !!file) &&
     !busy &&
     !deciding &&
     !summary
@@ -201,52 +211,21 @@ export function ReviewReader({
   const rightDocument = guided && !!unit
   const showRight =
     hasReviewDocuments &&
-    level !== "beginner" &&
     view === "code" &&
     explanationRequested &&
     (!!pinned || rightDocument)
   const states: UnitState[] = units.map((item, i) =>
-    i === index && guided
-      ? "current"
-      : stepDecision(review, item.step.step.id)
-        ? "validated"
-        : item.anchors.length !== item.step.step.anchors.length
-          ? "stale"
-          : "todo"
+    staleStepIds.includes(item.step.step.id) ||
+    item.anchors.length !== item.step.step.anchors.length
+      ? "stale"
+      : i === index && guided
+        ? "current"
+        : stepDecision(review, item.step.step.id)
+          ? "validated"
+          : item.anchors.length !== item.step.step.anchors.length
+            ? "stale"
+            : "todo"
   )
-
-  useEffect(() => {
-    let alive = true
-    if (fileId && !manualWithoutDocument)
-      void readerCommands
-        .file(review.id, fileId)
-        .then((content) => {
-          if (alive) {
-            setLoaded({ key: contentKey, content })
-            setFileFailure((current) =>
-              current?.key === contentKey ? null : current
-            )
-          }
-        })
-        .catch((cause) => {
-          if (alive)
-            setFileFailure({ key: contentKey, message: errorMessage(cause) })
-        })
-    return () => {
-      alive = false
-    }
-  }, [review.id, fileId, contentKey, manualWithoutDocument])
-  useEffect(() => {
-    scroller.current?.scrollTo({ top: 0 })
-  }, [cursorKey])
-  useEffect(() => {
-    if (level === "beginner" && !guided) {
-      const last =
-        units.find((item) => item.step.step.id === review.position.stepId) ??
-        units[0]
-      if (last) onSelectStep(last.step.step.id)
-    }
-  }, [level, guided, review.position.stepId, units, onSelectStep])
 
   const run = useCallback(
     async (reopen = false) => {
@@ -261,7 +240,7 @@ export function ReviewReader({
           : file
             ? reopen
               ? { kind: "reopenFile", fileId: file.id }
-              : { kind: "validateFile", fileId: file.id, level }
+              : { kind: "validateFile", fileId: file.id }
             : null
       if (!action) return
       decidingRef.current = true
@@ -286,7 +265,6 @@ export function ReviewReader({
       guided,
       unit,
       file,
-      level,
       onAction,
       isCurrentCursor,
       cursorIndex,
@@ -329,8 +307,10 @@ export function ReviewReader({
     setView("code")
   }
   const pinReference = (reference: DocumentReference) => {
-    if (level === "beginner") return
-    setPinned(reference)
+    // Unified diffs render deletions as view zones, not addressable original
+    // editor lines. Expose the original editor for exact before-side navigation.
+    if (reference.sourceId.endsWith(":before")) setSplit(true)
+    setPinned({ ...reference })
     setExplanationRequested(true)
     setView("code")
   }
@@ -349,9 +329,8 @@ export function ReviewReader({
         selected={selected}
         stale={stale}
         validatedBy={decision || undefined}
-        compact={view === "code" && level !== "beginner"}
+        compact={view === "code"}
         level={level}
-        sourceMode={representation}
         onOpenCode={openCode}
         onOpenReference={pinReference}
       />
@@ -367,431 +346,499 @@ export function ReviewReader({
             </h1>
           </EmptyTitle>
           <EmptyDescription>
-            {level === "beginner"
-              ? "Prepare a review with Rev to read the changes as a document."
-              : "Use the code view to inspect the captured file."}
+            Use the code view to inspect the captured file.
           </EmptyDescription>
         </EmptyHeader>
-        {(review.mode === "manual" || level !== "beginner") && (
-          <EmptyContent className="flex-row flex-wrap justify-center gap-2">
-            {review.mode === "manual" && (
-              <Button onClick={onPrepare}>Prepare with Rev</Button>
-            )}
-            {level !== "beginner" && (
-              <Button variant="secondary" onClick={() => setView("code")}>
-                Open code
-              </Button>
-            )}
-          </EmptyContent>
-        )}
+        <EmptyContent className="flex-row flex-wrap justify-center gap-2">
+          {review.mode === "manual" && !completed && (
+            <Button onClick={onPrepare}>Prepare with Rev</Button>
+          )}
+          <Button variant="secondary" onClick={() => setView("code")}>
+            Open code
+          </Button>
+        </EmptyContent>
       </Empty>
     )
-  const isDocument = level === "beginner" || view === "document" || !change
+  const isDocument = view === "document" || !change
+  const documentPosition = useRef(review.position)
+  useEffect(() => {
+    documentPosition.current = review.position
+  }, [review.position])
+  useEffect(() => {
+    if (!isDocument || summary) return
+    const element = scroller.current
+    if (!element) return
+    element.scrollTo({ top: documentPosition.current.scrollTop })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const save = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        void onAction({
+          kind: "savePosition",
+          position: {
+            ...documentPosition.current,
+            scrollTop: element.scrollTop,
+          },
+        })
+      }, 250)
+    }
+    element.addEventListener("scroll", save, { passive: true })
+    return () => {
+      clearTimeout(timer)
+      element.removeEventListener("scroll", save)
+    }
+  }, [cursorKey, isDocument, summary, onAction])
+
+  const readingModeSwitch = hasReviewDocuments && (
+    <div
+      className="sticky z-30 mx-auto flex w-fit justify-center"
+      style={{ top: 8 }}
+    >
+      <Tabs
+        value={level}
+        onValueChange={(value) => {
+          if (
+            value === "essential" ||
+            value === "explained" ||
+            value === "technical"
+          ) {
+            setReaderLevel(value)
+          }
+        }}
+        className="rounded-full glass-bar"
+      >
+        <TabsList aria-label="Reading mode">
+          {(Object.keys(levelNames) as ReadingLevel[]).map((value) => (
+            <TabsTrigger key={value} value={value}>
+              {levelNames[value]}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+    </div>
+  )
+
+  const showFiles = !isDocument && !summary && filesOpen
+  const showSteps = isDocument && !summary && hasReviewDocuments && stepsOpen
+  const showNavigation = showFiles || showSteps
+  const navigationWidth = isDocument
+    ? "clamp(180px,var(--review-steps-width,280px),35%)"
+    : "clamp(180px,var(--review-files-width,240px),35%)"
 
   return (
-    <main
-      className="relative min-w-0 flex-1 overflow-hidden rounded-panel border bg-card"
-      aria-label="Review"
+    <div
       data-resize-workspace
+      className="grid min-h-0 min-w-0 flex-1 transition-[grid-template-columns,column-gap] duration-200 ease-out data-[resizing=true]:transition-none motion-reduce:transition-none"
+      style={{
+        gridTemplateColumns: `${showNavigation ? navigationWidth : "0px"} minmax(0,1fr)`,
+        columnGap: showNavigation ? 8 : 0,
+      }}
     >
-      {summary ? (
-        <div
-          className="absolute inset-0 overflow-y-auto"
-          style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
-        >
-          <ReviewSummary
-            workspace={workspace}
-            level={level}
-            onReturn={() => setSummary(false)}
-            onHome={() => setSpace("resume")}
-          />
-        </div>
-      ) : isDocument ? (
-        <div
-          ref={scroller}
-          aria-label="Review document"
-          className={cn(
-            "absolute inset-0 overflow-y-auto",
-            !(guided && unit) && "flex flex-col"
-          )}
-          style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
-        >
-          <div
-            className={cn(
-              "mx-auto w-full max-w-[720px] px-8 py-12",
-              !(guided && unit) && "my-auto"
-            )}
-          >
-            {document}
-          </div>
-        </div>
-      ) : (
-        <>
-          <div
-            className={cn(
-              "absolute inset-y-0 left-0",
-              filesOpen &&
-                "min-[1100px]:left-[clamp(180px,var(--review-files-width,240px),35%)]"
-            )}
-            style={{ right: showRight ? "min(440px,40%)" : 0 }}
-          >
-            <div
-              className={cn(
-                "absolute inset-0",
-                pinned && "pointer-events-none invisible"
-              )}
-              aria-hidden={!!pinned}
-            >
-              <ReviewCodePane
-                key={`${snapshot.id}/${change.id}/${representation}`}
-                snapshot={snapshot}
-                change={change}
-                passage={
-                  representation === "pseudo" ? translatedPassage : passage
-                }
-                selection={selected}
-                stepLabel={
-                  guided && index >= 0 ? `Step ${index + 1}` : undefined
-                }
-                position={review.position}
-                onPosition={(position) => {
-                  void onAction({ kind: "savePosition", position })
-                }}
-                overlay={{ top: HEADER, bottom: footerHeight }}
-                representation={representation}
-                pseudo={pseudo}
-              />
-            </div>
-            {pinned && (
-              <div className="absolute inset-0">
-                <ReviewReferencePane
-                  workspace={workspace}
-                  reference={pinned}
-                  level={level}
-                  representation={representation}
-                  overlay={{ top: HEADER, bottom: footerHeight }}
-                />
-              </div>
-            )}
-          </div>
-          {filesOpen && (
-            <aside
-              aria-label="Review files"
-              className="absolute left-0 z-30 w-[clamp(180px,var(--review-files-width,240px),35%)] border-r bg-card max-[1100px]:shadow-xl"
-              style={{ top: HEADER, bottom: footerHeight }}
-            >
-              <ReviewFiles
-                workspace={workspace}
-                selectedId={guided ? null : (file?.id ?? null)}
-                level={level}
-                onSelect={selectFile}
-              />
-              <SidebarResizeHandle
-                name="review files"
-                property="--review-files-width"
-              />
-            </aside>
-          )}
-          {showRight && (
-            <aside
-              ref={scroller}
-              aria-label="Explanation"
-              className="absolute inset-y-0 right-0 w-[min(440px,40%)] overflow-y-auto border-l"
-              style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
-            >
-              <div className="space-y-4 px-6 py-6">
-                {pinned ? (
-                  <>
-                    <div className="flex items-start justify-between gap-2">
-                      <h2 className="text-sm font-medium">{pinned.label}</h2>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Close pinned reference"
-                        onClick={() => setPinned(null)}
-                      >
-                        <HugeiconsIcon icon={Cancel01Icon} />
-                      </Button>
-                    </div>
-                    <ReviewReferenceContent
-                      reference={pinned}
-                      level={level}
-                      reviewId={review.id}
-                      snapshotId={snapshot.id}
-                      files={review.files}
-                      sourceMode={representation}
-                    />
-                  </>
-                ) : (
-                  document
-                )}
-              </div>
-            </aside>
-          )}
-        </>
-      )}
-      <header
-        className="absolute inset-x-0 top-0 z-40 flex items-center gap-2 border-b glass-bar px-3"
-        style={{ height: HEADER }}
+      <aside
+        ref={navigationPanel}
+        aria-label={isDocument ? "Review contents" : "Review files"}
+        aria-hidden={!showNavigation}
+        inert={!showNavigation}
+        className={cn(
+          "min-h-0 min-w-0 overflow-hidden transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+          !showNavigation && "-translate-x-3 opacity-0"
+        )}
       >
-        {level !== "beginner" && view === "code" && (
-          <Hint label={filesOpen ? "Hide files" : "Show files"}>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Files"
-              aria-pressed={filesOpen}
-              onClick={() => setFilesOpen(!filesOpen)}
-            >
-              <HugeiconsIcon icon={SidebarLeftIcon} />
-            </Button>
-          </Hint>
-        )}
-        <span
-          className="min-w-0 truncate text-sm font-medium max-[1000px]:hidden"
-          title={review.title}
-        >
-          {review.title}
-        </span>
-        <span className="shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-          {cursorIndex >= 0
-            ? `${guided ? "Step" : "File"} ${cursorIndex + 1} of ${total}`
-            : `${total} ${guided ? "steps" : "files"}`}
-        </span>
-        <div className="flex-1" />
-        {hasReviewDocuments && (
-          <Select
-            value={level}
-            onValueChange={(value) => {
-              if (value) setReaderLevel(value as ReadingLevel)
-            }}
-          >
-            <Hint label="Reading level">
-              <SelectTrigger aria-label="Reading level">
-                <SelectValue>{levelNames[level]}</SelectValue>
-              </SelectTrigger>
-            </Hint>
-            <SelectContent>
-              {(Object.keys(levelNames) as ReadingLevel[]).map((value) => (
-                <SelectItem key={value} value={value}>
-                  {levelNames[value]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {level !== "beginner" && (
-          <Tabs
-            value={view}
-            onValueChange={(value) => setView(value as "document" | "code")}
-          >
-            <TabsList className="h-8">
-              <Hint label="Rev’s explanation" shortcut="D">
-                <TabsTrigger value="document" aria-label="Document">
-                  <HugeiconsIcon icon={Book02Icon} />
-                  <span className="max-[1250px]:hidden">Document</span>
-                </TabsTrigger>
-              </Hint>
-              <Hint
-                label={
-                  level === "developer" && view === "code"
-                    ? "Click again to choose code or pseudo-code"
-                    : representation === "pseudo"
-                      ? "Changes as pseudo-code"
-                      : "Changes as code"
-                }
-                shortcut="D"
-              >
-                <TabsTrigger
-                  ref={codeTab}
-                  value="code"
-                  aria-label="Code"
-                  aria-haspopup={level === "developer" ? "menu" : undefined}
-                  aria-expanded={level === "developer" ? codeMenu : undefined}
-                  className={cn(level === "developer" && "pr-2")}
-                  onClick={() => {
-                    // A second click on the selected tab chooses what it shows.
-                    if (level === "developer" && view === "code")
-                      setCodeMenu(true)
-                  }}
-                >
-                  <HugeiconsIcon icon={CodeIcon} />
-                  <span className="max-[1250px]:hidden">
-                    {representation === "pseudo" ? "Pseudo-code" : "Code"}
-                  </span>
-                  {level === "developer" && (
-                    <HugeiconsIcon
-                      icon={MoreHorizontalIcon}
-                      aria-hidden
-                      className="size-3.5! opacity-60"
-                    />
-                  )}
-                </TabsTrigger>
-              </Hint>
-              {level === "developer" && (
-                <DropdownMenu open={codeMenu} onOpenChange={setCodeMenu}>
-                  <DropdownMenuContent
-                    anchor={codeTab}
-                    align="end"
-                    className="w-44"
-                    aria-label="Code representation"
-                  >
-                    <DropdownMenuRadioGroup
-                      value={codeMode}
-                      onValueChange={(value) =>
-                        setCodeMode(value as "real" | "pseudo")
-                      }
-                    >
-                      <DropdownMenuRadioItem value="real" closeOnClick>
-                        <HugeiconsIcon icon={CodeIcon} />
-                        Code
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="pseudo" closeOnClick>
-                        <HugeiconsIcon icon={TextIcon} />
-                        Pseudo-code
-                      </DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </TabsList>
-          </Tabs>
-        )}
-        {hasReviewDocuments && level !== "beginner" && view === "code" && (
-          <Hint
-            label={
-              explanationRequested ? "Hide explanation" : "Show explanation"
-            }
-          >
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Explanation"
-              aria-pressed={explanationRequested}
-              onClick={() => setExplanationRequested(!explanationRequested)}
-            >
-              <HugeiconsIcon icon={SidebarRightIcon} />
-            </Button>
-          </Hint>
-        )}
-        {hasReviewDocuments && (
-          <ReviewContents
+        {isDocument ? (
+          <ReviewStepsPanel
             units={units}
             states={states}
             onSelect={(item) => onSelectStep(item.step.step.id)}
+            onClose={() => setStepsOpen(false)}
+          />
+        ) : (
+          <ReviewFiles
+            workspace={workspace}
+            selectedId={displayedFile?.id ?? null}
+            visible={showFiles}
+            onSelect={selectFile}
           />
         )}
-      </header>
-      {!summary && !isDocument && file && file.changeIds.length > 1 && (
-        <div
-          className="absolute top-[104px] right-2 z-20 flex gap-1 rounded-xl glass-bar p-1"
-          style={{ right: showRight ? "calc(min(440px,40%) + 8px)" : 8 }}
-          aria-label="File layers"
+      </aside>
+      <div className="relative flex min-h-0 min-w-0">
+        <main
+          className="relative min-w-0 flex-1 overflow-hidden rounded-panel border bg-card"
+          aria-label="Review"
+          data-resize-workspace
         >
-          {file.changeIds.map((changeId) => {
-            const item = snapshot.changes.find(
-              (candidate) => candidate.id === changeId
-            )
-            return (
-              item && (
+          {summary ? (
+            <div
+              className="absolute inset-0 overflow-y-auto"
+              style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
+            >
+              <ReviewSummary
+                workspace={workspace}
+                level={level}
+                onReturn={() => setSummary(false)}
+                onHome={() => setSpace("resume")}
+                busy={busy}
+                onAction={(action) => void onAction(action)}
+              />
+            </div>
+          ) : isDocument ? (
+            <div
+              ref={scroller}
+              aria-label="Review document"
+              className={cn(
+                "absolute inset-0 overflow-y-auto",
+                !(guided && unit) && "flex flex-col"
+              )}
+              style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
+            >
+              {readingModeSwitch}
+              <div
+                className={cn(
+                  "mx-auto w-full max-w-[720px] px-8 py-8",
+                  !(guided && unit) && "my-auto"
+                )}
+              >
+                {document}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div
+                className="absolute inset-y-0 left-0"
+                style={{ right: showRight ? EXPLANATION_WIDTH : 0 }}
+              >
+                <div
+                  className={cn(
+                    "absolute inset-0",
+                    pinned && "pointer-events-none invisible"
+                  )}
+                  aria-hidden={!!pinned}
+                >
+                  <ReviewCodePane
+                    key={`${snapshot.id}/${change.id}`}
+                    snapshot={snapshot}
+                    change={change}
+                    passage={passage}
+                    selection={selected}
+                    stepLabel={
+                      guided && index >= 0 ? `Step ${index + 1}` : undefined
+                    }
+                    position={review.position}
+                    onPosition={(position) => {
+                      void onAction({ kind: "savePosition", position })
+                    }}
+                    overlay={{ top: HEADER, bottom: footerHeight }}
+                  />
+                </div>
+                {pinned && (
+                  <div className="absolute inset-0">
+                    <ReviewReferencePane
+                      workspace={workspace}
+                      reference={pinned}
+                      overlay={{ top: HEADER, bottom: footerHeight }}
+                    />
+                  </div>
+                )}
+              </div>
+              {showRight && (
+                <aside
+                  aria-label="Explanation"
+                  className="absolute inset-y-0 right-0 border-l"
+                  style={{ width: EXPLANATION_WIDTH }}
+                >
+                  <SidebarResizeHandle
+                    name="explanation"
+                    property="--review-explanation-width"
+                    side="right"
+                    minWidth={280}
+                    maxRatio={0.5}
+                  />
+                  <div
+                    ref={scroller}
+                    className="h-full overflow-y-auto"
+                    style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
+                  >
+                    {readingModeSwitch}
+                    <div className="space-y-4 px-6 py-6">
+                      {pinned ? (
+                        <>
+                          <div className="flex items-start justify-between gap-2">
+                            <h2 className="text-sm font-medium">
+                              {pinned.label}
+                            </h2>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label="Close pinned reference"
+                              onClick={() => setPinned(null)}
+                            >
+                              <HugeiconsIcon icon={Cancel01Icon} />
+                            </Button>
+                          </div>
+                          <ReviewReferenceContent reference={pinned} />
+                        </>
+                      ) : (
+                        document
+                      )}
+                    </div>
+                  </div>
+                </aside>
+              )}
+            </>
+          )}
+          <header
+            className="absolute inset-x-0 top-0 z-40 flex items-center gap-2 border-b glass-bar px-3"
+            style={{ height: HEADER }}
+          >
+            {(view === "code" || hasReviewDocuments) && (
+              <Hint
+                label={
+                  view === "code"
+                    ? filesOpen
+                      ? "Hide files"
+                      : "Show files"
+                    : showSteps
+                      ? "Hide review steps"
+                      : "Show review steps"
+                }
+              >
                 <Button
-                  key={changeId}
-                  variant={changeId === change?.id ? "secondary" : "ghost"}
-                  size="xs"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={view === "code" ? "Files" : "Steps"}
+                  aria-pressed={view === "code" ? filesOpen : showSteps}
                   onClick={() => {
-                    setPinned(null)
-                    if (guided) {
-                      const anchor = unit?.anchors.find(
-                        (a) => a.changeId === changeId
-                      )
-                      if (anchor) openCode(anchor)
-                      else
-                        void onAction({
-                          kind: "savePosition",
-                          position: {
-                            ...review.position,
-                            changeId,
-                            passageId: item.passages[0]?.id ?? null,
-                            line: 0,
-                            scrollTop: 0,
-                          },
-                        })
-                    } else selectFile(file.id, changeId)
+                    if (view === "code") setFilesOpen(!filesOpen)
+                    else {
+                      setSummary(false)
+                      setStepsOpen(!showSteps)
+                    }
                   }}
                 >
-                  {item.layer}
+                  <HugeiconsIcon icon={SidebarLeftIcon} />
                 </Button>
-              )
-            )
-          })}
-        </div>
-      )}
-      {(unavailable || fileError) && !summary && (
-        <div
-          className="absolute inset-x-3 z-30 mx-auto max-w-[640px]"
-          style={{ bottom: footerHeight + 8 }}
-        >
-          <Alert size="sm" variant="faded">
-            <HugeiconsIcon icon={InformationCircleIcon} />
-            <AlertDescription>
-              {fileError ||
-                "Pseudocode is unavailable for part of this file. In Developer mode, choose Code to inspect and validate it."}
-            </AlertDescription>
-          </Alert>
-        </div>
-      )}
-      {showDecisionFooter && (
-        <footer
-          className="absolute inset-x-0 bottom-0 z-40 border-t glass-bar"
-          style={{ height: FOOTER }}
-        >
-          <DecisionBar
-            unitLabel={guided ? "step" : "file"}
-            validated={validated}
-            disabled={!canDecide}
-            label={
-              guided
-                ? "Validate step and continue"
-                : "Validate file and continue"
-            }
-            binding={
-              guided
-                ? "This decision belongs to the current step only."
-                : "This decision covers all captured changes of this file."
-            }
-            canPrevious={cursorIndex > 0 && !deciding}
-            canNext={cursorIndex >= 0 && cursorIndex < total - 1 && !deciding}
-            onValidate={() => {
-              void run(false)
-            }}
-            onReopen={() => {
-              void run(true)
-            }}
-            onPrepare={review.mode === "manual" ? onPrepare : undefined}
-            onExamine={() => {
-              if (guided && unit)
-                void onAction({
-                  kind: "examineStep",
-                  stepId: unit.step.step.id,
-                })
-              else if (file)
-                void onAction({ kind: "examineFile", fileId: file.id })
-            }}
-            onExport={() => {
-              void readerCommands
-                .exportSummary(review.id, level)
-                .catch((cause) =>
-                  setFileFailure({
-                    key: contentKey,
-                    message: errorMessage(cause),
-                  })
+              </Hint>
+            )}
+            <span
+              className="min-w-0 truncate text-sm font-medium max-[1000px]:hidden"
+              title={review.title}
+            >
+              <InlineMarkdown>{review.title}</InlineMarkdown>
+            </span>
+            <span className="shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+              {cursorIndex >= 0
+                ? `${guided ? "Step" : "File"} ${cursorIndex + 1} of ${total}`
+                : `${total} ${guided ? "steps" : "files"}`}
+            </span>
+            {completed && (
+              <span className="truncate text-xs text-muted-foreground max-[1250px]:hidden">
+                {publicationLabel(review)}
+              </span>
+            )}
+            <div className="flex-1" />
+            {hasReviewDocuments && !showSteps && (
+              <ReviewContents
+                units={units}
+                states={states}
+                onSelect={(item) => onSelectStep(item.step.step.id)}
+              />
+            )}
+            <Tabs
+              value={view}
+              onValueChange={(value) => setView(value as "document" | "code")}
+            >
+              <TabsList className="h-8">
+                <Hint
+                  label="Rev’s explanation"
+                  shortcut="D"
+                  side="top"
+                  disableHoverablePopup
+                >
+                  <TabsTrigger value="document" aria-label="Document">
+                    <HugeiconsIcon icon={Book02Icon} />
+                    <span className="max-[1250px]:hidden">Document</span>
+                  </TabsTrigger>
+                </Hint>
+                <Hint
+                  label="Changes as code"
+                  shortcut="D"
+                  side="top"
+                  disableHoverablePopup
+                >
+                  <TabsTrigger value="code" aria-label="Code">
+                    <HugeiconsIcon icon={CodeIcon} />
+                    <span className="max-[1250px]:hidden">Code</span>
+                  </TabsTrigger>
+                </Hint>
+              </TabsList>
+            </Tabs>
+            {hasReviewDocuments && view === "code" && (
+              <Hint
+                label={
+                  explanationRequested ? "Hide explanation" : "Show explanation"
+                }
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Explanation"
+                  aria-pressed={explanationRequested}
+                  onClick={() => setExplanationRequested(!explanationRequested)}
+                >
+                  <HugeiconsIcon icon={SidebarRightIcon} />
+                </Button>
+              </Hint>
+            )}
+            {review.needsUpdateConfirmation && (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => void onAction({ kind: "completeUpdatedReview" })}
+              >
+                Complete updated review
+              </Button>
+            )}
+          </header>
+          <Dialog open={details} onOpenChange={setDetails}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>
+                  <InlineMarkdown>{review.title}</InlineMarkdown>
+                </DialogTitle>
+                <DialogDescription>
+                  {publicationLabel(review)}
+                </DialogDescription>
+              </DialogHeader>
+              <ReviewPublicationDetails
+                review={review}
+                busy={busy}
+                onAction={(action) => void onAction(action)}
+              />
+            </DialogContent>
+          </Dialog>
+          {!summary && !isDocument && file && file.changeIds.length > 1 && (
+            <div
+              className="absolute top-[104px] right-2 z-20 flex gap-1 rounded-xl glass-bar p-1"
+              style={{
+                right: showRight ? `calc(${EXPLANATION_WIDTH} + 8px)` : 8,
+              }}
+              aria-label="File layers"
+            >
+              {file.changeIds.map((changeId) => {
+                const item = snapshot.changes.find(
+                  (candidate) => candidate.id === changeId
                 )
-            }}
-            onPrevious={() => onStep(-1)}
-            onNext={() => onStep(1)}
+                return (
+                  item && (
+                    <Button
+                      key={changeId}
+                      variant={changeId === change?.id ? "secondary" : "ghost"}
+                      size="xs"
+                      onClick={() => {
+                        setPinned(null)
+                        if (guided) {
+                          const anchor = unit?.anchors.find(
+                            (a) => a.changeId === changeId
+                          )
+                          if (anchor) openCode(anchor)
+                          else
+                            void onAction({
+                              kind: "savePosition",
+                              position: {
+                                ...review.position,
+                                changeId,
+                                passageId: item.passages[0]?.id ?? null,
+                                line: 0,
+                                scrollTop: 0,
+                              },
+                            })
+                        } else selectFile(file.id, changeId)
+                      }}
+                    >
+                      {item.layer}
+                    </Button>
+                  )
+                )
+              })}
+            </div>
+          )}
+          {(fileError || menuError) && !summary && (
+            <div
+              className="absolute inset-x-3 z-30 mx-auto max-w-[640px]"
+              style={{ bottom: footerHeight + 8 }}
+            >
+              <Alert size="sm" variant="faded">
+                <HugeiconsIcon icon={InformationCircleIcon} />
+                <AlertDescription>{menuError || fileError}</AlertDescription>
+              </Alert>
+            </div>
+          )}
+          {showDecisionFooter && (
+            <footer
+              className="absolute inset-x-0 bottom-0 z-40 border-t glass-bar px-3"
+              style={{ height: FOOTER }}
+            >
+              <DecisionBar
+                unitLabel={guided ? "step" : "file"}
+                validated={validated}
+                disabled={!canDecide}
+                label={
+                  guided
+                    ? "Validate step and continue"
+                    : "Validate file and continue"
+                }
+                binding={
+                  guided
+                    ? "This decision belongs to the current step only."
+                    : "This decision covers all captured changes of this file."
+                }
+                canPrevious={cursorIndex > 0 && !deciding}
+                canNext={
+                  cursorIndex >= 0 && cursorIndex < total - 1 && !deciding
+                }
+                onValidate={() => {
+                  void run(false)
+                }}
+                onReopen={() => {
+                  void run(true)
+                }}
+                onPrepare={review.mode === "manual" ? onPrepare : undefined}
+                onExamine={() => {
+                  if (guided && unit)
+                    void onAction({
+                      kind: "examineStep",
+                      stepId: unit.step.step.id,
+                    })
+                  else if (file)
+                    void onAction({ kind: "examineFile", fileId: file.id })
+                }}
+                onExport={() => {
+                  void readerCommands
+                    .exportSummary(review.id, level)
+                    .catch((cause) =>
+                      setFileFailure({
+                        key: contentKey,
+                        message: errorMessage(cause),
+                      })
+                    )
+                }}
+                onPrevious={() => onStep(-1)}
+                onNext={() => onStep(1)}
+              />
+            </footer>
+          )}
+        </main>
+        {showNavigation && (
+          <SidebarResizeHandle
+            key={isDocument ? "steps" : "files"}
+            name={isDocument ? "review steps" : "review files"}
+            property={
+              isDocument ? "--review-steps-width" : "--review-files-width"
+            }
+            panelRef={navigationPanel}
+            edge="left"
           />
-        </footer>
-      )}
-    </main>
+        )}
+      </div>
+    </div>
   )
 }

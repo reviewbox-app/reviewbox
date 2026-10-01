@@ -1,16 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowLeft01Icon,
-  ArrowReloadHorizontalIcon,
-  ArrowRight01Icon,
-  MoreHorizontalIcon,
-  Tick02Icon,
-  Download01Icon,
-  ViewIcon,
-  AiMagicIcon,
-} from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
-import { Kbd } from "@/components/ui/kbd"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +6,18 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Kbd } from "@/components/ui/kbd"
+import {
+  AiMagicIcon,
+  ArrowLeft01Icon,
+  ArrowReloadHorizontalIcon,
+  ArrowRight01Icon,
+  Download01Icon,
+  MoreHorizontalIcon,
+  Tick02Icon,
+  ViewIcon,
+} from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 /** Floating footer of the review: step navigation around the human decision. */
 export function DecisionBar({
@@ -54,13 +54,14 @@ export function DecisionBar({
   onNext: () => void
 }) {
   return (
-    <div className="grid h-16 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3">
+    <div className="flex h-full items-center justify-center gap-16">
       <div>
         <Button
           variant="ghost"
           disabled={!canPrevious}
           onClick={onPrevious}
           aria-label={`Previous ${unitLabel}`}
+          className="pl-2"
         >
           <HugeiconsIcon icon={ArrowLeft01Icon} />
           <span className="max-[900px]:hidden">Previous {unitLabel}</span>
@@ -71,7 +72,6 @@ export function DecisionBar({
         {validated ? (
           <Button
             variant="secondary"
-            size="lg"
             disabled={disabled}
             onClick={(event) => {
               if (event.detail < 2) onReopen()
@@ -86,7 +86,6 @@ export function DecisionBar({
           </Button>
         ) : (
           <Button
-            size="lg"
             disabled={disabled}
             onClick={(event) => {
               if (event.detail < 2) onValidate()
@@ -105,7 +104,7 @@ export function DecisionBar({
             render={
               <Button
                 variant="secondary"
-                size="icon-lg"
+                size="icon"
                 aria-label="More decisions"
               />
             }
@@ -150,6 +149,7 @@ export function DecisionBar({
           disabled={!canNext}
           onClick={onNext}
           aria-label={`Next ${unitLabel}`}
+          className="pr-2"
         >
           <span className="max-[900px]:hidden">Next {unitLabel}</span>
           <HugeiconsIcon icon={ArrowRight01Icon} />
