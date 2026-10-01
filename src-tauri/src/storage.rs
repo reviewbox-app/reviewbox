@@ -12,6 +12,13 @@ use std::{
     },
 };
 
+mod publications;
+mod readers;
+mod updates;
+pub(crate) use readers::SnapshotLease;
+pub(crate) use updates::UpdateLease;
+mod source_cache;
+
 struct Mounted {
     project: Project,
     documents: Documents,
@@ -22,12 +29,20 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{fs, path::PathBuf, time::Duration};
 
+type ArchivedDocuments = BTreeMap<(String, String, String), Value>;
+
 #[derive(Clone)]
 pub struct Storage {
+    updating: Arc<Mutex<BTreeMap<(String, String), String>>>,
+    update_owner: Option<String>,
     root: PathBuf,
+    source_cache: Arc<source_cache::SourceCache>,
+    active_snapshots: Arc<Mutex<BTreeMap<String, usize>>>,
+    pending_snapshot_gc: Arc<Mutex<std::collections::BTreeSet<String>>>,
     scope: Option<String>,
     projects: Arc<Mutex<BTreeMap<String, Mounted>>>,
-    writes: Arc<Mutex<()>>,
+    writes: Arc<parking_lot::ReentrantMutex<()>>,
+    archives: Arc<Mutex<ArchivedDocuments>>,
     _owner: std::sync::Arc<project_storage::FileLock>,
 }
 impl Storage {
@@ -57,7 +72,17 @@ impl Storage {
                 "Another ReviewBox process already owns this local database.",
             )
         })?;
+        let source_cache = Arc::new(source_cache::SourceCache::open(
+            root.join("blobs"),
+            source_cache::SOURCE_CACHE_LIMIT,
+        )?);
         let storage = Self {
+            updating: Arc::default(),
+            update_owner: None,
+            source_cache,
+            active_snapshots: Arc::default(),
+            pending_snapshot_gc: Arc::default(),
+            archives: Arc::default(),
             root,
             scope: None,
             projects: Arc::default(),
@@ -79,6 +104,7 @@ impl Storage {
         tx.execute("UPDATE documents SET body=json_set(body,'$.status','interrupted'), revision=revision+1 WHERE kind='agent_run' AND json_extract(body,'$.status')='running'", [])?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS project_index (repository_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(repository_id,kind,id)); CREATE TABLE IF NOT EXISTS git_sources (root TEXT NOT NULL, commit_oid TEXT NOT NULL, hash TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY(root,commit_oid,hash));")?;
         tx.commit()?;
+        storage.source_cache.collect()?;
         Ok(storage)
     }
     fn connection(&self) -> AppResult<Connection> {
@@ -89,8 +115,22 @@ impl Storage {
         Ok(db)
     }
     pub fn get<T: DeserializeOwned>(&self, kind: &str, id: &str) -> AppResult<T> {
+        let _read = self.read_consistently();
+        if kind == "review_history" {
+            return Err(AppError::new(
+                "not_found",
+                "Legacy review history is not supported.",
+            ));
+        }
         if project_storage::KINDS.contains(&kind) {
             self.sync_projects(false)?;
+            if let Some(mut value) = self.archived_value(kind, id)? {
+                if kind == "review" {
+                    self.fill_reading(&mut value)?;
+                    self.fill_step_documents(&mut value)?;
+                }
+                return Ok(serde_json::from_value(value)?);
+            }
             let mut values = self
                 .project_values(kind)?
                 .into_iter()
@@ -107,8 +147,9 @@ impl Storage {
             }
             if kind == "review" {
                 self.fill_reading(&mut value)?;
+                self.enrich_publication(&mut value)?;
             }
-            if kind == "review" || kind == "review_history" {
+            if kind == "review" {
                 self.fill_step_documents(&mut value)?;
             }
             if kind == "onboarding" {
@@ -133,16 +174,25 @@ impl Storage {
         .map_err(Into::into)
     }
     pub fn list<T: DeserializeOwned>(&self, kind: &str) -> AppResult<Vec<T>> {
+        let _read = self.read_consistently();
+        if kind == "review_history" {
+            return Ok(Vec::new());
+        }
         if project_storage::KINDS.contains(&kind) {
             self.sync_projects(false)?;
-            return self
-                .project_values(kind)?
+            let mut values = self.project_values(kind)?;
+            if kind == "review" {
+                self.append_archive_summaries(&mut values)?;
+                values.retain(|(_, value)| value["updateOrigin"].is_null());
+            }
+            return values
                 .into_iter()
                 .map(|(_, mut value)| {
                     if kind == "review" {
                         self.fill_reading(&mut value)?;
+                        self.enrich_publication(&mut value)?;
                     }
-                    if kind == "review" || kind == "review_history" {
+                    if (kind == "review") && value["publication"]["status"] != "archived" {
                         self.fill_step_documents(&mut value)?;
                     }
                     if kind == "onboarding" {
@@ -228,7 +278,7 @@ impl Storage {
     pub fn remove(&self, kind: &str, id: &str) -> AppResult<()> {
         if project_storage::KINDS.contains(&kind) {
             self.sync_projects(true)?;
-            let _write = self.writes.lock().unwrap();
+            let _write = self.writes.lock();
             let mut mounted = self.projects.lock().unwrap();
             let matches: Vec<_> = mounted
                 .iter()
@@ -245,11 +295,39 @@ impl Storage {
                 ));
             }
             let m = mounted.get_mut(&matches[0]).unwrap();
+            self.check_update_write(&matches[0], id)?;
             let _lock = m.project.lock()?;
             m.project.recover_locked()?;
             let old = m.project.read()?;
             let mut next = old.clone();
+            if kind == "review"
+                && old
+                    .get(&(kind.into(), id.into()))
+                    .is_some_and(|r| r["publication"]["status"] != "draft")
+            {
+                return Err(AppError::new(
+                    "immutable_review",
+                    "Completed reviews cannot be deleted.",
+                ));
+            }
+            if let Some(value) = old.get(&(kind.into(), id.into())) {
+                if let Some(review) = value["reviewId"].as_str() {
+                    self.check_update_write(&matches[0], review)?;
+                }
+                if !value["updateOrigin"].is_null() && self.update_owner.as_deref() != Some(id) {
+                    return Err(AppError::new(
+                        "review_busy",
+                        "Discard this candidate through its update operation.",
+                    ));
+                }
+            }
             next.remove(&(kind.into(), id.into()));
+            if kind == "review" {
+                next.retain(|(kind, _), data| {
+                    kind != "review" || data["updateOrigin"]["sourceReviewId"] != id
+                });
+                next.retain(|(kind, _), data| kind != "proposal" || data["reviewId"] != id);
+            }
             m.project.commit(&old, &next)?;
             m.documents = next;
             self.index(&m.project, &m.documents)?;
@@ -265,27 +343,7 @@ impl Storage {
         Ok(())
     }
     pub fn blob(&self, bytes: &[u8], mode: String) -> AppResult<BlobRef> {
-        let hash = fingerprint(bytes);
-        let dest = self.root.join("blobs").join(&hash);
-        if !dest.exists() {
-            let tmp = self.root.join("blobs").join(format!(".{}", id()));
-            let result = (|| {
-                use std::io::Write;
-                let mut file = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&tmp)?;
-                file.write_all(bytes)?;
-                file.sync_all()?;
-                fs::rename(&tmp, &dest)?;
-                fs::File::open(self.root.join("blobs"))?.sync_all()?;
-                Ok::<_, std::io::Error>(())
-            })();
-            if result.is_err() {
-                let _ = fs::remove_file(&tmp);
-            }
-            result?;
-        }
+        let hash = self.source_cache.store(bytes)?;
         Ok(BlobRef {
             hash,
             mode,
@@ -314,7 +372,23 @@ impl Storage {
             .map(|m| m.project.clone())
             .collect();
         for project in projects {
-            if let Some(bytes) = project_storage::restore_content(&project, hash)? {
+            let restored = match project_storage::restore_content(&project, hash) {
+                Err(error) if matches!(error.code.as_str(), "missing_content" | "io") => {
+                    let Some(review_id) = project.archived_content_owner(hash) else {
+                        // A missing durable pack is an error, never permission
+                        // to substitute some other capture or the current code.
+                        return Err(error);
+                    };
+                    let scoped = self.scoped(Some(&project.repository_id));
+                    scoped.sync_projects(false)?;
+                    if scoped.archived_value("review", &review_id)?.is_none() {
+                        return Err(error);
+                    }
+                    project_storage::restore_content(&project, hash)?
+                }
+                result => result?,
+            };
+            if let Some(bytes) = restored {
                 self.blob(&bytes, "100644".into())?;
                 return Ok(bytes);
             }
@@ -325,17 +399,10 @@ impl Storage {
         ))
     }
     pub(crate) fn cached_blob(&self, hash: &str) -> AppResult<Vec<u8>> {
-        if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(AppError::new("invalid_hash", "Invalid content identifier."));
-        }
-        let bytes = fs::read(self.root.join("blobs").join(hash))?;
-        if fingerprint(&bytes) != hash {
-            return Err(AppError::new(
-                "corrupt_blob",
-                "Stored content failed its integrity check.",
-            ));
-        }
-        Ok(bytes)
+        self.source_cache.read(hash)
+    }
+    pub(crate) fn pin_source_cache(&self) -> source_cache::SourceCacheLease {
+        self.source_cache.pin()
     }
     pub fn author(&self) -> AppResult<String> {
         if let Ok(value) = self.local_get::<String>("identity", "author") {
@@ -350,13 +417,17 @@ impl Storage {
         review_id: &str,
         file_id: &str,
     ) -> AppResult<ReviewFileContent> {
+        let _read = self.read_consistently();
         self.sync_projects(false)?;
-        let raw = self
-            .project_values("review")?
-            .into_iter()
-            .find(|(id, _)| id == review_id)
-            .map(|(_, v)| v)
-            .ok_or_else(|| AppError::new("not_found", "Review not found."))?;
+        let raw = if let Some(raw) = self.archived_value("review", review_id)? {
+            raw
+        } else {
+            self.project_values("review")?
+                .into_iter()
+                .find(|(id, _)| id == review_id)
+                .map(|(_, v)| v)
+                .ok_or_else(|| AppError::new("not_found", "Review not found."))?
+        };
         let repo: Repository = self.get(
             "repository",
             raw["repositoryId"]
@@ -367,7 +438,14 @@ impl Storage {
             .as_str()
             .ok_or_else(|| AppError::new("not_found", "This review has no generated files yet."))?;
         project_storage::reader_assets::read(
-            &std::path::Path::new(&repo.path).join(".reviewbox"),
+            &self
+                .projects
+                .lock()
+                .unwrap()
+                .get(&repo.id)
+                .ok_or_else(|| AppError::new("project", "Project not open."))?
+                .project
+                .document_root("review", review_id),
             review_id,
             preparation_id,
             file_id,
@@ -430,7 +508,14 @@ impl Storage {
                 .ok_or_else(|| AppError::new("project", "Missing review repository."))?,
         )?;
         project_storage::step_documents::hydrate(
-            &std::path::Path::new(&repository.path).join(".reviewbox"),
+            &self
+                .projects
+                .lock()
+                .unwrap()
+                .get(&repository.id)
+                .ok_or_else(|| AppError::new("project", "Project not open."))?
+                .project
+                .document_root("review", review["id"].as_str().unwrap_or_default()),
             review,
         )
     }
@@ -476,6 +561,7 @@ impl Storage {
         Ok(result)
     }
     pub fn mount(&self, repo: &Repository) -> AppResult<()> {
+        let _read = self.read_consistently();
         if self.projects.lock().unwrap().contains_key(&repo.id) {
             return self.sync_projects(true);
         }
@@ -502,9 +588,11 @@ impl Storage {
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if event.as_ref().map_or(true, |e| {
                     !e.kind.is_access()
-                        && e.paths
-                            .iter()
-                            .any(|p| !p.components().any(|c| c.as_os_str() == ".local"))
+                        && e.paths.iter().any(|p| {
+                            !p.components().any(|c| c.as_os_str() == ".local")
+                                || p.to_string_lossy().contains("/.local/reviews/")
+                                || p.to_string_lossy().contains("/.local/captures/")
+                        })
                 }) {
                     flag.store(true, Ordering::Release);
                 }
@@ -522,6 +610,8 @@ impl Storage {
                 _watcher: watcher,
             },
         );
+        drop(_lock);
+        self.collect_review_garbage(&repo.id)?;
         Ok(())
     }
     fn index(&self, project: &Project, docs: &Documents) -> AppResult<()> {
@@ -545,7 +635,7 @@ impl Storage {
         }
         for (key, value) in docs {
             let mut value = value.clone();
-            if key.0 == "review" || key.0 == "review_history" {
+            if key.0 == "review" {
                 value.as_object_mut().unwrap().remove("position");
                 value.as_object_mut().unwrap().remove("examined");
             }
@@ -582,6 +672,7 @@ impl Storage {
         Ok(())
     }
     fn sync_projects(&self, force: bool) -> AppResult<()> {
+        let _read = self.read_consistently();
         let mut projects = self.projects.lock().unwrap();
         for (repository_id, mounted) in projects.iter_mut() {
             if self
@@ -632,7 +723,8 @@ impl Storage {
         Ok(result)
     }
     fn project_write(&self, writes: Vec<(&str, &str, Option<u32>, Value)>) -> AppResult<()> {
-        let _write = self.writes.lock().unwrap();
+        let _cache_pin = self.pin_source_cache();
+        let _write = self.writes.lock();
         self.sync_projects(true)?;
         let repository_id = writes
             .iter()
@@ -675,6 +767,28 @@ impl Storage {
         let mut next = old.clone();
         let mut packs = BTreeMap::new();
         for (kind, key, expected, value) in &writes {
+            if *kind == "review" {
+                self.check_update_write(&repository_id, key)?;
+                if old
+                    .get(&(kind.to_string(), key.to_string()))
+                    .is_some_and(|r| !r["updateOrigin"].is_null())
+                    && self.update_owner.as_deref() != Some(*key)
+                {
+                    return Err(AppError::new(
+                        "review_busy",
+                        "This candidate belongs to a review update.",
+                    ));
+                }
+            }
+            if let Some(review) = value["reviewId"].as_str() {
+                self.check_update_write(&repository_id, review)?;
+            }
+            if *kind == "review_reference" {
+                return Err(AppError::new(
+                    "immutable_review",
+                    "Archive references can only be written by publication.",
+                ));
+            }
             if !project_storage::KINDS.contains(kind) {
                 return Err(AppError::new(
                     "storage_boundary",
@@ -689,6 +803,139 @@ impl Storage {
                 ));
             }
             let mut value = value.clone();
+            if let Some(commit) = value
+                .as_object_mut()
+                .and_then(|v| v.remove("adaptationCommit"))
+            {
+                self.commit_update(&repository_id, &old, &mut next, key, &commit)?;
+            }
+            if *kind == "review" {
+                if let Some(previous) = old.get(&(kind.to_string(), key.to_string())) {
+                    let status = previous["publication"]["status"]
+                        .as_str()
+                        .unwrap_or("draft");
+                    if status != "draft" {
+                        if ["published", "archived"].contains(&status) {
+                            return Err(AppError::new(
+                                "immutable_review",
+                                "Completed publications cannot be modified. Create a new draft.",
+                            ));
+                        }
+                        if !["completedLocal", "publicationPending"]
+                            .contains(&value["publication"]["status"].as_str().unwrap_or_default())
+                            || value["publication"]["completion"]
+                                != previous["publication"]["completion"]
+                            || value["publication"]["originReviewId"]
+                                != previous["publication"]["originReviewId"]
+                        {
+                            return Err(AppError::new(
+                                "immutable_review",
+                                "A recorded human validation cannot be changed.",
+                            ));
+                        }
+                        let mut before = previous.clone();
+                        let mut after = value.clone();
+                        for ignored in [
+                            "publication",
+                            "revision",
+                            "updatedAt",
+                            "position",
+                            "examined",
+                            "assetIndex",
+                        ] {
+                            before.as_object_mut().unwrap().remove(ignored);
+                            after.as_object_mut().unwrap().remove(ignored);
+                        }
+                        project_storage::step_documents::hydrate(
+                            &project.document_root("review", key),
+                            &mut before,
+                        )?;
+                        if before != after {
+                            return Err(AppError::new(
+                                "immutable_review",
+                                "Completed review contents cannot be modified.",
+                            ));
+                        }
+                    }
+                }
+                if let Some(expected) = value.as_object_mut().unwrap().remove("forkRevision") {
+                    let origin = value["publication"]["originReviewId"]
+                        .as_str()
+                        .unwrap_or_default();
+                    self.check_update_write(&repository_id, origin)?;
+                    let current:Option<u32>=self.connection()?.query_row("SELECT revision FROM project_index WHERE repository_id=?1 AND kind='review' AND id=?2",params![repository_id,origin],|r|r.get(0)).optional()?;
+                    if current.map(u64::from).or_else(|| {
+                        old.contains_key(&("review_reference".into(), origin.into()))
+                            .then_some(0)
+                    }) != expected.as_u64()
+                    {
+                        return Err(AppError::new(
+                            "conflict",
+                            "The original review changed before the fork.",
+                        ));
+                    }
+                }
+            }
+            if *kind == "review"
+                && !old.contains_key(&(kind.to_string(), key.to_string()))
+                && let Some(origin) = value["publication"]["originReviewId"].as_str()
+            {
+                let source = old
+                    .get(&("review".into(), origin.into()))
+                    .cloned()
+                    .or_else(|| {
+                        self.archives
+                            .lock()
+                            .unwrap()
+                            .get(&(repository_id.clone(), "review".into(), origin.into()))
+                            .cloned()
+                    });
+                if let Some(source) = source
+                    && source["snapshotId"] == value["snapshotId"]
+                {
+                    let snapshot_id = value["snapshotId"].as_str().unwrap_or_default();
+                    let snapshot_key = ("snapshot".into(), snapshot_id.to_string());
+                    if let std::collections::btree_map::Entry::Vacant(entry) =
+                        next.entry(snapshot_key)
+                    {
+                        let snapshot = self
+                            .archives
+                            .lock()
+                            .unwrap()
+                            .get(&(repository_id.clone(), "snapshot".into(), snapshot_id.into()))
+                            .cloned()
+                            .ok_or_else(|| {
+                                AppError::new(
+                                    "missing_snapshot",
+                                    "The original capture is unavailable.",
+                                )
+                            })?;
+                        packs.extend(project.referenced_packs(
+                            "snapshot",
+                            snapshot_id,
+                            &snapshot,
+                        )?);
+                        entry.insert(snapshot);
+                    }
+                    if let Some(preparation) = source["preparationId"].as_str() {
+                        let mut entries = Vec::new();
+                        for file_id in source["assetIndex"]
+                            .as_object()
+                            .into_iter()
+                            .flat_map(|m| m.keys())
+                        {
+                            entries.push(project_storage::reader_assets::read(
+                                &project.document_root("review", origin),
+                                origin,
+                                preparation,
+                                file_id,
+                                &source["assetIndex"],
+                            )?);
+                        }
+                        value["generatedFiles"] = serde_json::to_value(entries)?;
+                    }
+                }
+            }
             if *kind == "snapshot" {
                 let (sources, content) = project_storage::prepare_content(
                     self,
@@ -723,7 +970,7 @@ impl Storage {
                 }
                 self.save_reading(&serde_json::from_value(value.clone())?)?;
             }
-            if *kind == "review" || *kind == "review_history" {
+            if *kind == "review" {
                 packs.extend(project_storage::step_documents::extract(&mut value)?);
             }
             if *kind == "onboarding" {
@@ -794,7 +1041,15 @@ impl Storage {
         self.write_batch(writes)?;
         Ok(settings)
     }
+    /// Metadata, packs and their capture must come from the same writer state.
+    /// Native readers compose nested storage calls, so admission is reentrant.
+    pub(crate) fn read_consistently(&self) -> parking_lot::ReentrantMutexGuard<'_, ()> {
+        self.writes.lock()
+    }
     pub(crate) fn root(&self) -> &std::path::Path {
         &self.root
     }
 }
+
+#[cfg(test)]
+mod v4_tests;

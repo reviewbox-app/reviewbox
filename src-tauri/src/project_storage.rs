@@ -11,11 +11,14 @@ use std::{
     time::SystemTime,
 };
 
-mod content;
+mod archive_cache;
+pub(crate) mod content;
+mod layout;
+pub(crate) mod publication;
 pub(crate) mod reader_assets;
 pub(crate) mod step_documents;
 pub use content::{prepare_content, restore_content};
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 pub struct FileLock(pub fs::File);
 impl Drop for FileLock {
@@ -26,7 +29,7 @@ impl Drop for FileLock {
 
 pub const KINDS: &[&str] = &[
     "review",
-    "review_history",
+    "review_reference",
     "snapshot",
     "knowledge",
     "onboarding",
@@ -42,6 +45,7 @@ pub struct Project {
     pub repository_id: String,
     pub project_id: String,
     cache: Arc<Mutex<BTreeMap<String, CachedDocument>>>,
+    origins: Arc<Mutex<BTreeMap<(String, String), PathBuf>>>,
     sources: Arc<Mutex<BTreeMap<String, content::LocatedSource>>>,
 }
 struct CachedDocument {
@@ -133,7 +137,7 @@ impl Project {
             if manifest.format != "reviewbox" || manifest.version != VERSION {
                 return Err(AppError::new(
                     "project_version",
-                    "This project uses an unsupported ReviewBox format. Version 3 is required; no files were changed.",
+                    "This project uses an unsupported ReviewBox format. Version 4 is required; no files were changed.",
                 ));
             }
         }
@@ -143,6 +147,7 @@ impl Project {
             repository_id: repository_id.into(),
             project_id: String::new(),
             cache: Arc::default(),
+            origins: Arc::default(),
             sources: Arc::default(),
         };
         let _lock = provisional.lock()?;
@@ -179,8 +184,20 @@ impl Project {
             m
         };
         let ignore = checked(&provisional.root, ".gitignore")?;
-        if !ignore.exists() {
-            atomic(&ignore, b".local/\n")?;
+        let mut ignored = if ignore.exists() {
+            fs::read_to_string(&ignore)?
+        } else {
+            String::new()
+        };
+        if !ignored
+            .lines()
+            .any(|line| [".local/", "/.local/"].contains(&line.trim()))
+        {
+            if !ignored.is_empty() && !ignored.ends_with('\n') {
+                ignored.push('\n');
+            }
+            ignored.push_str(".local/\n");
+            atomic(&ignore, ignored.as_bytes())?;
         }
         let project = Self {
             project_id: manifest.project_id,
@@ -222,7 +239,7 @@ impl Project {
         if manifest.format != "reviewbox" || manifest.version != VERSION {
             return Err(AppError::new(
                 "project_version",
-                "Version 3 is required; no files were changed.",
+                "Version 4 is required; no files were changed.",
             ));
         }
         let journal = checked(&self.root, ".local/transaction.json")?;
@@ -233,7 +250,11 @@ impl Project {
         // Validate the entire transaction before touching any file.
         for change in &changes {
             let path = checked(&self.root, &change.path)?;
-            if change.path.starts_with(".local/") || change.path == "project.json" {
+            if (change.path.starts_with(".local/")
+                && !change.path.starts_with(".local/reviews/")
+                && !change.path.starts_with(".local/captures/"))
+                || change.path == "project.json"
+            {
                 return Err(AppError::new(
                     "invalid_journal",
                     "Invalid transaction target.",
@@ -260,6 +281,31 @@ impl Project {
             }
         }
         fs::remove_file(journal)?;
+        fn empty_directories(root: &Path) -> AppResult<()> {
+            if !root.exists() {
+                return Ok(());
+            }
+            for entry in fs::read_dir(root)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    empty_directories(&entry.path())?;
+                }
+            }
+            if fs::read_dir(root)?.next().is_none() {
+                fs::remove_dir(root)?;
+            }
+            Ok(())
+        }
+        for relative in [
+            ".local/reviews",
+            ".local/captures",
+            "published",
+            "content",
+            "generated",
+            "snapshots",
+        ] {
+            empty_directories(&checked(&self.root, relative)?)?;
+        }
         Ok(())
     }
     pub fn recover_locked(&self) -> AppResult<()> {
@@ -274,22 +320,8 @@ impl Project {
         next: &Documents,
         packs: Files,
     ) -> AppResult<()> {
-        let mut before = self.encode(old)?;
-        let mut after = self.encode(next)?;
-        for (path, bytes) in packs {
-            let dest = checked(&self.root, &path)?;
-            if dest.exists() {
-                let existing = fs::read(dest)?;
-                if existing != bytes {
-                    return Err(AppError::new(
-                        "conflict",
-                        "An immutable content pack already exists with different bytes.",
-                    ));
-                }
-                before.insert(path.clone(), existing);
-            }
-            after.insert(path, bytes);
-        }
+        let before = self.files(old, &Files::new(), old)?;
+        let after = self.files(next, &packs, old)?;
         let mut changes = Vec::new();
         for path in before
             .keys()
@@ -330,7 +362,8 @@ impl Project {
         // Publish immutable source packs before documents that reference them.
         changes.sort_by_key(|change| {
             (
-                !(change.path.starts_with("content/") || change.path.starts_with("generated/")),
+                change.after.is_none(),
+                !(change.path.contains("content/") || change.path.contains("generated/")),
                 change.path.clone(),
             )
         });
@@ -366,7 +399,7 @@ impl Project {
             _ => {}
         }
     }
-    pub(crate) fn encode(&self, docs: &Documents) -> AppResult<Files> {
+    pub(crate) fn encode_logical(&self, docs: &Documents) -> AppResult<Files> {
         let mut files = Files::new();
         for ((kind, key), data) in docs {
             validate(kind, data)?;
@@ -380,7 +413,7 @@ impl Project {
             identifier(key)?;
             let mut data = data.clone();
             self.remap(&mut data, true);
-            if kind == "review" || kind == "review_history" {
+            if kind == "review" {
                 data.as_object_mut().unwrap().remove("position");
                 data.as_object_mut().unwrap().remove("examined");
             }
@@ -393,7 +426,6 @@ impl Project {
             }
             let path = match kind.as_str() {
                 "review" => format!("reviews/{key}/review.json"),
-                "review_history" => format!("history/{key}.json"),
                 "snapshot" => format!("snapshots/{key}.json"),
                 "knowledge" => "knowledge.json".into(),
                 "onboarding" => format!("tours/{key}.json"),
@@ -465,18 +497,7 @@ impl Project {
         }
         Ok(files)
     }
-    pub fn read(&self) -> AppResult<Documents> {
-        let manifest: Manifest =
-            serde_json::from_slice(&fs::read(checked(&self.root, "project.json")?)?)?;
-        if manifest.format != "reviewbox"
-            || manifest.version != VERSION
-            || manifest.project_id != self.project_id
-        {
-            return Err(AppError::new(
-                "project_changed",
-                "Project identity or format changed. Reopen the repository.",
-            ));
-        }
+    fn read_logical(&self) -> AppResult<Documents> {
         fn walk(
             root: &Path,
             prefix: &str,
@@ -493,7 +514,15 @@ impl Project {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.starts_with('.')
                     || (prefix.is_empty()
-                        && ["content", "generated", "project.json"].contains(&name.as_str()))
+                        && [
+                            "content",
+                            "generated",
+                            "project.json",
+                            "bundle.json",
+                            "published",
+                            "references",
+                        ]
+                        .contains(&name.as_str()))
                 {
                     continue;
                 }
@@ -622,18 +651,36 @@ impl Project {
             }
         }
         // Exact paths prevent a moved file from being silently rewritten under another name.
-        let expected = self.encode(&docs)?;
+        let expected = self.encode_logical(&docs)?;
         if files.len() != expected.len() || files.keys().any(|p| !expected.contains_key(p)) {
             return Err(AppError::new(
                 "invalid_project",
                 "Unexpected or unreferenced project document. Check the documented layout.",
             ));
         }
-        self.index_sources(&docs)?;
         Ok(docs)
     }
     pub(crate) fn index_sources(&self, docs: &Documents) -> AppResult<()> {
-        *self.sources.lock().unwrap() = content::index_sources(docs)?;
+        let mut sources = content::index_sources(docs)?;
+        let origins = self.origins.lock().unwrap();
+        for located in sources.values_mut() {
+            located.root = origins
+                .get(&("snapshot".into(), located.snapshot_id.clone()))
+                .cloned()
+                .unwrap_or_else(|| self.root.clone());
+        }
+        for (hash, source) in self
+            .sources
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, located)| located.root.to_string_lossy().contains("/.local/archives/"))
+        {
+            sources
+                .entry(hash.clone())
+                .or_insert_with(|| source.clone());
+        }
+        *self.sources.lock().unwrap() = sources;
         Ok(())
     }
 }
@@ -644,7 +691,7 @@ fn validate(kind: &str, data: &Value) -> AppResult<()> {
         }};
     }
     match kind {
-        "review" | "review_history" => {
+        "review" => {
             let _: Review = serde_json::from_value(step_documents::validation_value(data)?)?;
         }
         "snapshot" => {
@@ -703,7 +750,10 @@ pub fn schemas() -> Value {
     let mut variants = Vec::new();
     let entries = [
         ("review", schemars::schema_for!(Review)),
-        ("review_history", schemars::schema_for!(Review)),
+        (
+            "review_reference",
+            schemars::schema_for!(layout::ArchiveReference),
+        ),
         ("snapshot", schemars::schema_for!(content::StoredSnapshot)),
         ("knowledge", schemars::schema_for!(ProjectKnowledge)),
         ("onboarding", schemars::schema_for!(OnboardingTour)),
@@ -739,10 +789,7 @@ pub fn schemas() -> Value {
         if kind == "topics" {
             data["properties"]["steps"]["items"] = json!({"$ref":"#/$defs/StoredStep"});
         }
-        if kind == "review_history" {
-            data["properties"]["topics"]["items"] = json!({"$ref":"#/$defs/StoredTopic"});
-        }
-        variants.push(json!({"type":"object","additionalProperties":false,"required":["format","version","kind","id","data"],"properties":{"format":{"const":"reviewbox"},"version":{"const":3},"kind":{"const":kind},"id":{"type":"string","pattern":"^[a-zA-Z0-9_@-]{1,160}$"},"data":data}}));
+        variants.push(json!({"type":"object","additionalProperties":false,"required":["format","version","kind","id","data"],"properties":{"format":{"const":"reviewbox"},"version":{"const":4},"kind":{"const":kind},"id":{"type":"string","pattern":"^[a-zA-Z0-9_@-]{1,160}$"},"data":data}}));
     }
     if let Some(mut step) = definitions.get("Step").cloned() {
         step["properties"]
@@ -762,15 +809,20 @@ pub fn schemas() -> Value {
     }
     let mut manifest = serde_json::to_value(schemars::schema_for!(Manifest)).unwrap();
     manifest["properties"]["format"] = json!({"const":"reviewbox"});
-    manifest["properties"]["version"] = json!({"const":3});
+    manifest["properties"]["version"] = json!({"const":4});
     let mut content = serde_json::to_value(schemars::schema_for!(content::ContentPack)).unwrap();
     content["properties"]["format"] = json!({"const":"reviewbox"});
-    content["properties"]["version"] = json!({"const":3});
+    content["properties"]["version"] = json!({"const":4});
+    let mut publication =
+        serde_json::to_value(schemars::schema_for!(publication::BundleManifest)).unwrap();
+    publication["properties"]["format"] = json!({"const":"reviewbox-publication"});
+    publication["properties"]["version"] = json!({"const":VERSION});
     json!({
-        "project-document.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ReviewBox project document v3","oneOf":variants,"$defs":definitions},
+        "project-document.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ReviewBox project document v4","oneOf":variants,"$defs":definitions},
         "project-manifest.schema.json":manifest,
         "project-content.schema.json":content,
         "project-reading-assets.schema.json":reader_assets::schema(),
-        "project-step-documents.schema.json":step_documents::schema()
+        "project-step-documents.schema.json":step_documents::schema(),
+        "project-publication.schema.json":publication
     })
 }

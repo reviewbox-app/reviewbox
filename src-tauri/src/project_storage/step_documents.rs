@@ -160,7 +160,7 @@ pub(crate) fn validation_value(value: &Value) -> AppResult<Value> {
         }
         reference(&review, &step["documentAsset"])?;
         let empty = json!({"body":"","references":[],"terms":[],"readingSeconds":0});
-        step["documents"] = json!({"beginner":empty,"intermediate":empty,"developer":empty});
+        step["documents"] = json!({"essential":empty,"explained":empty,"technical":empty});
     }
     Ok(result)
 }

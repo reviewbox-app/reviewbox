@@ -1,7 +1,9 @@
 //! Snapshot-local source indexes and immutable, bounded byte-delta packs.
-use super::{Documents, Files, Project, VERSION, checked, identifier};
+use super::{Document, Documents, Files, Project, VERSION, checked, identifier};
 use crate::{contracts::*, storage::Storage};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::PathBuf;
 use std::{collections::BTreeMap, fs, path::Path};
 
 const SOURCE_LIMIT: usize = 64 * 1024 * 1024;
@@ -30,7 +32,8 @@ pub(super) struct StoredSnapshot {
 }
 #[derive(Clone)]
 pub(super) struct LocatedSource {
-    snapshot_id: String,
+    pub root: PathBuf,
+    pub snapshot_id: String,
     source: ContentSource,
 }
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -315,6 +318,7 @@ pub(super) fn index_sources(docs: &Documents) -> AppResult<BTreeMap<String, Loca
         let (snapshot_id, sources) = snapshot_sources(data)?;
         for (hash, source) in sources {
             index.entry(hash).or_insert_with(|| LocatedSource {
+                root: PathBuf::new(),
                 snapshot_id: snapshot_id.clone(),
                 source,
             });
@@ -332,7 +336,14 @@ pub fn restore_content(project: &Project, hash: &str) -> AppResult<Option<Vec<u8
     let result = match located.source {
         ContentSource::Git { oid, .. } => git_bytes(root, &oid)?,
         ContentSource::Pack { path, .. } => {
-            let path = checked(&project.root, &path)?;
+            let path = checked(
+                if located.root.as_os_str().is_empty() {
+                    &project.root
+                } else {
+                    &located.root
+                },
+                &path,
+            )?;
             let metadata = path.metadata().map_err(|_| {
                 AppError::new(
                     "missing_content",
@@ -422,6 +433,153 @@ fn reconstruct(root: &Path, delta: ByteDelta) -> AppResult<Vec<u8>> {
     .concat())
 }
 
+fn reachable_objects(
+    project: &Project,
+    commit: &str,
+) -> AppResult<std::collections::BTreeSet<String>> {
+    let root = project.root.parent().unwrap();
+    if commit == "HEAD"
+        && crate::repositories::git(root, &["rev-parse", "--verify", "HEAD"]).is_err()
+    {
+        return Ok(Default::default());
+    }
+    let output = crate::repositories::git(root, &["rev-list", "--objects", commit])?;
+    Ok(String::from_utf8_lossy(&output)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next().map(String::from))
+        .collect())
+}
+/// Remove dependencies on objects not retained by the publication's ancestry.
+/// A standalone replacement is used for those entries, preserving exact bytes.
+pub(crate) fn portable_snapshot(project: &Project, data: &mut Value) -> AppResult<Files> {
+    let reachable = reachable_objects(project, "HEAD").unwrap_or_default();
+    let (snapshot_id, mut sources) = snapshot_sources(data)?;
+    let mut replacements = BTreeMap::new();
+    for (hash, source) in &sources {
+        let safe = match source {
+            ContentSource::Git { oid, .. } => reachable.contains(oid),
+            ContentSource::Pack { path, .. } => {
+                let root = project.document_root("snapshot", &snapshot_id);
+                let pack: ContentPack = serde_json::from_slice(&fs::read(checked(&root, path)?)?)?;
+                let delta = pack
+                    .entries
+                    .get(hash)
+                    .ok_or_else(|| AppError::new("missing_content", "Missing source entry."))?;
+                delta
+                    .base_oid
+                    .as_ref()
+                    .is_none_or(|oid| reachable.contains(oid))
+            }
+        };
+        if !safe {
+            let content = restore_content(project, hash)?.ok_or_else(|| {
+                AppError::new("missing_content", "Cannot publish missing source.")
+            })?;
+            replacements.insert(
+                hash.clone(),
+                ByteDelta {
+                    size: content.len() as u32,
+                    base_oid: None,
+                    prefix: 0,
+                    suffix: 0,
+                    replacement: replacement(&content),
+                },
+            );
+        }
+    }
+    // Use a separate deterministic namespace to avoid replacing original packs.
+    let mut new_sources = SourceIndex::new();
+    let packs = pack_deltas(&snapshot_id, replacements, &mut new_sources, PACK_LIMIT)?;
+    let mut output = Files::new();
+    let portable_path = |path: &str| -> AppResult<String> {
+        let (prefix, name) = path
+            .rsplit_once('/')
+            .ok_or_else(|| AppError::new("invalid_content", "Invalid part path."))?;
+        let part: u32 = name
+            .trim_end_matches(".json")
+            .parse()
+            .map_err(|_| AppError::new("invalid_content", "Invalid part number."))?;
+        Ok(format!("{prefix}/{:04}.json", part + 1_000_000))
+    };
+    for (path, bytes) in packs {
+        output.insert(portable_path(&path)?, bytes);
+    }
+    for (hash, mut source) in new_sources {
+        if let ContentSource::Pack { path, .. } = &mut source {
+            *path = portable_path(path)?;
+        }
+        sources.insert(hash, source);
+    }
+    data["sourceIndex"] = serde_json::to_value(sources)?;
+    Ok(output)
+}
+/// Verify every captured byte directly from an immutable Git bundle, never using
+/// Storage's reconstructed cache as evidence for deleting a publication.
+pub(crate) fn verify_bundle_sources(
+    project: &Project,
+    files: &Files,
+    commit: &str,
+) -> AppResult<()> {
+    let reachable = reachable_objects(project, commit)?;
+    for (path, bytes) in files {
+        if !path.starts_with("snapshots/") {
+            continue;
+        }
+        let doc: Document = serde_json::from_slice(bytes)?;
+        let (snapshot_id, sources) = snapshot_sources(&doc.data)?;
+        for (hash, source) in sources {
+            let expected = source.size();
+            let result = match source {
+                ContentSource::Git { oid, .. } => {
+                    if !reachable.contains(&oid) {
+                        return Err(AppError::new(
+                            "missing_git_object",
+                            "Source is not retained by archive history.",
+                        ));
+                    }
+                    git_bytes(project.root.parent().unwrap(), &oid)?
+                }
+                ContentSource::Pack { path, .. } => {
+                    let bytes = files.get(&path).ok_or_else(|| {
+                        AppError::new("missing_content", "Archive source pack missing.")
+                    })?;
+                    let mut pack: ContentPack = serde_json::from_slice(bytes)?;
+                    if pack.version != VERSION
+                        || pack.snapshot_id != snapshot_id
+                        || pack.format != "reviewbox"
+                    {
+                        return Err(AppError::new(
+                            "invalid_content",
+                            "Invalid archive source pack.",
+                        ));
+                    }
+                    let delta = pack.entries.remove(&hash).ok_or_else(|| {
+                        AppError::new("missing_content", "Archive source entry missing.")
+                    })?;
+                    if delta
+                        .base_oid
+                        .as_ref()
+                        .is_some_and(|oid| !reachable.contains(oid))
+                    {
+                        return Err(AppError::new(
+                            "missing_git_object",
+                            "Delta base is not retained by archive history.",
+                        ));
+                    }
+                    reconstruct(project.root.parent().unwrap(), delta)?
+                }
+            };
+            if result.len() != expected as usize || fingerprint(&result) != hash {
+                return Err(AppError::new(
+                    "corrupt_content",
+                    "Archived source failed exact reconstruction.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +621,7 @@ mod tests {
                 (
                     hash,
                     LocatedSource {
+                        root: project.root.clone(),
                         snapshot_id: "snapshot".into(),
                         source,
                     },

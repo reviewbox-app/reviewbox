@@ -3,7 +3,11 @@ use crate::{
     storage::Storage,
 };
 use serde_json::{Value, json};
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 fn git(root: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -44,6 +48,18 @@ fn capture(s: &Storage, r: &Repository) -> Workspace {
     )
     .unwrap()
 }
+fn draft_root(r: &Repository, w: &Workspace) -> PathBuf {
+    Path::new(&r.path).join(format!(".reviewbox/.local/reviews/{}", w.review.id))
+}
+fn complete(s: &Storage, w: &Workspace) -> Workspace {
+    reviews::apply(
+        s,
+        &w.review.id,
+        w.review.revision,
+        ReviewAction::CompleteManualReview,
+    )
+    .unwrap()
+}
 fn read(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
@@ -80,10 +96,10 @@ fn fresh_clone_rebuilds_all_layers_without_touching_git_or_sources() {
         w.review.revision,
         ReviewAction::ValidateFile {
             file_id: crate::reader::file_id("a.ts"),
-            level: ReadingLevel::Developer,
         },
     )
     .unwrap();
+    w = complete(&s, &w);
     let mut personal = w.review.clone();
     personal.position.line = 99;
     s.save_reading(&personal).unwrap();
@@ -163,7 +179,7 @@ fn metadata_edits_and_metadata_only_commits_do_not_invalidate_code() {
 fn external_edits_conflicts_invalid_files_and_branch_rollback_are_detected() {
     let (_dir, s, r) = fixture();
     let w = capture(&s, &r);
-    let path = Path::new(&r.path).join(format!(".reviewbox/reviews/{}/review.json", w.review.id));
+    let path = draft_root(&r, &w).join(format!("reviews/{}/review.json", w.review.id));
     let original = fs::read(&path).unwrap();
     let mut v = read(&path);
     v["data"]["title"] = json!("External title");
@@ -217,7 +233,8 @@ fn external_agents_create_but_cannot_annotate_or_validate() {
 #[test]
 fn settings_and_reading_are_separate_and_missing_git_has_no_fallback() {
     let (dir, s, r) = fixture();
-    let w = capture(&s, &r);
+    fs::write(Path::new(&r.path).join("a.ts"), "changed for publication").unwrap();
+    let w = complete(&s, &capture(&s, &r));
     let mut settings = s.project_settings(&r.id).unwrap();
     settings.language = "English".into();
     settings.provider = Some("claude".into());
@@ -266,23 +283,31 @@ fn legacy_rows_are_never_read_or_imported() {
     assert!(!dir.path().join("app/backups").exists());
 }
 #[test]
-fn v2_is_rejected_without_creating_lock_or_recovering_journal() {
-    let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join(".reviewbox");
-    fs::create_dir_all(&project).unwrap();
-    let original = b"{\"format\":\"reviewbox\",\"version\":1,\"projectId\":\"old\"}";
-    fs::write(project.join("project.json"), original).unwrap();
-    let error = Project::open(dir.path(), "repo").err().unwrap();
-    assert_eq!(error.code, "project_version");
-    assert_eq!(fs::read(project.join("project.json")).unwrap(), original);
-    assert_eq!(fs::read_dir(&project).unwrap().count(), 1);
+fn older_formats_are_rejected_without_creating_lock_or_recovering_journal() {
+    for version in [1, 2, 3] {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join(".reviewbox");
+        fs::create_dir_all(&project).unwrap();
+        let original = serde_json::to_vec(
+            &json!({"format":"reviewbox", "version":version, "projectId":"old"}),
+        )
+        .unwrap();
+        fs::write(project.join("project.json"), &original).unwrap();
+        let error = Project::open(dir.path(), "repo").err().unwrap();
+        assert_eq!(error.code, "project_version");
+        assert_eq!(fs::read(project.join("project.json")).unwrap(), original);
+        assert_eq!(fs::read_dir(&project).unwrap().count(), 1);
+    }
 }
 #[test]
 fn interrupted_transaction_recovers_and_refuses_foreign_changes() {
     let (_dir, s, r) = fixture();
     let w = capture(&s, &r);
     let project = Project::open(Path::new(&r.path), &r.id).unwrap();
-    let relative = format!("reviews/{}/review.json", w.review.id);
+    let relative = format!(
+        ".local/reviews/{}/reviews/{}/review.json",
+        w.review.id, w.review.id
+    );
     let path = project.root.join(&relative);
     let old = fs::read(&path).unwrap();
     let mut next = read(&path);
@@ -351,13 +376,12 @@ fn edited_child_without_revision_bump_invalidates_stale_writes() {
         0,
         ReviewAction::ValidateFile {
             file_id: crate::reader::file_id("a.ts"),
-            level: ReadingLevel::Developer,
         },
     )
     .unwrap();
     let decision = &w.review.decisions[0];
-    let path = Path::new(&r.path).join(format!(
-        ".reviewbox/reviews/{}/decisions/{}.json",
+    let path = draft_root(&r, &w).join(format!(
+        "reviews/{}/decisions/{}.json",
         w.review.id, decision.id
     ));
     let mut value = read(&path);
@@ -385,7 +409,7 @@ fn edited_child_without_revision_bump_invalidates_stale_writes() {
 fn symlinked_project_documents_are_rejected() {
     let (dir, s, r) = fixture();
     let w = capture(&s, &r);
-    let path = Path::new(&r.path).join(format!(".reviewbox/reviews/{}/review.json", w.review.id));
+    let path = draft_root(&r, &w).join(format!("reviews/{}/review.json", w.review.id));
     let outside = dir.path().join("outside.json");
     fs::rename(&path, &outside).unwrap();
     std::os::unix::fs::symlink(&outside, &path).unwrap();
@@ -396,7 +420,8 @@ fn symlinked_project_documents_are_rejected() {
 #[test]
 fn two_clones_in_one_app_keep_their_documents_and_reading_state_separate() {
     let (dir, s, r) = fixture();
-    let w = capture(&s, &r);
+    fs::write(Path::new(&r.path).join("a.ts"), "a captured change").unwrap();
+    let w = complete(&s, &capture(&s, &r));
     let root = Path::new(&r.path);
     git(root, &["add", ".reviewbox"]);
     git(root, &["commit", "-qm", "share"]);
@@ -410,21 +435,33 @@ fn two_clones_in_one_app_keep_their_documents_and_reading_state_separate() {
     let second = s.scoped(Some(&other.id));
     let w2 = reviews::load(&second, &w.review.id).unwrap();
     assert_eq!(w2.review.repository_id, other.id);
-    reviews::apply(
+    let fork = reviews::apply(
         &second,
         &w.review.id,
         w2.review.revision,
+        ReviewAction::ReopenReview,
+    )
+    .unwrap();
+    assert_ne!(fork.review.id, w.review.id);
+    reviews::apply(
+        &second,
+        &fork.review.id,
+        fork.review.revision,
         ReviewAction::Rename {
             title: "Only clone two".into(),
         },
     )
     .unwrap();
+    assert!(reviews::load(&first, &fork.review.id).is_err());
     assert_eq!(
         reviews::load(&first, &w.review.id).unwrap().review.title,
         w.review.title
     );
     assert_eq!(
-        reviews::load(&second, &w.review.id).unwrap().review.title,
+        reviews::load(&second, &fork.review.id)
+            .unwrap()
+            .review
+            .title,
         "Only clone two"
     );
     let mut local = reviews::load(&first, &w.review.id).unwrap().review;
@@ -464,14 +501,10 @@ fn uncommitted_content_never_references_an_unrelated_repository_commit() {
         .unwrap()
         .content
         .hash;
-    let snapshot = read(&root.join(format!(".reviewbox/snapshots/{}.json", w.snapshot.id)));
+    let snapshot = read(&draft_root(&r, &w).join(format!("snapshots/{}.json", w.snapshot.id)));
     let source = &snapshot["data"]["sourceIndex"][hash];
     assert_eq!(source["kind"], "pack");
-    let pack = read(
-        &root
-            .join(".reviewbox")
-            .join(source["path"].as_str().unwrap()),
-    );
+    let pack = read(&draft_root(&r, &w).join(source["path"].as_str().unwrap()));
     assert!(pack["entries"][hash]["baseOid"].is_string());
 }
 
@@ -521,19 +554,26 @@ fn five_captures_of_235_files_write_five_packs_not_per_blob_files() {
     for n in 0..5 {
         fs::write(root.join("a.ts"), format!("change {n}\r\n")).unwrap();
         let w = capture(&s, &r);
-        let snapshot = read(&root.join(format!(".reviewbox/snapshots/{}.json", w.snapshot.id)));
-        assert_eq!(snapshot["version"], 3);
-        let dir = root.join(format!(".reviewbox/content/{}", w.snapshot.id));
+        let snapshot = read(&draft_root(&r, &w).join(format!("snapshots/{}.json", w.snapshot.id)));
+        assert_eq!(snapshot["version"], 4);
+        let dir = draft_root(&r, &w).join(format!("content/{}", w.snapshot.id));
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
         assert!(dir.join("0001.json").exists());
         let sources = snapshot["data"]["sourceIndex"].as_object().unwrap();
         assert_eq!(sources.values().filter(|v| v["kind"] == "pack").count(), 1);
     }
+    let drafts = root.join(".reviewbox/.local/reviews");
     assert_eq!(
-        fs::read_dir(root.join(".reviewbox/content"))
+        fs::read_dir(drafts)
             .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().path().join("content").exists())
             .count(),
         5
+    );
+    assert!(!root.join(".reviewbox/published").exists());
+    assert_eq!(
+        repositories::text(root, &["status", "--porcelain", "--", ".reviewbox/.local"]).unwrap(),
+        ""
     );
 }
 
@@ -550,7 +590,7 @@ fn missing_corrupt_and_foreign_packs_never_use_the_working_tree() {
         .find(|f| f.path == "a.ts")
         .unwrap()
         .content;
-    let path = root.join(format!(".reviewbox/content/{}/0001.json", w.snapshot.id));
+    let path = draft_root(&r, &w).join(format!("content/{}/0001.json", w.snapshot.id));
     let original = fs::read(&path).unwrap();
     fs::write(root.join("a.ts"), "wrong current source").unwrap();
     let error = |name: &str| {
@@ -583,8 +623,14 @@ fn interrupted_pack_publication_recovers_and_checks_all_targets_first() {
     fs::write(root.join("a.ts"), "pending capture").unwrap();
     let w = capture(&s, &r);
     let project = Project::open(root, &r.id).unwrap();
-    let pack_path = format!("content/{}/0001.json", w.snapshot.id);
-    let snapshot_path = format!("snapshots/{}.json", w.snapshot.id);
+    let pack_path = format!(
+        ".local/reviews/{}/content/{}/0001.json",
+        w.review.id, w.snapshot.id
+    );
+    let snapshot_path = format!(
+        ".local/reviews/{}/snapshots/{}.json",
+        w.review.id, w.snapshot.id
+    );
     let pack = fs::read_to_string(project.root.join(&pack_path)).unwrap();
     let snapshot = fs::read_to_string(project.root.join(&snapshot_path)).unwrap();
     let journal = project.root.join(".local/transaction.json");
@@ -627,4 +673,189 @@ fn deleted_and_renamed_files_reconstruct_with_no_local_cache() {
         }
     }
     assert!(!root.join(".reviewbox/content").exists());
+}
+
+fn json_files(root: &Path) -> std::collections::BTreeMap<String, String> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        files: &mut std::collections::BTreeMap<String, String>,
+    ) {
+        if !directory.exists() {
+            return;
+        }
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                files.insert(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    fs::read_to_string(path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
+
+#[test]
+fn interrupted_draft_promotion_recovers_all_files_before_releasing_local_content() {
+    let (_dir, storage, repository) = fixture();
+    let repo = Path::new(&repository.path);
+    fs::write(repo.join("a.ts"), "reviewed but uncommitted code\n").unwrap();
+    let draft = capture(&storage, &repository);
+    let root = repo.join(".reviewbox");
+    let before = json_files(&root);
+    let published = complete(&storage, &draft);
+    assert_eq!(
+        published.review.publication.status,
+        PublicationStatus::Published
+    );
+    let after = json_files(&root);
+    let paths: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
+    let journal: Vec<_> = paths.iter().filter(|path| before.get(*path) != after.get(*path)).map(|path| {
+        json!({"path":path,"before":before.get(path).map(|value|fingerprint(value.as_bytes())),"after":after.get(path)})
+    }).collect();
+    assert!(journal.iter().any(|patch| {
+        patch["path"]
+            .as_str()
+            .unwrap()
+            .starts_with(".local/reviews/")
+            && patch["after"].is_null()
+    }));
+    assert!(
+        journal
+            .iter()
+            .any(|patch| patch["path"].as_str().unwrap().starts_with("published/"))
+    );
+    let restore = || {
+        for path in &paths {
+            let target = root.join(path);
+            if let Some(content) = before.get(path) {
+                fs::create_dir_all(target.parent().unwrap()).unwrap();
+                fs::write(target, content).unwrap();
+            } else if target.exists() {
+                fs::remove_file(target).unwrap();
+            }
+        }
+    };
+    restore();
+    // Crash after one destination file was installed, while local source files remain.
+    let first_destination = journal
+        .iter()
+        .find(|patch| patch["path"].as_str().unwrap().starts_with("published/"))
+        .unwrap();
+    let target = root.join(first_destination["path"].as_str().unwrap());
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, first_destination["after"].as_str().unwrap()).unwrap();
+    write(&root.join(".local/transaction.json"), &json!(journal));
+    storage.mount(&repository).unwrap();
+    assert_eq!(json_files(&root), after);
+    assert_eq!(
+        reviews::load(&storage, &draft.review.id)
+            .unwrap()
+            .review
+            .publication
+            .status,
+        PublicationStatus::Published
+    );
+
+    // A foreign edit is detected before any destination or deletion is replayed.
+    restore();
+    let local_review =
+        draft_root(&repository, &draft).join(format!("reviews/{}/review.json", draft.review.id));
+    let mut changed = read(&local_review);
+    changed["data"]["title"] = json!("Another writer");
+    write(&local_review, &changed);
+    write(&root.join(".local/transaction.json"), &json!(journal));
+    assert_eq!(
+        storage.mount(&repository).unwrap_err().code,
+        "project_conflict"
+    );
+    assert!(!target.exists());
+    assert_eq!(read(&local_review)["data"]["title"], "Another writer");
+    assert!(root.join(".local/transaction.json").exists());
+}
+
+#[test]
+fn code_explain_keeps_its_capture_when_the_review_draft_is_refreshed_and_removed() {
+    let (directory, storage, repository) = fixture();
+    let repo = Path::new(&repository.path);
+    fs::write(repo.join("a.ts"), "const captured = 7;\n").unwrap();
+    let draft = capture(&storage, &repository);
+    let source = draft
+        .snapshot
+        .files
+        .iter()
+        .find(|file| file.path == "a.ts")
+        .unwrap();
+    let mut knowledge = crate::knowledge::load(&storage, &repository.id).unwrap();
+    knowledge.documents.push(ExplanationDocument {
+        id: "independent-explanation".into(),
+        repository_id: repository.id.clone(),
+        snapshot_id: draft.snapshot.id.clone(),
+        path: "a.ts".into(),
+        fingerprint: source.content.hash.clone(),
+        language: knowledge.language.clone(),
+        sections: vec![ExplanationSection {
+            id: "section".into(),
+            title: "Captured value".into(),
+            body: "The value is fixed at seven.".into(),
+            start_line: 1,
+            end_line: 1,
+        }],
+        occurrences: vec![],
+        created_at: now(),
+    });
+    crate::knowledge::save(&storage, knowledge).unwrap();
+    fs::write(repo.join("a.ts"), "const current = 99;\n").unwrap();
+    let refreshed = reviews::refresh(&storage, &draft.review.id, draft.review.revision).unwrap();
+    assert_ne!(refreshed.snapshot.id, draft.snapshot.id);
+    storage.remove("review", &refreshed.review.id).unwrap();
+    storage.collect_review_garbage(&repository.id).unwrap();
+    assert!(
+        storage
+            .get::<Snapshot>("snapshot", &refreshed.snapshot.id)
+            .is_err()
+    );
+    assert!(
+        repo.join(format!(".reviewbox/snapshots/{}.json", draft.snapshot.id))
+            .exists()
+    );
+    drop(storage);
+
+    // Only shared Code Explain files travel; local review folders and caches do not.
+    git(repo, &["add", ".reviewbox"]);
+    git(repo, &["commit", "-qm", "Share independent explanation"]);
+    let clone = directory.path().join("knowledge-clone");
+    git(
+        directory.path(),
+        &["clone", "-q", &repository.path, clone.to_str().unwrap()],
+    );
+    let fresh = Storage::open(directory.path().join("knowledge-app")).unwrap();
+    let other = repositories::open(&fresh, clone.to_str().unwrap()).unwrap();
+    let loaded = crate::knowledge::load(&fresh, &other.id).unwrap();
+    assert_eq!(
+        loaded.documents[0].sections[0].body,
+        "The value is fixed at seven."
+    );
+    assert_eq!(loaded.documents[0].snapshot_id, draft.snapshot.id);
+    assert_eq!(
+        fresh.read_blob(&source.content.hash).unwrap(),
+        b"const captured = 7;\n"
+    );
+    assert!(fresh.list::<Review>("review").unwrap().is_empty());
+    assert_eq!(
+        fs::read(clone.join("a.ts")).unwrap(),
+        b"const answer = 1;\r\n"
+    );
 }

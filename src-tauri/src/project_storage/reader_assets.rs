@@ -17,14 +17,19 @@ struct Entry {
 }
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)] // Legacy fields are deserialized solely to read existing immutable packs.
 enum Part {
     Document {
-        #[serde(default, rename = "pseudocodeSelected")]
+        #[serde(default, skip_serializing, rename = "pseudocodeSelected")]
+        #[schemars(skip)]
         pseudocode_selected: Option<bool>,
         documents: Option<Box<LevelDocuments>>,
-        #[serde(default, rename = "pseudocodeSkipReason")]
+        #[serde(default, skip_serializing, rename = "pseudocodeSkipReason")]
+        #[schemars(skip)]
         pseudocode_skip_reason: Option<String>,
     },
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     Translation {
         #[serde(rename = "sourceId")]
         source_id: String,
@@ -33,11 +38,13 @@ enum Part {
         #[serde(rename = "unavailableReason")]
         unavailable_reason: Option<String>,
     },
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     Block {
         #[serde(rename = "sourceId")]
         source_id: String,
         index: u32,
-        block: PseudoBlock,
+        block: Value,
     },
 }
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -56,7 +63,7 @@ pub(crate) fn prepare(
     identifier(preparation_id)?;
     let mut pieces = BTreeMap::new();
     let mut seen = std::collections::HashSet::new();
-    for mut entry in entries {
+    for entry in entries {
         identifier(&entry.file_id)?;
         if !seen.insert(entry.file_id.clone()) {
             return Err(AppError::new(
@@ -70,41 +77,12 @@ pub(crate) fn prepare(
             Entry {
                 file_id: key.clone(),
                 part: Part::Document {
-                    pseudocode_selected: entry.pseudocode_selected,
+                    pseudocode_selected: None,
                     documents: entry.documents.map(Box::new),
-                    pseudocode_skip_reason: entry.pseudocode_skip_reason,
+                    pseudocode_skip_reason: None,
                 },
             },
         );
-        entry
-            .translations
-            .sort_by(|a, b| a.source_id.cmp(&b.source_id));
-        for (t, translation) in entry.translations.into_iter().enumerate() {
-            pieces.insert(
-                format!("{key}/translation/{t:08}/header"),
-                Entry {
-                    file_id: key.clone(),
-                    part: Part::Translation {
-                        source_id: translation.source_id.clone(),
-                        source_hash: translation.source_hash,
-                        unavailable_reason: translation.unavailable_reason,
-                    },
-                },
-            );
-            for (b, block) in translation.blocks.into_iter().enumerate() {
-                pieces.insert(
-                    format!("{key}/translation/{t:08}/block/{b:08}"),
-                    Entry {
-                        file_id: key.clone(),
-                        part: Part::Block {
-                            source_id: translation.source_id.clone(),
-                            index: b as u32,
-                            block,
-                        },
-                    },
-                );
-            }
-        }
     }
     let mut packs = Files::new();
     let mut index: BTreeMap<String, Vec<Location>> = BTreeMap::new();
@@ -149,7 +127,7 @@ pub(crate) fn prepare(
     };
     // Reserve a small constant for the envelope and indentation, then count each
     // pretty-printed entry with its key. An individual document/block is bounded
-    // by the provider contract; a whole translated file can span any number of parts.
+    // by the provider contract; a collection can span multiple parts.
     let mut size = bytes(&pack)?.len();
     for (key, entry) in pieces {
         let encoded = bytes(&entry)?;
@@ -247,69 +225,20 @@ pub(crate) fn read(
         }
     }
     let mut documents = None;
-    let mut pseudocode_skip_reason = None;
-    let mut pseudocode_selected = None;
     let mut has_document = false;
-    let mut translations: BTreeMap<String, PseudoTranslation> = BTreeMap::new();
-    let mut blocks: BTreeMap<String, BTreeMap<u32, PseudoBlock>> = BTreeMap::new();
     for (_, part) in entries {
-        match part {
-            Part::Document {
-                pseudocode_selected: selected,
-                documents: value,
-                pseudocode_skip_reason: reason,
-            } => {
-                if has_document {
-                    return Err(AppError::new(
-                        "invalid_asset",
-                        "Generated document is duplicated.",
-                    ));
-                }
-                has_document = true;
-                documents = value.map(|documents| *documents);
-                pseudocode_selected = selected;
-                pseudocode_skip_reason = reason;
+        if let Part::Document {
+            documents: value, ..
+        } = part
+        {
+            if has_document {
+                return Err(AppError::new(
+                    "invalid_asset",
+                    "Generated document is duplicated.",
+                ));
             }
-            Part::Translation {
-                source_id,
-                source_hash,
-                unavailable_reason,
-            } => {
-                if translations
-                    .insert(
-                        source_id.clone(),
-                        PseudoTranslation {
-                            source_id,
-                            source_hash,
-                            unavailable_reason,
-                            blocks: vec![],
-                        },
-                    )
-                    .is_some()
-                {
-                    return Err(AppError::new(
-                        "invalid_asset",
-                        "Generated translation is duplicated.",
-                    ));
-                }
-            }
-            Part::Block {
-                source_id,
-                index,
-                block,
-            } => {
-                if blocks
-                    .entry(source_id)
-                    .or_default()
-                    .insert(index, block)
-                    .is_some()
-                {
-                    return Err(AppError::new(
-                        "invalid_asset",
-                        "Generated block is duplicated.",
-                    ));
-                }
-            }
+            has_document = true;
+            documents = value.map(|documents| *documents);
         }
     }
     if !has_document {
@@ -318,26 +247,9 @@ pub(crate) fn read(
             "Generated file document header is missing.",
         ));
     }
-    for (id, values) in blocks {
-        let target = translations
-            .get_mut(&id)
-            .ok_or_else(|| AppError::new("missing_asset", "Translation header is missing."))?;
-        for (expected, (index, block)) in values.into_iter().enumerate() {
-            if index != expected as u32 {
-                return Err(AppError::new(
-                    "missing_asset",
-                    "Translation block is missing.",
-                ));
-            }
-            target.blocks.push(block);
-        }
-    }
     Ok(ReviewFileContent {
-        pseudocode_selected,
-        pseudocode_skip_reason,
         file_id: file_id.into(),
         documents,
-        translations: translations.into_values().collect(),
     })
 }
 pub(crate) fn schema() -> Value {
@@ -351,68 +263,53 @@ pub(crate) fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn one_large_translation_spans_parts_and_reassembles_exactly() {
+    fn legacy_translation_packs_are_read_without_rewriting_or_reemitting_them() {
         let dir = tempfile::tempdir().unwrap();
         let project = Project::open(dir.path(), "repo").unwrap();
-        let blocks: Vec<_> = (0..24)
-            .map(|i| PseudoBlock {
-                start_line: i + 1,
-                end_line: i + 1,
-                text: format!("{}-{i}", "a".repeat(512 * 1024)),
-            })
-            .collect();
-        let content = ReviewFileContent {
-            pseudocode_selected: None,
-            pseudocode_skip_reason: None,
-            file_id: "file-one".into(),
-            documents: None,
-            translations: vec![PseudoTranslation {
-                source_id: "change:one:after".into(),
-                source_hash: "sourcehash".into(),
-                blocks,
-                unavailable_reason: None,
-            }],
-        };
-        let (index, packs) = prepare(&project, "review", "prep", vec![content.clone()]).unwrap();
-        assert!(packs.len() > 1);
-        assert!(packs.values().all(|b| b.len() <= PART_LIMIT));
-        for (path, bytes) in &packs {
-            let path = checked(&project.root, path).unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, bytes).unwrap();
-        }
-        let restored = read(&project.root, "review", "prep", "file-one", &index).unwrap();
+        let path = "generated/review/prep/0001.json";
+        let old = json!({"format":"reviewbox","version":VERSION,"reviewId":"review","preparationId":"prep","entries":{
+            "file/document":{"fileId":"file","part":{"kind":"document","documents":null,"pseudocodeSelected":true,"pseudocodeSkipReason":null}},
+            "file/translation/0/header":{"fileId":"file","part":{"kind":"translation","sourceId":"change:one:after","sourceHash":"hash","unavailableReason":null}},
+            "file/translation/0/block/0":{"fileId":"file","part":{"kind":"block","sourceId":"change:one:after","index":0,"block":{"startLine":1,"endLine":1,"text":"RETURN value"}}}
+        }});
+        let content = bytes(&old).unwrap();
+        let full_path = checked(&project.root, path).unwrap();
+        fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+        fs::write(&full_path, &content).unwrap();
+        let index = json!({"file":[{"path":path,"hash":fingerprint(&content)}]});
+        let restored = read(&project.root, "review", "prep", "file", &index).unwrap();
         assert_eq!(
-            serde_json::to_value(restored).unwrap(),
-            serde_json::to_value(content).unwrap()
+            serde_json::to_value(&restored).unwrap(),
+            json!({"fileId":"file","documents":null})
         );
-        let (_, again) = prepare(
-            &project,
-            "review",
-            "prep",
-            vec![
-                serde_json::from_value(
-                    serde_json::to_value(
-                        read(&project.root, "review", "prep", "file-one", &index).unwrap(),
-                    )
-                    .unwrap(),
-                )
-                .unwrap(),
-            ],
-        )
-        .unwrap();
-        assert_eq!(packs, again);
-        fs::write(
-            checked(&project.root, packs.keys().last().unwrap()).unwrap(),
-            b"corrupt",
-        )
-        .unwrap();
+        assert_eq!(fs::read(&full_path).unwrap(), content);
+        let (_, new_packs) = prepare(&project, "review", "next", vec![restored]).unwrap();
+        for bytes in new_packs.values() {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(!text.contains("translation"));
+            assert!(!text.contains("pseudocode"));
+        }
+        fs::write(&full_path, b"corrupt").unwrap();
         assert_eq!(
-            read(&project.root, "review", "prep", "file-one", &index)
+            read(&project.root, "review", "prep", "file", &index)
                 .unwrap_err()
                 .code,
             "corrupt_asset"
         );
+    }
+
+    #[test]
+    fn legacy_file_content_accepts_only_known_retired_fields() {
+        let old = json!({"fileId":"file","documents":null,"translations":[{"blocks":[]}],"pseudocodeSelected":true,"pseudocodeSkipReason":null});
+        let value: ReviewFileContent = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            json!({"fileId":"file","documents":null})
+        );
+        let mut unknown = old;
+        unknown["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<ReviewFileContent>(unknown).is_err());
     }
 }
