@@ -302,7 +302,7 @@ pub async fn preview_prompt(
     let root = resource_root(&app)?;
     blocking(move || prompts::load(&root, &action, &variables)).await
 }
-fn resource_root(app: &tauri::AppHandle) -> AppResult<PathBuf> {
+pub(crate) fn resource_root(app: &tauri::AppHandle) -> AppResult<PathBuf> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/agents"))
     } else {
@@ -401,12 +401,16 @@ pub async fn list_agent_runs(
     storage: State<'_, Storage>,
     repository_id: Option<String>,
     review_id: String,
+    context_id: Option<String>,
 ) -> AppResult<Vec<AgentRun>> {
     let s = storage.scoped(repository_id.as_deref());
     blocking(move || {
+        if let Some(context) = context_id {
+            return crate::knowledge::context::history(&s, &context);
+        }
         Ok(s.list::<AgentRun>("agent_run")?
             .into_iter()
-            .filter(|r| r.review_id == review_id)
+            .filter(|r| r.review_id == review_id && r.context_id.is_none())
             .collect())
     })
     .await
@@ -551,6 +555,9 @@ pub async fn proposal_from_run(
             return Ok(proposal);
         }
         let run: AgentRun = s.get("agent_run", &run_id)?;
+        if run.context_id.is_some() {
+            return crate::proposals::code_explain::parse(&s, &run);
+        }
         crate::proposals::parse(&s, &run.review_id, &run.output, Some(run.id.clone()))
     })
     .await
@@ -572,12 +579,16 @@ pub async fn list_proposals(
     storage: State<'_, Storage>,
     repository_id: Option<String>,
     review_id: String,
+    context_id: Option<String>,
 ) -> AppResult<Vec<Proposal>> {
     let s = storage.scoped(repository_id.as_deref());
     blocking(move || {
+        if let Some(context) = context_id {
+            return crate::knowledge::context::proposals(&s, &context);
+        }
         Ok(s.list::<Proposal>("proposal")?
             .into_iter()
-            .filter(|p| p.review_id == review_id)
+            .filter(|p| p.review_id == review_id && p.context_id.is_none())
             .collect())
     })
     .await

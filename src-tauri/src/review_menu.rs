@@ -18,6 +18,7 @@ use crate::contracts::{
 pub(crate) struct ReviewMenu {
     submenu: Submenu<tauri::Wry>,
     context: Mutex<Option<ReviewMenuState>>,
+    repository: Mutex<Option<String>>,
 }
 
 pub(crate) fn install(app: &AppHandle) -> tauri::Result<()> {
@@ -36,12 +37,21 @@ pub(crate) fn install(app: &AppHandle) -> tauri::Result<()> {
     app.manage(ReviewMenu {
         submenu,
         context: Mutex::new(None),
+        repository: Mutex::new(None),
     });
     app.on_menu_event(|app, event| {
         let Some(action) = action_from_id(event.id().as_ref()) else {
             return;
         };
         let menu = app.state::<ReviewMenu>();
+        if action == ReviewMenuAction::ViewLocalChanges {
+            if menu.submenu.is_enabled().unwrap_or(false)
+                && let Some(repository) = menu.repository.lock().clone()
+            {
+                let _ = app.emit_to("main", "reviewbox:view-local-changes", repository);
+            }
+            return;
+        }
         let context = menu.context.lock().clone();
         let Some(context) = context else { return };
         // Checkbox clicks toggle natively. Restore the durable value until the
@@ -130,18 +140,40 @@ pub(crate) fn focused(app: &AppHandle, label: &str) {
     let Some(menu) = app.try_state::<ReviewMenu>() else {
         return;
     };
-    let enabled = label == "main" && menu.context.lock().is_some();
+    let enabled =
+        label == "main" && (menu.context.lock().is_some() || menu.repository.lock().is_some());
     let _ = menu.submenu.set_enabled(enabled);
 }
 
 impl ReviewMenu {
     fn apply(&self, app: &AppHandle, context: Option<ReviewMenuState>) -> tauri::Result<()> {
-        if *self.context.lock() == context {
-            return Ok(());
-        }
         *self.context.lock() = None;
         self.submenu.set_enabled(false)?;
         while self.submenu.remove_at(0)?.is_some() {}
+        if self.repository.lock().is_some() {
+            #[cfg(target_os = "macos")]
+            let item = IconMenuItem::with_id_and_native_icon(
+                app,
+                "review.localChanges",
+                "View local changes",
+                true,
+                Some(NativeIcon::Folder),
+                None::<&str>,
+            )?;
+            #[cfg(not(target_os = "macos"))]
+            let item = IconMenuItem::with_id(
+                app,
+                "review.localChanges",
+                "View local changes",
+                true,
+                None,
+                None::<&str>,
+            )?;
+            self.submenu.append(&item)?;
+            if context.is_some() {
+                self.submenu.append(&PredefinedMenuItem::separator(app)?)?;
+            }
+        }
         if let Some(context) = &context {
             let status = match context.status {
                 PublicationStatus::Draft => "Local draft",
@@ -153,7 +185,11 @@ impl ReviewMenu {
             self.submenu
                 .append(&MenuItem::new(app, status, false, None::<&str>)?)?;
             self.submenu.append(&PredefinedMenuItem::separator(app)?)?;
-            for entry in &context.entries {
+            for entry in context
+                .entries
+                .iter()
+                .filter(|e| e.action != ReviewMenuAction::ViewLocalChanges)
+            {
                 if entry.action == ReviewMenuAction::Details {
                     self.submenu.append(&PredefinedMenuItem::separator(app)?)?;
                 }
@@ -186,13 +222,13 @@ impl ReviewMenu {
                     self.submenu.append(&item)?;
                 }
             }
-        } else {
+        } else if self.repository.lock().is_none() {
             self.submenu
                 .append(&MenuItem::new(app, "No review open", false, None::<&str>)?)?;
         }
         #[cfg(target_os = "macos")]
         macos::show_review_icons();
-        let enabled = context.is_some() && main_focused(app);
+        let enabled = (context.is_some() || self.repository.lock().is_some()) && main_focused(app);
         *self.context.lock() = context;
         self.submenu.set_enabled(enabled)
     }
@@ -200,6 +236,7 @@ impl ReviewMenu {
 
 fn action_id(action: ReviewMenuAction) -> &'static str {
     match action {
+        ReviewMenuAction::ViewLocalChanges => "review.localChanges",
         ReviewMenuAction::Refresh => "review.refresh",
         ReviewMenuAction::CompleteManual => "review.completeManual",
         ReviewMenuAction::CompleteUpdated => "review.completeUpdated",
@@ -213,6 +250,7 @@ fn action_id(action: ReviewMenuAction) -> &'static str {
 
 fn action_from_id(id: &str) -> Option<ReviewMenuAction> {
     [
+        ReviewMenuAction::ViewLocalChanges,
         ReviewMenuAction::Refresh,
         ReviewMenuAction::CompleteManual,
         ReviewMenuAction::CompleteUpdated,
@@ -231,6 +269,7 @@ fn action_presentation(
     update_with_rev: bool,
 ) -> (&'static str, NativeIcon) {
     match action {
+        ReviewMenuAction::ViewLocalChanges => ("View local changes", NativeIcon::Folder),
         ReviewMenuAction::Refresh => (
             if update_with_rev {
                 "Update with Rev"
@@ -272,4 +311,36 @@ pub(crate) async fn configure_review_menu(
         .await
         .map_err(|error| AppError::new("menu", error.to_string()))?
         .map_err(|error| AppError::new("menu", error.to_string()))
+}
+
+#[tauri::command]
+pub(crate) async fn configure_repository_menu(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    repository_id: Option<String>,
+) -> AppResult<()> {
+    if window.label() != "main" {
+        return Err(AppError::new(
+            "window",
+            "The repository menu belongs to the main window.",
+        ));
+    }
+    if let Some(id) = &repository_id {
+        let _: crate::contracts::Repository = app
+            .state::<crate::storage::Storage>()
+            .get("repository", id)?;
+    }
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let owner = app.clone();
+    app.run_on_main_thread(move || {
+        let menu = owner.state::<ReviewMenu>();
+        *menu.repository.lock() = repository_id;
+        let context = menu.context.lock().clone();
+        let _ = sender.send(menu.apply(&owner, context));
+    })
+    .map_err(|e| AppError::new("menu", e.to_string()))?;
+    receiver
+        .await
+        .map_err(|e| AppError::new("menu", e.to_string()))?
+        .map_err(|e| AppError::new("menu", e.to_string()))
 }

@@ -22,6 +22,7 @@ mod review_creation;
 mod review_menu;
 mod reviews;
 mod snapshots;
+mod source_control;
 mod storage;
 pub use project_storage::schemas as project_schemas;
 use tauri::Manager;
@@ -57,6 +58,7 @@ pub fn run() {
             );
             app.manage(storage);
             app.manage(agents::AgentManager::default());
+            app.manage(source_control::SourceControl::default());
             app.manage(preparation::PreparationManager::default());
             app.manage(agents::models::CatalogManager::default());
             app.manage(review_creation::CaptureManager::default());
@@ -92,6 +94,7 @@ pub fn run() {
             }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<agents::AgentManager>().stop_all();
+                window.state::<source_control::SourceControl>().stop_all();
                 window.state::<preparation::PreparationManager>().stop_all();
                 window
                     .state::<review_creation::CaptureManager>()
@@ -107,7 +110,19 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info::get_app_info,
+            knowledge::context::release_code_context,
+            knowledge::context::code_explain_context,
+            source_control::commands::local_git_state,
+            source_control::commands::local_file_diff,
+            source_control::commands::stage_local_file,
+            source_control::commands::git_commit_detail,
+            source_control::commands::fetch_git_remote,
+            source_control::commands::push_git_branch,
+            source_control::commands::commit_local_changes,
+            source_control::commands::cancel_git_operation,
+            source_control::commands::last_git_operation,
             review_menu::configure_review_menu,
+            review_menu::configure_repository_menu,
             appearance::appearance_settings,
             appearance::configure_appearance,
             appearance::editor_profiles,

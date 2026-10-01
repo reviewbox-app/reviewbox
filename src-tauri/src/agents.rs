@@ -1,5 +1,6 @@
 mod claude;
 mod codex;
+pub(crate) mod commit;
 mod continuity;
 mod exploration;
 mod outline_preview;
@@ -242,6 +243,23 @@ pub(crate) fn preparation_context(
     })
 }
 
+fn source_target(
+    storage: &Storage,
+    request: &AgentRequest,
+) -> AppResult<(Snapshot, Option<Review>)> {
+    if let Some(id) = &request.context_id {
+        if !request.review_id.is_empty() {
+            return Err(AppError::new(
+                "context",
+                "Choose a review or a Code Explain context, not both.",
+            ));
+        }
+        return Ok((storage.source_context(id)?, None));
+    }
+    let workspace = reviews::load(storage, &request.review_id)?;
+    Ok((workspace.snapshot, Some(workspace.review)))
+}
+
 pub(crate) fn prepare(
     storage: &Storage,
     resources: &std::path::Path,
@@ -256,18 +274,18 @@ pub(crate) fn prepare(
             "Keep the request below 32000 bytes.",
         ));
     }
-    let workspace = reviews::load(storage, &request.review_id)?;
-    let context = exploration::descriptor(storage, &workspace, request)?;
+    let (snapshot, review) = source_target(storage, request)?;
+    let context = exploration::descriptor_for(storage, &snapshot, review.as_ref(), request)?;
     let contract = match request.action.as_str() {
         "file" | "block" | "refresh" => "explanation",
         "glossary" => "glossary",
         _ => return Err(AppError::new("unknown_action", "Unknown agent action.")),
     };
     let schema = std::fs::read_to_string(resources.join(format!("contracts/{contract}.md")))?;
-    let language = knowledge::load(storage, &workspace.review.repository_id)?.language;
+    let language = knowledge::load(storage, &snapshot.repository_id)?.language;
     let variables = BTreeMap::from([
         ("language".into(), language),
-        ("snapshot_id".into(), workspace.snapshot.id.clone()),
+        ("snapshot_id".into(), snapshot.id.clone()),
         ("request".into(), request.request.clone()),
         ("context".into(), context),
         ("schema".into(), schema),
@@ -276,8 +294,10 @@ pub(crate) fn prepare(
     prompt.sources.push(format!("contracts/{contract}.md"));
     Ok(AgentRun {
         id: request.id.clone(),
+        repository_id: Some(snapshot.repository_id.clone()),
         review_id: request.review_id.clone(),
-        snapshot_id: workspace.snapshot.id,
+        snapshot_id: snapshot.id,
+        context_id: request.context_id.clone(),
         provider: request.provider.clone(),
         action: request.action.clone(),
         request: Some(request.request.clone()),
@@ -295,15 +315,17 @@ pub async fn run(
     cancel: Arc<AtomicBool>,
     channel: Channel<AgentEvent>,
 ) -> AppResult<AgentRun> {
+    let _source_pin = storage.pin_source_cache();
     let preparing_storage = storage.clone();
     let preparing_request = request.clone();
     let preparing_cancel = cancel.clone();
     let (mut run, exploration) = tokio::task::spawn_blocking(move || {
         let run = prepare(&preparing_storage, &resources, &preparing_request)?;
-        let workspace = reviews::load(&preparing_storage, &run.review_id)?;
-        let exploration = exploration::materialize(
+        let (snapshot, review) = source_target(&preparing_storage, &preparing_request)?;
+        let exploration = exploration::materialize_for(
             &preparing_storage,
-            &workspace,
+            &snapshot,
+            review.as_ref(),
             &preparing_request,
             &preparing_cancel,
         )?;
@@ -325,8 +347,8 @@ pub async fn run(
             .into_iter()
             .find(|p| p.provider == run.provider)
             .ok_or_else(|| AppError::new("provider", "Provider is not configured."))?;
-        let review: Review = storage.get("review", &run.review_id)?;
-        let project = storage.project_settings(&review.repository_id)?;
+        let snapshot: Snapshot = storage.get("snapshot", &run.snapshot_id)?;
+        let project = storage.project_settings(&snapshot.repository_id)?;
         let config = models::for_project(config, project);
         match run.provider.as_str() {
             "codex" => {
