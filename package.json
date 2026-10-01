@@ -30,6 +30,7 @@
     "test:project-cli": "bun scripts/test-project-cli.ts",
     "test:ui:native": "bun scripts/test-ui-native.ts && bun scripts/test-ui-scopes.ts && bun scripts/test-ui-layout.ts && bun scripts/test-ui-settings.ts && bun scripts/test-ui-scroll.ts",
     "test:ui:publication": "bun scripts/test-ui-publication.ts",
+    "test:ui:source-control": "bun scripts/test-ui-source-control.ts",
     "test:ui:storage": "bun scripts/test-ui-storage.ts",
     "test:ui:providers": "bun scripts/test-ui-providers.ts",
     "test:ui:harness-settings": "bun scripts/test-ui-harness-settings.ts",
@@ -49,6 +50,7 @@
     "test:ui:illustrations": "bun scripts/test-ui-illustrations.ts",
     "test:ui:wrap": "bun scripts/test-ui-wrap.ts",
     "test:ui:overlays": "bun scripts/test-ui-overlays.ts",
+    "test:ui:editor-overlays": "bun scripts/test-ui-editor-overlays.ts",
     "icons:build": "bun scripts/build-file-icons.ts",
     "test:ui:languages": "bun scripts/test-ui-languages.ts",
     "test:ui:code-colors": "bun scripts/test-ui-code-colors.ts"

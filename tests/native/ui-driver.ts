@@ -246,6 +246,12 @@ export class NativeUI {
   }
   /** Enter the scope step, regardless of whether this machine needs Rev setup. */
   async reviewScope() {
+    if (
+      await this.execute(
+        `return !document.querySelector('[role="dialog"]') && [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Start review')`
+      )
+    )
+      await this.named("Start review")
     const scope = '[role="dialog"] [aria-label="Review scope"]'
     const skip =
       "[...document.querySelectorAll('[role=dialog] footer button')].find(e=>e.textContent.trim()==='Continue without Rev')"
