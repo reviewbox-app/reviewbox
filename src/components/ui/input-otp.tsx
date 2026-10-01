@@ -1,10 +1,10 @@
 "use client"
 
-import * as React from "react"
+import { MinusSignIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { cn } from "cn"
 import { OTPInput, OTPInputContext } from "input-otp"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { MinusSignIcon } from "@hugeicons/core-free-icons"
+import * as React from "react"
 
 function InputOTP({
   className,
@@ -55,7 +55,7 @@ function InputOTPSlot({
       data-slot="input-otp-slot"
       data-active={isActive}
       className={cn(
-        "relative flex size-8 items-center justify-center border-y border-r border-input bg-input/50 text-sm transition-[color,box-shadow] duration-200 outline-none first:rounded-l-2xl first:border-l last:rounded-r-2xl aria-invalid:border-destructive data-[active=true]:z-10 data-[active=true]:border-ring data-[active=true]:ring-3 data-[active=true]:ring-ring/30 data-[active=true]:aria-invalid:ring-destructive/20 dark:data-[active=true]:aria-invalid:ring-destructive/40",
+        "relative flex size-8 items-center justify-center border-y border-r border-input bg-input text-sm transition-[color,box-shadow] duration-200 outline-none first:rounded-l-2xl first:border-l last:rounded-r-2xl aria-invalid:border-destructive data-[active=true]:z-10 data-[active=true]:border-ring data-[active=true]:ring-3 data-[active=true]:ring-ring/30 data-[active=true]:aria-invalid:ring-destructive/20 dark:data-[active=true]:aria-invalid:ring-destructive/40",
         className
       )}
       {...props}
@@ -83,4 +83,4 @@ function InputOTPSeparator({ ...props }: React.ComponentProps<"div">) {
   )
 }
 
-export { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator }
+export { InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot }

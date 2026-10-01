@@ -1,8 +1,8 @@
 "use client"
 
-import * as React from "react"
 import { Command as CommandPrimitive } from "cmdk"
 import { cn } from "cn"
+import * as React from "react"
 
 import {
   Dialog,
@@ -12,8 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
-import { HugeiconsIcon } from "@hugeicons/react"
 import { SearchIcon, Tick02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 function Command({
   className,
@@ -70,7 +70,7 @@ function CommandInput({
 }: React.ComponentProps<typeof CommandPrimitive.Input>) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
-      <InputGroup className="h-8! bg-input/50">
+      <InputGroup className="h-8! bg-input">
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(
@@ -192,11 +192,11 @@ function CommandShortcut({
 export {
   Command,
   CommandDialog,
-  CommandInput,
-  CommandList,
   CommandEmpty,
   CommandGroup,
+  CommandInput,
   CommandItem,
-  CommandShortcut,
+  CommandList,
   CommandSeparator,
+  CommandShortcut,
 }

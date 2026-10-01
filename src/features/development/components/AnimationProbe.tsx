@@ -1,9 +1,9 @@
 "use client"
 
-import { useRef } from "react"
-import { gsap } from "gsap"
 import { useGSAP } from "@gsap/react"
+import { gsap } from "gsap"
 import { motion, useReducedMotion } from "motion/react"
+import { useRef } from "react"
 
 gsap.registerPlugin(useGSAP)
 
@@ -38,10 +38,7 @@ export function AnimationProbe({ count }: { count: number }) {
       >
         Motion
       </motion.div>
-      <div
-        data-gsap-probe
-        className="rounded-lg bg-secondary px-3 py-1 text-xs"
-      >
+      <div data-gsap-probe className="rounded-lg bg-accent px-3 py-1 text-xs">
         GSAP
       </div>
     </div>
