@@ -63,7 +63,7 @@ const shortcuts = [
 const intro: Record<Section, string> = {
   General: "Appearance and language of ReviewBox on this Mac.",
   Reading:
-    "Choose how Rev explains changes. Your reading level stays on this Mac.",
+    "Choose how Rev explains changes. Your reading mode stays on this Mac.",
   Rev: "Rev helps you review and understand code using your chosen harness. Sign-in stays with the provider; ReviewBox has no account of its own.",
   Permissions: "What Rev and the commands you run are allowed to do.",
   "Context sent": "Context used to prepare review explanations.",

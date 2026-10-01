@@ -4,7 +4,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { ModelSelector } from "@/features/agents/components/ModelSelector"
 import { useProviderStatus } from "@/features/agents/hooks/useProviderStatus"
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
@@ -15,6 +21,23 @@ import type {
   Scope,
 } from "@/lib/desktop/contracts.generated"
 
+const scopeItems: { value: Scope; label: string }[] = [
+  "local",
+  "staged",
+  "unstaged",
+  "commit",
+  "range",
+].map((value) => ({ value: value as Scope, label: value }))
+const preparationItems: { value: PreparationMode; label: string }[] = [
+  { value: "rev", label: "With Rev" },
+  { value: "manual", label: "Myself" },
+]
+const providerItems = [
+  { value: "", label: "Use application default" },
+  { value: "codex", label: "Codex" },
+  { value: "claude", label: "Claude Code" },
+]
+
 export function ProjectSettingsPanel() {
   const { settings: providerSettings } = useProviderStatus()
   const [repositories, setRepositories] = useState<Repository[]>([])
@@ -23,6 +46,12 @@ export function ProjectSettingsPanel() {
   const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
+  const repositoryItems = repositories.length
+    ? repositories.map((repo) => ({
+        value: repo.id,
+        label: `${repo.name} — ${repo.path}`,
+      }))
+    : [{ value: "", label: "Open a repository first" }]
   const effectiveProvider =
     settings?.provider ?? providerSettings?.defaultProvider ?? ""
   const providerConfig = providerSettings?.providers.find(
@@ -80,26 +109,27 @@ export function ProjectSettingsPanel() {
         </p>
       </div>
       <Label htmlFor="settings-project">Project</Label>
-      <NativeSelect
-        id="settings-project"
-        className="w-full"
+      <Select
+        items={repositoryItems}
         value={repositoryId}
-        onChange={(e) => {
-          setSettings(null)
-          setRepositoryId(e.target.value)
+        onValueChange={(value) => {
+          if (value !== null) {
+            setSettings(null)
+            setRepositoryId(value)
+          }
         }}
       >
-        {!repositories.length && (
-          <NativeSelectOption value="">
-            Open a repository first
-          </NativeSelectOption>
-        )}
-        {repositories.map((repo) => (
-          <NativeSelectOption key={repo.id} value={repo.id}>
-            {repo.name} — {repo.path}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
+        <SelectTrigger id="settings-project" className="w-full min-w-0">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {repositoryItems.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {settings && (
         <form
           className="space-y-5"
@@ -130,20 +160,26 @@ export function ProjectSettingsPanel() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="project-scope">Default review scope</Label>
-            <NativeSelect
-              id="project-scope"
-              className="w-full"
+            <Select
+              items={scopeItems}
               value={settings.defaultScope}
-              onChange={(e) =>
-                update({ defaultScope: e.target.value as Scope })
-              }
+              onValueChange={(value) => {
+                if (value !== null) {
+                  update({ defaultScope: value })
+                }
+              }}
             >
-              {["local", "staged", "unstaged", "commit", "range"].map(
-                (scope) => (
-                  <NativeSelectOption key={scope}>{scope}</NativeSelectOption>
-                )
-              )}
-            </NativeSelect>
+              <SelectTrigger id="project-scope" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {scopeItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Label>
             <Checkbox
@@ -156,40 +192,51 @@ export function ProjectSettingsPanel() {
           </Label>
           <div className="space-y-2">
             <Label htmlFor="project-preparation">Default preparation</Label>
-            <NativeSelect
-              id="project-preparation"
-              className="w-full"
+            <Select
+              items={preparationItems}
               value={settings.defaultPreparation}
-              onChange={(e) =>
-                update({
-                  defaultPreparation: e.target.value as PreparationMode,
-                })
-              }
+              onValueChange={(value) => {
+                if (value !== null) {
+                  update({ defaultPreparation: value })
+                }
+              }}
             >
-              <NativeSelectOption value="rev">With Rev</NativeSelectOption>
-              <NativeSelectOption value="manual">Myself</NativeSelectOption>
-            </NativeSelect>
+              <SelectTrigger id="project-preparation" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {preparationItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label htmlFor="project-provider">
               Rev’s harness for this project
             </Label>
-            <NativeSelect
-              id="project-provider"
-              className="w-full"
+            <Select
+              items={providerItems}
               value={settings.provider ?? ""}
-              onChange={(e) =>
-                update({ provider: e.target.value || null, model: null })
-              }
+              onValueChange={(value) => {
+                if (value !== null) {
+                  update({ provider: value || null, model: null })
+                }
+              }}
             >
-              <NativeSelectOption value="">
-                Use application default
-              </NativeSelectOption>
-              <NativeSelectOption value="codex">Codex</NativeSelectOption>
-              <NativeSelectOption value="claude">
-                Claude Code
-              </NativeSelectOption>
-            </NativeSelect>
+              <SelectTrigger id="project-provider" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providerItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label htmlFor="project-model">Model override</Label>

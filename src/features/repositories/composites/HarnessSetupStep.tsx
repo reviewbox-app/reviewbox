@@ -1,6 +1,15 @@
 "use client"
-import { useEffect, useRef, useState } from "react"
-import { HugeiconsIcon } from "@hugeicons/react"
+import { Button } from "@/components/ui/button"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Spinner } from "@/components/ui/spinner"
+import { harnessNames } from "@/features/agents/hooks/useRevStatus"
+import { setupCommands } from "@/features/agents/services/setup.commands"
+import type {
+  ProviderSetupEvent,
+  ProviderStatus,
+} from "@/lib/desktop/contracts.generated"
+import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
+import { cn } from "@/lib/utils"
 import {
   AiMagicIcon,
   Copy01Icon,
@@ -8,17 +17,8 @@ import {
   SecurityCheckIcon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Button } from "@/components/ui/button"
-import { Spinner } from "@/components/ui/spinner"
-import { setupCommands } from "@/features/agents/services/setup.commands"
-import { harnessNames } from "@/features/agents/hooks/useRevStatus"
-import type {
-  ProviderSetupEvent,
-  ProviderStatus,
-} from "@/lib/desktop/contracts.generated"
-import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
-import { cn } from "@/lib/utils"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { useEffect, useRef, useState } from "react"
 import { WizardColumns } from "../components/WizardColumns"
 
 function statusLabel(status: ProviderStatus) {
@@ -35,7 +35,7 @@ function CopyCommand({ command }: { command: string }) {
   const [error, setError] = useState("")
   return (
     <div>
-      <div className="flex min-w-0 items-center gap-2 rounded-2xl bg-secondary py-2 pr-2 pl-3.5">
+      <div className="flex min-w-0 items-center gap-2 rounded-2xl bg-accent py-2 pr-2 pl-3.5">
         <code className="min-w-0 flex-1 text-xs break-all">{command}</code>
         <Button
           size="icon-xs"

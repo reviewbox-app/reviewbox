@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useAppearancePreferences } from "../hooks/useAppearancePreferences"
 import { SettingRow } from "./SettingRow"
@@ -34,11 +40,15 @@ export function CodeAppearanceSettings() {
       (p) => p.name === appearance.preferences?.importedProfile
     )?.id ??
     appearance.profiles[0]?.id
+  const profileItems = appearance.profiles.map((profile) => ({
+    value: profile.id,
+    label: profile.name,
+  }))
   return (
     <>
       <SettingRow
         title="Code colors"
-        description="Rich syntax colors in code, pseudo-code and previews. ReviewBox surfaces stay unchanged."
+        description="Rich syntax colors in code and previews. ReviewBox surfaces stay unchanged."
       >
         <Tabs
           value={appearance.preferences?.codeTheme ?? "tokyo-night"}
@@ -64,17 +74,26 @@ export function CodeAppearanceSettings() {
       >
         <div className="flex flex-wrap items-center gap-2">
           {appearance.profiles.length > 1 && (
-            <NativeSelect
+            <Select
+              items={profileItems}
               value={profileId}
-              aria-label="VS Code profile"
-              onChange={(event) => setSelected(event.target.value)}
+              onValueChange={(value) => {
+                if (value !== null) {
+                  setSelected(value)
+                }
+              }}
             >
-              {appearance.profiles.map((profile) => (
-                <NativeSelectOption key={profile.id} value={profile.id}>
-                  {profile.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <SelectTrigger aria-label="VS Code profile">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {profileItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
           <Button
             variant="secondary"

@@ -18,7 +18,13 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { Kbd } from "@/components/ui/kbd"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import type {
@@ -41,6 +47,11 @@ const actionLabels: Record<string, string> = {
   glossary: "Suggest project definitions",
   refresh: "Refresh the explanation",
 }
+
+const harnessItems = Object.entries(harnessNames).map(([value, label]) => ({
+  value,
+  label,
+}))
 
 function RevHeader({ time }: { time?: string }) {
   return (
@@ -84,6 +95,10 @@ export function AgentConversation({
   )
   const providerReady =
     !providerStatus.checking && selectedStatus?.ready === true
+  const actionItems = actions.map((value) => ({
+    value,
+    label: actionLabels[value] ?? value,
+  }))
   const [action, setAction] = useState(actions[0])
   const [completed, setCompleted] = useState<AgentRun | null>(null)
   const [history, setHistory] = useState<AgentRun[]>([])
@@ -368,34 +383,53 @@ export function AgentConversation({
           />
           <div className="flex items-center gap-2 p-2">
             {actions.length > 1 && (
-              <NativeSelect
-                size="sm"
-                aria-label="What Rev should do"
+              <Select
+                items={actionItems}
                 value={action}
+                onValueChange={(value) => {
+                  if (value !== null) {
+                    setAction(value)
+                  }
+                }}
                 disabled={active}
-                onChange={(e) => setAction(e.target.value)}
               >
-                {actions.map((value) => (
-                  <NativeSelectOption key={value} value={value}>
-                    {actionLabels[value] ?? value}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                <SelectTrigger size="sm" aria-label="What Rev should do">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {actionItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
-            <NativeSelect
-              size="sm"
-              aria-label="Rev's harness"
-              title="Harness used by Rev for this request"
+            <Select
+              items={harnessItems}
               value={provider}
+              onValueChange={(value) => {
+                if (value !== null) {
+                  setProvider(value)
+                }
+              }}
               disabled={active}
-              onChange={(e) => setProvider(e.target.value)}
             >
-              {Object.entries(harnessNames).map(([value, name]) => (
-                <NativeSelectOption key={value} value={value}>
-                  {name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <SelectTrigger
+                size="sm"
+                aria-label="Rev's harness"
+                title="Harness used by Rev for this request"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {harnessItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <span className="flex-1" />
             {active ? (
               <Button variant="secondary" size="sm" onClick={stop}>

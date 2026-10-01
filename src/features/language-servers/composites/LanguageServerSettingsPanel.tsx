@@ -5,7 +5,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AdvancedLanguageServerSettings } from "./AdvancedLanguageServerSettings"
 import { LanguageServerCatalogueRow } from "../components/LanguageServerCatalogueRow"
@@ -37,25 +43,37 @@ export function LanguageServerSettingsPanel() {
         .toLowerCase()
         .includes(query.toLowerCase())
   )
+  const repositoryItems = state.repositories.length
+    ? state.repositories.map((repository) => ({
+        value: repository.id,
+        label: repository.name,
+      }))
+    : [{ value: "", label: "No open project" }]
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Label htmlFor="languages-project">Project</Label>
-          <NativeSelect
-            id="languages-project"
+          <Select
+            items={repositoryItems}
             value={state.repositoryId}
-            onChange={(event) => state.setRepositoryId(event.target.value)}
+            onValueChange={(value) => {
+              if (value !== null) {
+                state.setRepositoryId(value)
+              }
+            }}
           >
-            {state.repositories.map((repository) => (
-              <NativeSelectOption key={repository.id} value={repository.id}>
-                {repository.name}
-              </NativeSelectOption>
-            ))}
-            {!state.repositories.length && (
-              <NativeSelectOption value="">No open project</NativeSelectOption>
-            )}
-          </NativeSelect>
+            <SelectTrigger id="languages-project">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {repositoryItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <Button
           size="sm"

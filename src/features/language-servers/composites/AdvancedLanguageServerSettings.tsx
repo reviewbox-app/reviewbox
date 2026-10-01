@@ -1,14 +1,14 @@
 "use client"
-import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { languageServerCommands } from "../services/languageServer.commands"
-import { errorMessage } from "@/lib/desktop/review.commands"
 import type {
   LanguageServerConfig,
   LanguageServerSettings,
 } from "@/lib/desktop/contracts.generated"
+import { errorMessage } from "@/lib/desktop/review.commands"
+import { useEffect, useState } from "react"
+import { languageServerCommands } from "../services/languageServer.commands"
 export function AdvancedLanguageServerSettings() {
   const [settings, setSettings] = useState<LanguageServerSettings | null>(null)
   const [error, setError] = useState("")
@@ -67,7 +67,7 @@ export function AdvancedLanguageServerSettings() {
           <Label htmlFor={`${server.id}-args`}>Arguments (one per line)</Label>
           <textarea
             id={`${server.id}-args`}
-            className="min-h-16 w-full rounded-2xl bg-input/50 px-2.5 py-2 font-mono text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/30"
+            className="min-h-16 w-full rounded-2xl bg-input px-2.5 py-2 font-mono text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/30"
             value={server.arguments.join("\n")}
             onChange={(e) =>
               update(server.id, {
