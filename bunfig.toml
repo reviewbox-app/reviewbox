@@ -1,0 +1,3 @@
+[test]
+# Unit tests live in src; tests/web uses the Playwright runner.
+root = "src"
