@@ -1,4 +1,5 @@
 "use client"
+import { reviewReaderLayout } from "../reader.config"
 
 import {
   useCallback,
@@ -48,7 +49,7 @@ export function ReviewSourceCode({
   onCursor,
   handle,
 }: {
-  snapshot: Snapshot
+  snapshot: Pick<Snapshot, "id">
   change: Change
   content: FileContent
   passage?: Passage
@@ -58,7 +59,7 @@ export function ReviewSourceCode({
   split: boolean
   trimWhitespace: boolean
   padding: { top: number; bottom: number }
-  modelScope: "reader" | "reference"
+  modelScope: "reader" | "reference" | "local"
   point?: SourceReadingPoint
   saved?: SourceViewPosition
   onCapture: (value: SourceViewPosition) => void
@@ -76,6 +77,7 @@ export function ReviewSourceCode({
   } | null>(null)
   const revealed = useRef(selection)
   const latest = useRef({
+    hasAfter: content.after !== null,
     passage,
     selection,
     padding,
@@ -90,6 +92,7 @@ export function ReviewSourceCode({
   const ready = useRef(false)
   useLayoutEffect(() => {
     latest.current = {
+      hasAfter: content.after !== null,
       passage,
       selection,
       padding,
@@ -107,7 +110,7 @@ export function ReviewSourceCode({
     if (!diff || !ready.current) return
     const original = diff.getOriginalEditor()
     const before =
-      content.after === null ||
+      !latest.current.hasAfter ||
       (latest.current.split &&
         (original.hasTextFocus() || initial.current.point?.side === "before"))
     const source = before ? original : diff.getModifiedEditor()
@@ -126,7 +129,7 @@ export function ReviewSourceCode({
       split: latest.current.split,
       code: diff.saveViewState(),
     }
-  }, [content.after])
+  }, [])
   useImperativeHandle(
     handle,
     () => ({
@@ -251,10 +254,11 @@ export function ReviewSourceCode({
   return (
     <CodeDiffEditor
       height="100%"
+      overlayTop={Math.max(0, padding.top - reviewReaderLayout.contentInset)}
       original={content.before ?? ""}
       modified={content.after ?? ""}
       originalLanguageDocument={
-        change.before
+        change.before && modelScope !== "local"
           ? {
               snapshotId: snapshot.id,
               path: change.previousPath ?? change.path,
@@ -265,7 +269,7 @@ export function ReviewSourceCode({
           : undefined
       }
       modifiedLanguageDocument={
-        change.after
+        change.after && modelScope !== "local"
           ? {
               snapshotId: snapshot.id,
               path: change.path,

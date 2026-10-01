@@ -1,0 +1,6 @@
+/* Monaco's padding scrolls with the source; its fixed widgets need their own
+   inset beneath the reader's glass bars. Scope this to covered editors only. */
+.overlaid :global(.monaco-editor .find-widget.visible),
+.overlaid :global(.monaco-editor .sticky-widget) {
+  top: var(--code-overlay-top) !important;
+}

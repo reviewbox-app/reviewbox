@@ -1,4 +1,5 @@
 "use client"
+import { reviewReaderLayout } from "../reader.config"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTheme } from "next-themes"
 import { FileIcon } from "@/features/file-icons/components/FileIcon"
@@ -115,8 +116,11 @@ export function ReviewReferencePane({
       },
     ])
     revealPassage(mounted.current, reference.startLine, reference.endLine, {
-      top: overlay.top + 56,
-      bottom: overlay.bottom + 8,
+      top:
+        overlay.top +
+        reviewReaderLayout.codeHeaderHeight +
+        reviewReaderLayout.contentInset,
+      bottom: overlay.bottom + reviewReaderLayout.contentInset,
     })
   }, [reference, overlay.top, overlay.bottom])
   useEffect(() => {
@@ -172,8 +176,11 @@ export function ReviewReferencePane({
   return (
     <section className="absolute inset-0" aria-label="Referenced source">
       <header
-        className="absolute inset-x-0 z-10 flex h-12 items-center gap-2 truncate border-b glass-bar px-4 text-xs"
-        style={{ top: overlay.top }}
+        className="absolute inset-x-0 z-10 flex items-center gap-2 truncate border-b glass-bar px-4 text-xs"
+        style={{
+          top: overlay.top,
+          height: reviewReaderLayout.codeHeaderHeight,
+        }}
       >
         <FileIcon path={source.path} />
         {source.path}
@@ -181,6 +188,7 @@ export function ReviewReferencePane({
       <CodeEditor
         key={key}
         height="100%"
+        overlayTop={overlay.top + reviewReaderLayout.codeHeaderHeight}
         path={`reviewbox://reference/${key}`}
         value={source.text ?? ""}
         languageDocument={{
@@ -200,7 +208,13 @@ export function ReviewReferencePane({
           fontFamily: "var(--font-mono)",
           fontSize: 12,
           lineHeight: 20,
-          padding: { top: overlay.top + 56, bottom: overlay.bottom + 8 },
+          padding: {
+            top:
+              overlay.top +
+              reviewReaderLayout.codeHeaderHeight +
+              reviewReaderLayout.contentInset,
+            bottom: overlay.bottom + reviewReaderLayout.contentInset,
+          },
           wordWrap: "on",
           wrappingIndent: "same",
           scrollBeyondLastLine: false,

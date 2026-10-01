@@ -3,16 +3,21 @@
 import { DiffEditor } from "@monaco-editor/react"
 import type { editor } from "monaco-editor"
 import * as monaco from "monaco-editor/editor/editor.api"
-import { useEffect, useLayoutEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react"
 import { useCodeTheme } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
+import styles from "./editor-overlays.module.css"
 
 import type { CodeDiffEditorProps } from "../contracts/codeEditor.types"
 
 export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
-  const { originalLanguageDocument, modifiedLanguageDocument, ...editorProps } =
-    props
+  const {
+    originalLanguageDocument,
+    modifiedLanguageDocument,
+    overlayTop = 0,
+    ...editorProps
+  } = props
   const services = useEditorLanguageServices(
     originalLanguageDocument,
     modifiedLanguageDocument
@@ -56,7 +61,14 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
     <>
       <div
         ref={container}
-        style={{ height: props.height ?? 320, width: props.width ?? "100%" }}
+        className={overlayTop > 0 ? styles.overlaid : undefined}
+        style={
+          {
+            height: props.height ?? 320,
+            width: props.width ?? "100%",
+            "--code-overlay-top": `${overlayTop}px`,
+          } as CSSProperties
+        }
       >
         <DiffEditor
           {...editorProps}

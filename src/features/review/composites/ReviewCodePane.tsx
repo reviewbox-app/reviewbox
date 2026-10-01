@@ -1,4 +1,5 @@
 "use client"
+import { reviewReaderLayout } from "../reader.config"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -60,10 +61,12 @@ export function ReviewCodePane({
   onPosition,
   overlay,
   modelScope = "reader",
+  source,
 }: {
   /** Each simultaneous diff owns distinct Monaco models and their lifecycle. */
-  modelScope?: "reader" | "reference"
-  snapshot: Snapshot
+  modelScope?: "reader" | "reference" | "local"
+  source?: FileContent
+  snapshot: Pick<Snapshot, "id">
   change: Change
   passage?: Passage
   /** Changes only for deliberate navigation, not saved/reloaded review data. */
@@ -79,7 +82,8 @@ export function ReviewCodePane({
   overlay?: { top: number; bottom: number }
 }) {
   const [trimWhitespace, setTrimWhitespace] = useState(false)
-  const [content, setContent] = useState<FileContent | null>(null)
+  const [loadedContent, setContent] = useState<FileContent | null>(null)
+  const content = source ?? loadedContent
   const [error, setError] = useState("")
   const [counts, setCounts] = useState<{
     added: number
@@ -137,6 +141,7 @@ export function ReviewCodePane({
     setSplit(value === "split")
   }
   useEffect(() => {
+    if (source) return
     let alive = true
     reviewCommands
       .content(snapshot.id, change.id)
@@ -149,12 +154,15 @@ export function ReviewCodePane({
     return () => {
       alive = false
     }
-  }, [snapshot.id, change.id])
-  const HEADER = 48
-  const STATUS = 28
+  }, [snapshot.id, change.id, source])
+  const { codeHeaderHeight, codeStatusHeight, contentInset } =
+    reviewReaderLayout
   const padding = overlay
-    ? { top: overlay.top + HEADER + 8, bottom: overlay.bottom + STATUS + 8 }
-    : { top: 8, bottom: 8 }
+    ? {
+        top: overlay.top + codeHeaderHeight + contentInset,
+        bottom: overlay.bottom + codeStatusHeight + contentInset,
+      }
+    : { top: contentInset, bottom: contentInset }
   const folder = folderOf(change.path)
   return (
     <section
@@ -170,7 +178,9 @@ export function ReviewCodePane({
           overlay &&
             "absolute inset-x-0 z-10 flex-nowrap overflow-hidden glass-bar"
         )}
-        style={overlay ? { top: overlay.top } : undefined}
+        style={
+          overlay ? { top: overlay.top, height: codeHeaderHeight } : undefined
+        }
       >
         <FileIcon path={change.path} />
         <span
@@ -342,7 +352,7 @@ export function ReviewCodePane({
           className="p-8 text-sm text-muted-foreground"
           style={overlay ? { paddingTop: padding.top + 24 } : undefined}
         >
-          Loading frozen content…
+          Loading content…
         </div>
       )}
       <footer
@@ -354,7 +364,10 @@ export function ReviewCodePane({
       >
         <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
           <HugeiconsIcon icon={ViewIcon} size={14} />
-          Read-only · review files {snapshot.id.slice(0, 6)}
+          Read-only ·{" "}
+          {modelScope === "local"
+            ? "local changes"
+            : `review files ${snapshot.id.slice(0, 6)}`}
           {!markdown && trimWhitespace ? " · filtered display" : ""}
         </span>
         <span>{markdown ? "Markdown" : languageName(change.path)}</span>

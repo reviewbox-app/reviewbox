@@ -7,6 +7,8 @@ import type { LanguageDocument } from "@/lib/desktop/contracts.generated"
 type MonacoInstance = typeof Monaco
 
 export type CodeEditorProps = Omit<EditorProps, "beforeMount" | "onMount"> & {
+  /** Fixed reader bars covering the editor, excluding its source padding. */
+  overlayTop?: number
   languageDocument?: LanguageDocument
   beforeMount?: (monaco: MonacoInstance) => void
   onMount?: (
@@ -19,6 +21,7 @@ export type CodeDiffEditorProps = Omit<
   DiffEditorProps,
   "beforeMount" | "onMount"
 > & {
+  overlayTop?: number
   originalLanguageDocument?: LanguageDocument
   modifiedLanguageDocument?: LanguageDocument
   beforeMount?: (monaco: MonacoInstance) => void
