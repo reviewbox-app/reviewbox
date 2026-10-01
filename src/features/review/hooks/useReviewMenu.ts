@@ -37,6 +37,7 @@ export function useReviewMenu({
   updatePending,
   enabled = true,
   onRefresh,
+  onLocalChanges,
   onAction,
   onDetails,
   onSummary,
@@ -48,6 +49,7 @@ export function useReviewMenu({
   updatePending: boolean
   enabled?: boolean
   onRefresh?: () => void
+  onLocalChanges?: () => void
   onAction: (action: ReviewAction) => Promise<boolean>
   onDetails: () => void
   onSummary: () => void
@@ -66,6 +68,7 @@ export function useReviewMenu({
     const entries: ReviewMenuState["entries"] = []
     const add = (action: ReviewMenuAction, allowed = !busy) =>
       entries.push({ action, enabled: allowed })
+    if (onLocalChanges) add("viewLocalChanges", true)
     if (canRefresh) add("refresh", !busy && !updatePending)
     if (needsConfirmation) add("completeUpdated")
     if (manual) add("completeManual")
@@ -87,6 +90,7 @@ export function useReviewMenu({
     busy,
     updatePending,
     canRefresh,
+    onLocalChanges,
     needsConfirmation,
     manual,
     keepable,
@@ -110,6 +114,9 @@ export function useReviewMenu({
     )
       return
     switch (event.action) {
+      case "viewLocalChanges":
+        onLocalChanges?.()
+        break
       case "refresh":
         onRefresh?.()
         break

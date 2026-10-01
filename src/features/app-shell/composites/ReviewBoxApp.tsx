@@ -1,12 +1,11 @@
 "use client"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   AlertCircleIcon,
   Cancel01Icon,
   InformationCircleIcon,
-  SecurityCheckIcon,
 } from "@hugeicons/core-free-icons"
 import {
   useRevStatus,
@@ -23,7 +22,12 @@ import { PreparingReview } from "@/features/agents/composites/PreparingReview"
 import { ReviewReader } from "@/features/review/composites/ReviewReader"
 import { ResumeReviews } from "@/features/review/composites/ResumeReviews"
 import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
-import { UnderstandWorkspace } from "@/features/knowledge/composites/UnderstandWorkspace"
+import { CodeExplainWorkspace } from "@/features/knowledge/composites/CodeExplainWorkspace"
+import { useRepositoryGitMenu } from "@/features/source-control/hooks/useRepositoryGitMenu"
+import { useSourceControl } from "@/features/source-control/hooks/useSourceControl"
+import { LocalChanges } from "@/features/source-control/composites/LocalChanges"
+import { ReviewOverview } from "@/features/source-control/composites/ReviewOverview"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { getReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 import { useAppearancePreferences } from "@/features/settings/hooks/useAppearancePreferences"
 import { useReviewSession } from "@/features/review/hooks/useReviewSession"
@@ -76,6 +80,26 @@ export function ReviewBoxApp() {
     setNewReview,
     selectView: setView,
   } = session
+  const git = useSourceControl(repository?.id)
+  const [surface, setSurface] = useState<{
+    repositoryId: string
+    mode: "local" | "overview"
+  } | null>(null)
+  const local =
+    surface?.repositoryId === repository?.id && surface?.mode === "local"
+  const overview =
+    surface?.repositoryId === repository?.id && surface?.mode === "overview"
+  const openLocal = useCallback(() => {
+    if (repository) {
+      setSurface({ repositoryId: repository.id, mode: "local" })
+      setSpace("review")
+    }
+  }, [repository, setSpace])
+  useRepositoryGitMenu(repository?.id, openLocal)
+  const showOverview = () => {
+    if (repository)
+      setSurface({ repositoryId: repository.id, mode: "overview" })
+  }
   const [dismissedChange, setDismissedChange] = useState<string | null>(null)
   const update = useReviewUpdate(
     workspace,
@@ -141,6 +165,8 @@ export function ReviewBoxApp() {
         !typing &&
         !meta &&
         space === "review" &&
+        !local &&
+        !overview &&
         !target?.closest(".monaco-editor")
       ) {
         if (event.key === "j") next(1)
@@ -172,6 +198,8 @@ export function ReviewBoxApp() {
     preparing,
     space,
     nextTopic,
+    local,
+    overview,
   ])
   // A review Rev has written opens on its document; one without a tour
   // (prepared by the reader) has nothing to read yet, so it opens on the code.
@@ -277,6 +305,7 @@ export function ReviewBoxApp() {
         repository={repository}
         rev={rev}
         onHome={session.home}
+        onReviewOverview={showOverview}
         reviewControl={
           workspace && (
             <ReviewUpdateStatus
@@ -327,45 +356,66 @@ export function ReviewBoxApp() {
           </Button>
         </div>
       )}
-      {session.changed && workspace && dismissedChange !== readingIdentity && (
-        <div
-          role="status"
-          className="mx-2 mb-2 flex items-center gap-2.5 rounded-2xl bg-review-attention-soft py-1.5 pr-1.5 pl-3 text-sm"
-        >
-          <HugeiconsIcon
-            icon={InformationCircleIcon}
-            size={16}
-            className="shrink-0 text-review-attention"
-          />
-          <span className="flex-1">
-            The repository changed outside ReviewBox. Your snapshot is
-            untouched.
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={
-              busy ||
-              updating ||
-              (!!update.state && update.state.status !== "ready")
-            }
-            onClick={() => void refresh()}
+      {space === "review" &&
+        !local &&
+        !overview &&
+        session.changed &&
+        workspace &&
+        dismissedChange !== readingIdentity && (
+          <div
+            role="status"
+            className="mx-2 mb-2 flex items-center gap-2.5 rounded-2xl bg-review-attention-soft py-1.5 pr-1.5 pl-3 text-sm"
           >
-            {workspace.review.preparationId ||
-            workspace.review.mode === "guided"
-              ? "Update with Rev"
-              : "Refresh"}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Dismiss repository changes"
-            onClick={() => setDismissedChange(readingIdentity)}
-          >
-            <HugeiconsIcon icon={Cancel01Icon} size={14} />
-          </Button>
-        </div>
-      )}
+            <HugeiconsIcon
+              icon={InformationCircleIcon}
+              size={16}
+              className="shrink-0 text-review-attention"
+            />
+            <span className="flex-1">
+              The repository changed outside ReviewBox. Your snapshot is
+              untouched.
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={
+                busy ||
+                updating ||
+                (!!update.state && update.state.status !== "ready")
+              }
+              onClick={() => void refresh()}
+            >
+              {workspace.review.preparationId ||
+              workspace.review.mode === "guided"
+                ? "Update with Rev"
+                : "Refresh"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Dismiss repository changes"
+              onClick={() => setDismissedChange(readingIdentity)}
+            >
+              <HugeiconsIcon icon={Cancel01Icon} size={14} />
+            </Button>
+          </div>
+        )}
+      {git.error &&
+        repository &&
+        space === "review" &&
+        (local || overview || !workspace) && (
+          <Alert className="mx-2 mb-2 w-auto" variant="destructive" size="sm">
+            <AlertDescription>{git.error}</AlertDescription>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Dismiss Git error"
+              onClick={() => git.setError("")}
+            >
+              <HugeiconsIcon icon={Cancel01Icon} />
+            </Button>
+          </Alert>
+        )}
       {!repository ? (
         <RepositoryHome
           repositories={session.repositories}
@@ -374,7 +424,10 @@ export function ReviewBoxApp() {
           onChoose={() => void choose()}
           onForget={(id) => void session.forget(id)}
         />
-      ) : workspace &&
+      ) : space === "review" &&
+        !local &&
+        !overview &&
+        workspace &&
         workspace.review.publication.status === "draft" &&
         preparing?.repositoryId === workspace.review.repositoryId &&
         preparing?.reviewId === workspace.review.id &&
@@ -402,26 +455,33 @@ export function ReviewBoxApp() {
         <ResumeReviews
           repository={repository}
           lockedReviewId={updating ? workspace?.review.id : undefined}
-          onOpen={(id) => void session.load(id)}
+          onOpen={(id) => {
+            setSurface(null)
+            void session.load(id)
+          }}
           onDeleted={session.deleted}
           onNew={() => setNewReview(true)}
           onError={session.setError}
         />
-      ) : workspace && space === "understand" ? (
-        <UnderstandWorkspace
-          key={workspace.snapshot.id}
-          snapshot={workspace.snapshot}
-          reviewId={workspace.review.id}
-          onApplied={() =>
-            void reviewCommands
-              .load(workspace.review.id)
-              .then((value) => {
-                if (readerIdentity(value) === readerIdentity(workspace))
-                  session.acceptCurrent(value)
-              })
-              .catch((e) => session.setError(errorMessage(e)))
-          }
+      ) : space === "understand" ? (
+        <CodeExplainWorkspace
+          key={repository.id}
+          repositoryId={repository.id}
           onError={session.setError}
+        />
+      ) : local ? (
+        <LocalChanges
+          key={repository.id}
+          git={git}
+          onBack={showOverview}
+          onFinished={showOverview}
+        />
+      ) : overview || !workspace ? (
+        <ReviewOverview
+          git={git}
+          onLocal={openLocal}
+          onStart={() => setNewReview(true)}
+          onResume={workspace ? () => setSurface(null) : undefined}
         />
       ) : workspace ? (
         <div className="flex min-h-0 flex-1 px-2 pb-2">
@@ -432,6 +492,7 @@ export function ReviewBoxApp() {
             busy={busy || updating}
             menuEnabled={!session.newReview && !settings && !palette}
             onRefresh={() => void refresh()}
+            onLocalChanges={openLocal}
             staleStepIds={session.staleStepIds}
             updatePending={!!update.state && update.state.status !== "ready"}
             onSelect={session.select}
@@ -453,21 +514,14 @@ export function ReviewBoxApp() {
           />
         </div>
       ) : (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4">
-          <p className="text-muted-foreground">
-            Choose the changes you want to understand.
-          </p>
-          <Button disabled={busy} onClick={() => setNewReview(true)}>
-            {busy ? "Capturing snapshot…" : "Start a review"}
-          </Button>
-        </div>
+        <ReviewOverview
+          git={git}
+          onLocal={openLocal}
+          onStart={() => setNewReview(true)}
+        />
       )}
       {!repository && (
-        <footer className="flex h-10 shrink-0 items-center justify-between gap-4 border-t px-5 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <HugeiconsIcon icon={SecurityCheckIcon} size={14} />
-            Local only · no account · reviews are stored on this Mac
-          </span>
+        <footer className="flex h-10 shrink-0 items-center justify-end gap-4 border-t px-5 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <span
               aria-hidden
@@ -495,6 +549,7 @@ export function ReviewBoxApp() {
             warning,
             readingLevel,
           }) => {
+            setSurface(null)
             initialLevels.current.set(readerIdentity(created), readingLevel)
             session.install(created)
             setReaderLevel(readingLevel)
@@ -533,6 +588,7 @@ export function ReviewBoxApp() {
               item.changeIds.includes(changeId)
             )
             if (file) session.selectFile(file.id, changeId)
+            setSurface(null)
             setView("code")
             setSpace("review")
           },

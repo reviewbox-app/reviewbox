@@ -70,6 +70,8 @@ export function FileTree({
   marks,
   statuses = {},
   reviewedPaths,
+  dimmedLabel = "Reviewed.",
+  dimmedFolderLabel = "All files reviewed.",
   alwaysExpanded = false,
   onSelect,
 }: {
@@ -78,6 +80,8 @@ export function FileTree({
   marks: Record<string, FileMark>
   statuses?: Record<string, GitFileStatus>
   reviewedPaths?: ReadonlySet<string>
+  dimmedLabel?: string
+  dimmedFolderLabel?: string
   alwaysExpanded?: boolean
   onSelect: (path: string) => void
 }) {
@@ -108,7 +112,7 @@ export function FileTree({
               />
               <FolderIcon path={child.path} open={open} />
               {reviewedPaths?.has(child.path) && (
-                <span className="sr-only">All files reviewed.</span>
+                <span className="sr-only">{dimmedFolderLabel}</span>
               )}
               <span className="min-w-0 flex-1 truncate">{child.name}</span>
               <GitStatusBadge status={folderStatuses[child.path]} />
@@ -159,7 +163,7 @@ export function FileTree({
           >
             <FileIcon path={path} />
             {reviewedPaths?.has(path) && (
-              <span className="sr-only">Reviewed.</span>
+              <span className="sr-only">{dimmedLabel}</span>
             )}
             <span className="min-w-0 flex-1 truncate">
               {path.split("/").at(-1)}

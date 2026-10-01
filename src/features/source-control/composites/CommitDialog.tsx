@@ -1,0 +1,291 @@
+"use client"
+import { useEffect, useRef, useState } from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  AiMagicIcon,
+  GitCommitIcon,
+  Tick02Icon,
+} from "@hugeicons/core-free-icons"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
+import { Textarea } from "@/components/ui/textarea"
+import { PreparationProgress } from "@/features/agents/components/PreparationProgress"
+import {
+  beginProgress,
+  finishProgress,
+  receiveProgress,
+} from "@/features/agents/helpers/preparationProgress.helpers"
+import type {
+  GitOperation,
+  LocalGitState,
+} from "@/lib/desktop/contracts.generated"
+import { errorMessage } from "@/lib/desktop/review.commands"
+import { sourceControlCommands as commands } from "../services/source-control.commands"
+
+export function CommitDialog({
+  open,
+  onOpenChange,
+  state,
+  onFinished,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  state: LocalGitState
+  onFinished: () => Promise<void>
+}) {
+  const [manual, setManual] = useState(false)
+  const [message, setMessage] = useState("")
+  const [error, setError] = useState("")
+  const [operation, setOperation] = useState<GitOperation | null>(null)
+  const [progress, setProgress] = useState<ReturnType<
+    typeof beginProgress
+  > | null>(null)
+  const running = useRef<string | null>(null)
+  const active = operation?.status === "running"
+  const close = () => {
+    setManual(false)
+    setMessage("")
+    setOperation(null)
+    setProgress(null)
+    setError("")
+    onOpenChange(false)
+  }
+  const begin = async (message: string | null) => {
+    if (running.current) return
+    const id = crypto.randomUUID()
+    running.current = id
+    setError("")
+    setProgress(message === null ? beginProgress(id) : null)
+    setOperation({
+      id,
+      repositoryId: state.repositoryId,
+      status: "running",
+      message:
+        message === null
+          ? "Rev is organizing your staged changes…"
+          : "Creating commit…",
+      commits: [],
+      error: null,
+    })
+    try {
+      const result = await commands.commit(
+        {
+          operationId: id,
+          repositoryId: state.repositoryId,
+          indexVersion: state.indexVersion,
+          message,
+        },
+        (value) => {
+          if (running.current === id) setOperation(value)
+        },
+        (event) => {
+          if (running.current === id && event.kind !== "delta")
+            setProgress((value) =>
+              value ? receiveProgress(value, event) : value
+            )
+        }
+      )
+      setOperation(result)
+      setProgress((value) =>
+        value
+          ? finishProgress(
+              value,
+              result.status === "completed"
+                ? "completed"
+                : result.status === "cancelled"
+                  ? "cancelled"
+                  : "failed"
+            )
+          : value
+      )
+      if (result.error) setError(result.error)
+      let refreshed = true
+      try {
+        await onFinished()
+      } catch (cause) {
+        refreshed = false
+        setError(
+          `The Git operation finished, but the view could not refresh: ${errorMessage(cause)}`
+        )
+      }
+      if (result.status === "completed" && refreshed) {
+        close()
+      }
+    } catch (cause) {
+      const cancelled =
+        cause &&
+        typeof cause === "object" &&
+        "code" in cause &&
+        cause.code === "cancelled"
+      const status = cancelled ? "cancelled" : "failed"
+      setError(errorMessage(cause))
+      setOperation((value) =>
+        value
+          ? {
+              ...value,
+              status,
+              message: cancelled ? "Commit cancelled" : "Commit failed",
+            }
+          : value
+      )
+      setProgress((value) => (value ? finishProgress(value, status) : value))
+      await onFinished().catch(() => {})
+    } finally {
+      running.current = null
+    }
+  }
+  useEffect(
+    () => () => {
+      if (running.current) void commands.cancel(running.current).catch(() => {})
+    },
+    []
+  )
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(value) => {
+        if (!running.current) {
+          if (value) onOpenChange(true)
+          else close()
+        }
+      }}
+    >
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Commit staged changes</DialogTitle>
+          <DialogDescription>
+            {state.files.filter((file) => file.stagedStatus).length} staged
+            files. Unstaged changes stay in your working tree.
+          </DialogDescription>
+        </DialogHeader>
+        <Separator />
+        <div className="min-h-0 space-y-4 overflow-auto">
+          {!active && !operation && (
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={() => setManual(true)}>
+                <HugeiconsIcon icon={GitCommitIcon} />
+                Commit manually
+              </Button>
+              <Button onClick={() => void begin(null)}>
+                <HugeiconsIcon icon={AiMagicIcon} />
+                Commit with Rev
+              </Button>
+            </div>
+          )}
+          {manual && !active && (
+            <form
+              id="manual-commit"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void begin(message)
+              }}
+            >
+              <Textarea
+                autoFocus
+                aria-label="Commit message"
+                placeholder="Describe the staged changes"
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                rows={4}
+                required
+              />
+            </form>
+          )}
+          {operation && (
+            <div role="status" className="flex items-center gap-2 text-sm">
+              {active ? (
+                <Spinner />
+              ) : operation.status === "completed" ? (
+                <HugeiconsIcon
+                  icon={Tick02Icon}
+                  className="text-review-validated"
+                />
+              ) : null}
+              {operation.message}
+            </div>
+          )}
+          {operation?.commits.map((commit) => (
+            <p key={commit.oid} className="flex items-center gap-2 text-sm">
+              <HugeiconsIcon
+                icon={GitCommitIcon}
+                className="shrink-0 text-primary"
+              />
+              <span className="font-mono text-xs text-muted-foreground">
+                {commit.oid.slice(0, 7)}
+              </span>
+              {commit.subject}
+            </p>
+          ))}
+          {progress && (
+            <PreparationProgress
+              progress={progress}
+              complete={!active}
+              checking={false}
+              status="Rev is preparing commits…"
+              showDraft={false}
+              completedLabel="Commit plan prepared."
+            />
+          )}
+          {error && (
+            <Alert variant="destructive" size="sm">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+        </div>
+        <DialogFooter>
+          {active ? (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                if (running.current)
+                  void commands
+                    .cancel(running.current)
+                    .catch((cause) => setError(errorMessage(cause)))
+              }}
+            >
+              Stop
+            </Button>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={close}>
+                Close
+              </Button>
+              {manual && (
+                <Button
+                  type="submit"
+                  form="manual-commit"
+                  disabled={!message.trim()}
+                >
+                  Create commit
+                </Button>
+              )}
+              {operation && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setManual(false)
+                    setOperation(null)
+                    setProgress(null)
+                    setError("")
+                  }}
+                >
+                  New commit
+                </Button>
+              )}
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

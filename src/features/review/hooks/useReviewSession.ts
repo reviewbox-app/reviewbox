@@ -145,7 +145,8 @@ export function useReviewSession() {
           const value = await reviewCommands.load(latest.id)
           if (generation.current === request) install(value)
         } else {
-          setNewReview(true)
+          setNewReview(false)
+          setSpace("review")
         }
       } catch (e) {
         if (generation.current === request) setError(errorMessage(e))
@@ -153,7 +154,7 @@ export function useReviewSession() {
         if (generation.current === request) setBusy(false)
       }
     },
-    [install]
+    [install, setSpace]
   )
   const choose = useCallback(async () => {
     try {

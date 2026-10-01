@@ -64,11 +64,10 @@ import {
 import { useReviewMenu } from "../hooks/useReviewMenu"
 import { readerCommands } from "../services/reader.commands"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
+import { reviewReaderLayout } from "../reader.config"
 import { ReviewCodePane } from "./ReviewCodePane"
 import { ReviewReferencePane } from "./ReviewReferencePane"
 
-const HEADER = 48
-const FOOTER = 42
 const EXPLANATION_WIDTH =
   "clamp(280px,var(--review-explanation-width,440px),50%)"
 const levelNames: Record<ReadingLevel, string> = {
@@ -90,6 +89,7 @@ export function ReviewReader({
   onStep,
   onPrepare,
   onRefresh,
+  onLocalChanges,
   staleStepIds = [],
   updatePending = false,
   menuEnabled = true,
@@ -106,6 +106,7 @@ export function ReviewReader({
   onStep: (direction: number) => void
   onPrepare: () => void
   onRefresh?: () => void
+  onLocalChanges?: () => void
   staleStepIds?: string[]
   updatePending?: boolean
   menuEnabled?: boolean
@@ -151,6 +152,7 @@ export function ReviewReader({
   const [summary, setSummary] = useState(false)
   const [details, setDetails] = useState(false)
   const menuError = useReviewMenu({
+    onLocalChanges,
     review,
     snapshotId: snapshot.id,
     hasDocuments: hasReviewDocuments,
@@ -198,7 +200,7 @@ export function ReviewReader({
     hasReviewDocuments &&
     !completed &&
     !review.needsUpdateConfirmation
-  const footerHeight = showDecisionFooter ? FOOTER : 0
+  const footerHeight = showDecisionFooter ? reviewReaderLayout.footerHeight : 0
   const canDecide =
     showDecisionFooter &&
     (guided ? !!unit && !!unit.anchors.length && !stale : !!file) &&
@@ -469,7 +471,10 @@ export function ReviewReader({
           {summary ? (
             <div
               className="absolute inset-0 overflow-y-auto"
-              style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
+              style={{
+                paddingTop: reviewReaderLayout.headerHeight,
+                paddingBottom: footerHeight,
+              }}
             >
               <ReviewSummary
                 workspace={workspace}
@@ -488,7 +493,10 @@ export function ReviewReader({
                 "absolute inset-0 overflow-y-auto",
                 !(guided && unit) && "flex flex-col"
               )}
-              style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
+              style={{
+                paddingTop: reviewReaderLayout.headerHeight,
+                paddingBottom: footerHeight,
+              }}
             >
               {readingModeSwitch}
               <div
@@ -526,7 +534,10 @@ export function ReviewReader({
                     onPosition={(position) => {
                       void onAction({ kind: "savePosition", position })
                     }}
-                    overlay={{ top: HEADER, bottom: footerHeight }}
+                    overlay={{
+                      top: reviewReaderLayout.headerHeight,
+                      bottom: footerHeight,
+                    }}
                   />
                 </div>
                 {pinned && (
@@ -534,7 +545,10 @@ export function ReviewReader({
                     <ReviewReferencePane
                       workspace={workspace}
                       reference={pinned}
-                      overlay={{ top: HEADER, bottom: footerHeight }}
+                      overlay={{
+                        top: reviewReaderLayout.headerHeight,
+                        bottom: footerHeight,
+                      }}
                     />
                   </div>
                 )}
@@ -555,7 +569,10 @@ export function ReviewReader({
                   <div
                     ref={scroller}
                     className="h-full overflow-y-auto"
-                    style={{ paddingTop: HEADER, paddingBottom: footerHeight }}
+                    style={{
+                      paddingTop: reviewReaderLayout.headerHeight,
+                      paddingBottom: footerHeight,
+                    }}
                   >
                     {readingModeSwitch}
                     <div className="space-y-4 px-6 py-6">
@@ -587,7 +604,7 @@ export function ReviewReader({
           )}
           <header
             className="absolute inset-x-0 top-0 z-40 flex items-center gap-2 border-b glass-bar px-3"
-            style={{ height: HEADER }}
+            style={{ height: reviewReaderLayout.headerHeight }}
           >
             {(view === "code" || hasReviewDocuments) && (
               <Hint
@@ -775,7 +792,7 @@ export function ReviewReader({
           {showDecisionFooter && (
             <footer
               className="absolute inset-x-0 bottom-0 z-40 border-t glass-bar px-3"
-              style={{ height: FOOTER }}
+              style={{ height: reviewReaderLayout.footerHeight }}
             >
               <DecisionBar
                 unitLabel={guided ? "step" : "file"}

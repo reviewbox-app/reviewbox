@@ -57,12 +57,14 @@ export function PreparationProgress({
   checking,
   status,
   showDraft = true,
+  completedLabel = "Tour written.",
 }: {
   progress: Progress
   complete: boolean
   checking: boolean
   status: string
   showDraft?: boolean
+  completedLabel?: string
 }) {
   const contentId = useId()
   const [expanded, setExpanded] = useState(false)
@@ -81,7 +83,7 @@ export function PreparationProgress({
       : progress.outcome === "cancelled"
         ? "Preparation stopped."
         : complete
-          ? "Tour written."
+          ? completedLabel
           : showDraft && progress.draft
             ? "Writing the tour…"
             : (currentStep?.text ??

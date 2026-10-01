@@ -1,5 +1,5 @@
 "use client"
-import type { ReactNode } from "react"
+import { useRef, type ReactNode } from "react"
 import { reviewCommands, desktopAvailable } from "@/lib/desktop/review.commands"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -21,14 +21,17 @@ export function WorkspaceTitleBar({
   repository,
   rev,
   onHome,
+  onReviewOverview,
   reviewControl,
 }: {
   repository: Repository | null
   rev: RevStatus
   reviewControl?: ReactNode
   onHome: () => void
+  onReviewOverview: () => void
 }) {
   const { space, setSpace, setSettings, setPalette } = useReviewWorkspaceStore()
+  const reviewWasActive = useRef(false)
   return (
     <header
       data-tauri-drag-region
@@ -65,7 +68,22 @@ export function WorkspaceTitleBar({
           >
             <TabsList>
               <TabsTrigger value="resume">Home</TabsTrigger>
-              <TabsTrigger value="review">Review</TabsTrigger>
+              <TabsTrigger
+                value="review"
+                onPointerDown={() => {
+                  // Tabs can activate on focus before the subsequent click.
+                  reviewWasActive.current = space === "review"
+                }}
+                onClick={(event) => {
+                  const repeated =
+                    event.detail === 0
+                      ? space === "review"
+                      : reviewWasActive.current
+                  if (repeated) onReviewOverview()
+                }}
+              >
+                Review
+              </TabsTrigger>
               <TabsTrigger value="understand">Code Explain</TabsTrigger>
             </TabsList>
           </Tabs>
