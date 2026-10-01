@@ -14,6 +14,12 @@ f.git("commit", "-qm", "Long scroll fixture")
 await f.write("src/long.ts", code("after"))
 try {
   await ui.start(`${f.root}/appdata`)
+  // WebKit pauses animation frames in covered windows. Keep the native
+  // scrolling/refresh regression running when another app is in front.
+  await ui.execute(`window.BASE_UI_ANIMATIONS_DISABLED=true;
+    const frame=window.requestAnimationFrame.bind(window),cancel=window.cancelAnimationFrame.bind(window);
+    window.requestAnimationFrame=callback=>document.hidden?-setTimeout(()=>callback(performance.now()),16):frame(callback);
+    window.cancelAnimationFrame=id=>id<0?clearTimeout(-id):cancel(id);return true;`)
   await ui.until(
     "document.querySelector('header [role=status]')?.textContent.includes('checking') === false",
     "hydration"
@@ -34,7 +40,7 @@ try {
     "document.querySelector('[aria-label=\"Code diff\"] header')?.textContent.includes('long.ts')"
   )
   await ui.until(
-    "document.querySelector('.monaco-editor .view-lines')?.textContent.includes('item')"
+    "document.querySelector('.modified .view-lines:not(.line-delete)')?.textContent.includes('item')"
   )
   const readViewport = (selector: string) =>
     ui.execute<string[]>(
@@ -74,13 +80,13 @@ try {
     await ui.has("+400")
     await Bun.sleep(700)
     const scrolled = await scrollAndWait(diff)
-    await ui.named("More decisions")
-    await ui.named("Mark as examined", "[role=menuitem]")
-    await Bun.sleep(800)
-    assert.deepEqual(
-      await readViewport(diff),
-      scrolled,
-      "human review actions must not recenter the editor"
+    // Manual reviews without Rev documents use the native completion menu;
+    // they no longer expose the guided step/file decision footer.
+    assert.equal(
+      await ui.execute(
+        'return document.querySelectorAll("[aria-label=\\"More decisions\\"]").length'
+      ),
+      0
     )
     await ui.execute("window.dispatchEvent(new Event('focus'));return true")
     await Bun.sleep(800)
@@ -98,11 +104,17 @@ try {
       "explicit navigation still recenters the current passage"
     )
     console.log(
-      `${mode}: scroll survives save, polling, examination and focus; explicit navigation recenters`
+      `${mode}: scroll survives save, polling and focus; explicit navigation recenters`
     )
   }
   await ui.named("Code Explain", "[role=tab]")
   await ui.fill('[aria-label="Filter files"]', "long.ts")
+  // Code Explain keeps its folders collapsible even when filtering files.
+  await ui.named(
+    "src",
+    '[aria-label="Snapshot files"] button[aria-expanded="false"]',
+    false
+  )
   await ui.named("long.ts", '[aria-label="Snapshot files"] button', false)
   await ui.until(
     "document.querySelector('.monaco-editor .view-lines')?.textContent.includes('item')"

@@ -1,6 +1,12 @@
 "use client"
 import { useState } from "react"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -32,6 +38,17 @@ export function OccurrenceDialog({
   const [description, setDescription] = useState("")
   const [offset, setOffset] = useState<number | null>(null)
   const [sense, setSense] = useState("")
+  const senseItems = [
+    { value: "", label: "No linked meaning" },
+    ...terms
+      .filter((term) => !term.archived)
+      .flatMap((term) =>
+        term.senses.map((sense) => ({
+          value: sense.id,
+          label: `${term.term} — ${sense.description}`,
+        }))
+      ),
+  ]
   const characters = Array.from(section.body)
   const length = Array.from(quote).length
   const matches = quote
@@ -96,23 +113,26 @@ export function OccurrenceDialog({
         <Label htmlFor="occurrence-sense">
           Or explicitly link an existing meaning
         </Label>
-        <NativeSelect
-          id="occurrence-sense"
+        <Select
+          items={senseItems}
           value={sense}
-          onChange={(e) => setSense(e.target.value)}
-          className="w-full"
+          onValueChange={(value) => {
+            if (value !== null) {
+              setSense(value)
+            }
+          }}
         >
-          <NativeSelectOption value="">No linked meaning</NativeSelectOption>
-          {terms
-            .filter((t) => !t.archived)
-            .flatMap((term) =>
-              term.senses.map((s) => (
-                <NativeSelectOption key={s.id} value={s.id}>
-                  {term.term} — {s.description}
-                </NativeSelectOption>
-              ))
-            )}
-        </NativeSelect>
+          <SelectTrigger id="occurrence-sense" className="w-full min-w-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {senseItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <DialogFooter>
           <Button
             disabled={location === null || (!description.trim() && !selected)}

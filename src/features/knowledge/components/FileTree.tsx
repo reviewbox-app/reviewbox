@@ -9,6 +9,8 @@ import {
 } from "@hugeicons/core-free-icons"
 import { cn } from "@/lib/utils"
 import { FileIcon, FolderIcon } from "@/features/file-icons/components/FileIcon"
+import { folderGitStatuses, type GitFileStatus } from "@/lib/git/file-status"
+import { GitStatusBadge } from "./GitStatusBadge"
 
 interface Folder {
   name: string
@@ -59,21 +61,28 @@ const markLabels: Record<FileMark, string> = {
 }
 
 /**
- * Snapshot files as a tree, every folder closed at first. A dot marks an
+ * Snapshot files as a tree, collapsible unless alwaysExpanded. A dot marks an
  * explanation (blue) or an outdated one (amber); a tick, a validated file.
  */
 export function FileTree({
   paths,
   selected,
   marks,
+  statuses = {},
+  reviewedPaths,
+  alwaysExpanded = false,
   onSelect,
 }: {
   paths: string[]
   selected: string
   marks: Record<string, FileMark>
+  statuses?: Record<string, GitFileStatus>
+  reviewedPaths?: ReadonlySet<string>
+  alwaysExpanded?: boolean
   onSelect: (path: string) => void
 }) {
   const tree = useMemo(() => buildTree(paths), [paths])
+  const folderStatuses = useMemo(() => folderGitStatuses(statuses), [statuses])
   const [opened, setOpened] = useState<Set<string>>(new Set())
   const toggle = (path: string) =>
     setOpened((value) => {
@@ -83,29 +92,54 @@ export function FileTree({
       return next
     })
   const row =
-    "flex w-full items-center gap-1.5 rounded-xl py-1 pr-2 text-left text-sm outline-none hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/30"
+    "relative flex w-full items-center gap-1.5 rounded-xl py-1 pr-2 text-left text-sm outline-none hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/30"
   const render = (folder: Folder, depth: number): React.ReactNode => (
     <>
       {[...folder.folders.values()]
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((child) => {
-          const open = opened.has(child.path)
+          const open = alwaysExpanded || opened.has(child.path)
+          const content = (
+            <>
+              <HugeiconsIcon
+                icon={open ? ArrowDown01Icon : ArrowRight01Icon}
+                size={14}
+                className="shrink-0 text-muted-foreground"
+              />
+              <FolderIcon path={child.path} open={open} />
+              {reviewedPaths?.has(child.path) && (
+                <span className="sr-only">All files reviewed.</span>
+              )}
+              <span className="min-w-0 flex-1 truncate">{child.name}</span>
+              <GitStatusBadge status={folderStatuses[child.path]} />
+            </>
+          )
           return (
             <li key={child.path}>
-              <button
-                aria-expanded={open}
-                className={row}
-                style={{ paddingLeft: 6 + depth * 14 }}
-                onClick={() => toggle(child.path)}
-              >
-                <HugeiconsIcon
-                  icon={open ? ArrowDown01Icon : ArrowRight01Icon}
-                  size={14}
-                  className="shrink-0 text-muted-foreground"
-                />
-                <FolderIcon path={child.path} open={open} />
-                <span className="truncate">{child.name}</span>
-              </button>
+              {alwaysExpanded ? (
+                <div
+                  data-folder={child.path}
+                  className={cn(
+                    "relative flex w-full items-center gap-1.5 py-1 pr-2 text-sm",
+                    reviewedPaths?.has(child.path) && "opacity-50"
+                  )}
+                  style={{ paddingLeft: 6 + depth * 14 }}
+                >
+                  {content}
+                </div>
+              ) : (
+                <button
+                  aria-expanded={open}
+                  className={cn(
+                    row,
+                    reviewedPaths?.has(child.path) && "opacity-50"
+                  )}
+                  style={{ paddingLeft: 6 + depth * 14 }}
+                  onClick={() => toggle(child.path)}
+                >
+                  {content}
+                </button>
+              )}
               {open && <ul>{render(child, depth + 1)}</ul>}
             </li>
           )
@@ -117,15 +151,20 @@ export function FileTree({
             title={path}
             className={cn(
               row,
+              reviewedPaths?.has(path) && "opacity-50",
               path === selected && "bg-accent hover:bg-accent"
             )}
             style={{ paddingLeft: 26 + depth * 14 }}
             onClick={() => onSelect(path)}
           >
             <FileIcon path={path} />
+            {reviewedPaths?.has(path) && (
+              <span className="sr-only">Reviewed.</span>
+            )}
             <span className="min-w-0 flex-1 truncate">
               {path.split("/").at(-1)}
             </span>
+            <GitStatusBadge status={statuses[path]} />
             {marks[path] === "validated" ? (
               <HugeiconsIcon
                 icon={Tick02Icon}

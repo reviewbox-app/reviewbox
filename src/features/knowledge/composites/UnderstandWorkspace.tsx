@@ -1,34 +1,18 @@
 "use client"
-import { OnboardingWorkspace } from "@/features/onboarding/composites/OnboardingWorkspace"
-import { AgentConversation } from "@/features/agents/composites/AgentConversation"
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog"
-import { useEffect, useState, useRef } from "react"
-import type { editor } from "monaco-editor"
-import { useTheme } from "next-themes"
-import { FileIcon } from "@/features/file-icons/components/FileIcon"
-import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  Add01Icon,
-  AiMagicIcon,
-  Alert02Icon,
-  ArrowReloadHorizontalIcon,
-  BookOpen01Icon,
-  MoreHorizontalIcon,
-  Search01Icon,
-} from "@hugeicons/core-free-icons"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import {
   InputGroup,
   InputGroupAddon,
@@ -40,26 +24,43 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { reviewboxTheme } from "@/lib/monaco/reviewboxThemes"
-import { cn } from "@/lib/utils"
-import { Input } from "@/components/ui/input"
+import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import { Textarea } from "@/components/ui/textarea"
+import { AgentConversation } from "@/features/agents/composites/AgentConversation"
 import { CodeEditor } from "@/features/code-editor/components/CodeEditor"
-import type {
-  ProjectKnowledge,
-  Snapshot,
-  ExplanationDocument,
-} from "@/lib/desktop/contracts.generated"
-import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
+import { FileIcon } from "@/features/file-icons/components/FileIcon"
+import { OnboardingWorkspace } from "@/features/onboarding/composites/OnboardingWorkspace"
 import {
   languageFor,
   languageName,
 } from "@/features/review/helpers/review.helpers"
+import type {
+  ExplanationDocument,
+  ProjectKnowledge,
+  Snapshot,
+} from "@/lib/desktop/contracts.generated"
+import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
+import { capturedFileStatuses } from "@/lib/git/file-status"
+import { reviewboxTheme } from "@/lib/monaco/reviewboxThemes"
+import { cn } from "@/lib/utils"
+import {
+  Add01Icon,
+  AiMagicIcon,
+  Alert02Icon,
+  ArrowReloadHorizontalIcon,
+  BookOpen01Icon,
+  MoreHorizontalIcon,
+  Search01Icon,
+} from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import type { editor } from "monaco-editor"
+import { useTheme } from "next-themes"
+import { useEffect, useRef, useState } from "react"
 import { FileTree } from "../components/FileTree"
 import { UnderstandTabs } from "../components/UnderstandTabs"
-import { OccurrenceDialog } from "./OccurrenceDialog"
 import { GlossaryEditor } from "./GlossaryEditor"
 import { GlossaryText } from "./GlossaryText"
+import { OccurrenceDialog } from "./OccurrenceDialog"
 export function UnderstandWorkspace({
   snapshot,
   reviewId,
@@ -275,6 +276,7 @@ export function UnderstandWorkspace({
                 paths={paths}
                 selected={path}
                 marks={marks}
+                statuses={capturedFileStatuses(snapshot.changes)}
                 onSelect={(value) => {
                   setPath(value)
                   setTargetLine(1)
@@ -483,7 +485,7 @@ export function UnderstandWorkspace({
                       onFocus={() => setHovered(section.id)}
                       className={cn(
                         "group/section rounded-3xl p-4 transition-colors",
-                        hovered === section.id && "bg-secondary"
+                        hovered === section.id && "bg-accent"
                       )}
                     >
                       <h3 className="mb-1.5 flex flex-wrap items-baseline gap-3 text-sm font-medium">
