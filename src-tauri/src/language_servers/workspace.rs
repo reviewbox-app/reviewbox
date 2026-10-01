@@ -128,11 +128,13 @@ pub(super) fn source_tree(
 pub(super) struct Workspace {
     pub source: SourceTree,
     _directory: tempfile::TempDir,
+    _snapshot: crate::storage::SnapshotLease,
     root: PathBuf,
 }
 
 impl Workspace {
     pub fn create(storage: &Storage, source: SourceTree) -> AppResult<Self> {
+        let snapshot = storage.pin_snapshot(&source.snapshot_id);
         let directory = tempfile::Builder::new()
             .prefix("reviewbox-language-")
             .tempdir()?;
@@ -163,6 +165,7 @@ impl Workspace {
         Ok(Self {
             source,
             _directory: directory,
+            _snapshot: snapshot,
             root,
         })
     }

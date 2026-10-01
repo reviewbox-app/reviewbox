@@ -69,6 +69,14 @@ pub async fn choose_provider_executable() -> AppResult<Option<String>> {
 }
 
 #[tauri::command]
+pub async fn check_provider_updates(
+    storage: State<'_, Storage>,
+    provider: String,
+) -> AppResult<ProviderUpdateCheck> {
+    crate::agents::setup::updates::check(&storage, &provider).await
+}
+
+#[tauri::command]
 pub async fn install_provider(
     app: tauri::AppHandle,
     storage: State<'_, Storage>,
@@ -183,22 +191,40 @@ pub async fn update_review(
 }
 #[tauri::command]
 pub async fn refresh_review(
+    preparation: State<'_, crate::preparation::PreparationManager>,
+    languages: State<'_, crate::language_servers::LanguageServers>,
     storage: State<'_, Storage>,
     repository_id: Option<String>,
     id: String,
     revision: u32,
 ) -> AppResult<Workspace> {
     let s = storage.scoped(repository_id.as_deref());
+    let _pause = preparation.quiesce(&s, &id).await?;
+    let current: Review = s.get("review", &id)?;
+    languages.release_snapshot(&current.snapshot_id);
     blocking(move || reviews::refresh(&s, &id, revision)).await
 }
 #[tauri::command]
 pub async fn delete_review(
+    preparation: State<'_, crate::preparation::PreparationManager>,
+    languages: State<'_, crate::language_servers::LanguageServers>,
     storage: State<'_, Storage>,
     repository_id: Option<String>,
     id: String,
 ) -> AppResult<()> {
     let s = storage.scoped(repository_id.as_deref());
-    blocking(move || s.remove("review", &id)).await
+    let _pause = preparation.quiesce(&s, &id).await?;
+    let current: Review = s.get("review", &id)?;
+    languages.release_snapshot(&current.snapshot_id);
+    blocking(move || {
+        s.remove("review", &id)?;
+        s.remove(
+            "review_preparation",
+            &format!("{}:{id}", current.repository_id),
+        )?;
+        s.collect_review_garbage(&current.repository_id)
+    })
+    .await
 }
 #[tauri::command]
 pub async fn read_change(
@@ -218,6 +244,15 @@ pub async fn review_coverage(
 ) -> AppResult<Coverage> {
     let s = storage.scoped(repository_id.as_deref());
     blocking(move || Ok(reviews::coverage(&reviews::load(&s, &id)?))).await
+}
+#[tauri::command]
+pub async fn check_review_freshness(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    id: String,
+) -> AppResult<ReviewFreshness> {
+    let s = storage.scoped(repository_id.as_deref());
+    blocking(move || snapshots::review_freshness(&s, &reviews::load(&s, &id)?)).await
 }
 #[tauri::command]
 pub async fn check_repository_changed(
@@ -622,37 +657,6 @@ pub async fn export_onboarding_tour(
 }
 
 #[tauri::command]
-pub async fn review_history(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    id: String,
-) -> AppResult<Vec<Review>> {
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || {
-        Ok(s.list::<Review>("review_history")?
-            .into_iter()
-            .filter(|r| r.id == id)
-            .collect())
-    })
-    .await
-}
-#[tauri::command]
-pub async fn read_historical_review(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    id: String,
-    revision: u32,
-) -> AppResult<Workspace> {
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || {
-        let review: Review = s.get("review_history", &format!("{id}@{revision}"))?;
-        let snapshot = s.get("snapshot", &review.snapshot_id)?;
-        Ok(Workspace { review, snapshot })
-    })
-    .await
-}
-
-#[tauri::command]
 pub async fn open_settings(app: tauri::AppHandle) -> AppResult<()> {
     if let Some(window) = app.get_webview_window("settings") {
         window
@@ -818,6 +822,32 @@ pub async fn start_review_preparation(
     let manager = manager.inner().clone();
     let resources = resource_root(&app)?;
     blocking(move || manager.start(storage, resources, request)).await
+}
+#[tauri::command]
+pub async fn update_review_with_rev(
+    app: tauri::AppHandle,
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    manager: State<'_, crate::preparation::PreparationManager>,
+    review_id: String,
+    revision: u32,
+    provider: String,
+) -> AppResult<Option<PreparationState>> {
+    let storage = storage.scoped(repository_id.as_deref());
+    let manager = manager.inner().clone();
+    let resources = resource_root(&app)?;
+    blocking(move || manager.adapt(storage, resources, &review_id, revision, provider)).await
+}
+#[tauri::command]
+pub async fn discard_review_update(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    manager: State<'_, crate::preparation::PreparationManager>,
+    review_id: String,
+) -> AppResult<()> {
+    let storage = storage.scoped(repository_id.as_deref());
+    let manager = manager.inner().clone();
+    blocking(move || manager.discard_update(&storage, &review_id)).await
 }
 #[tauri::command]
 pub async fn get_review_preparation(

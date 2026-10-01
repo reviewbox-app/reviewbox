@@ -378,6 +378,7 @@ impl LanguageServers {
         request: LanguageRequest,
         cancelled: &AtomicBool,
     ) -> AppResult<LanguageResponse> {
+        let _snapshot = storage.pin_snapshot(&request.document.snapshot_id);
         let source_storage = storage.clone();
         let document = request.document.clone();
         let (tree, server, environment) = tauri::async_runtime::spawn_blocking(move || {
@@ -483,6 +484,7 @@ impl LanguageServers {
 }
 
 pub fn read_source(storage: &Storage, document: &LanguageDocument) -> AppResult<String> {
+    let _snapshot = storage.pin_snapshot(&document.snapshot_id);
     let snapshot: Snapshot = storage.get("snapshot", &document.snapshot_id)?;
     let tree = workspace::source_tree(&snapshot, document)?;
     let blob = &tree.files[&document.path];
@@ -516,6 +518,7 @@ pub async fn definition(
     line: u32,
     column: u32,
 ) -> AppResult<Vec<CodeLocation>> {
+    let _snapshot = storage.pin_snapshot(&snapshot_id);
     let snapshot: Snapshot = storage.get("snapshot", &snapshot_id)?;
     let file = snapshot
         .files

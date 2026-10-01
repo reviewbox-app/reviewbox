@@ -19,6 +19,7 @@ mod proposals;
 mod reader;
 mod repositories;
 mod review_creation;
+mod review_menu;
 mod reviews;
 mod snapshots;
 mod storage;
@@ -38,6 +39,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            review_menu::install(app.handle())?;
             #[cfg(not(feature = "native-validation"))]
             let data_dir = app.path().app_data_dir()?;
             #[cfg(feature = "native-validation")]
@@ -76,6 +78,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                review_menu::focused(window.app_handle(), window.label());
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window
                     .state::<illustrations::Illustrations>()
@@ -102,6 +107,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info::get_app_info,
+            review_menu::configure_review_menu,
             appearance::appearance_settings,
             appearance::configure_appearance,
             appearance::editor_profiles,
@@ -119,6 +125,7 @@ pub fn run() {
             commands::create_review_operation,
             commands::cancel_review_creation,
             commands::choose_provider_executable,
+            commands::check_provider_updates,
             commands::install_provider,
             commands::cancel_provider_setup,
             commands::open_provider_login,
@@ -134,10 +141,13 @@ pub fn run() {
             commands::export_review_summary,
             commands::start_review_preparation,
             commands::get_review_preparation,
+            commands::update_review_with_rev,
+            commands::discard_review_update,
             commands::resume_review_preparation,
             commands::cancel_review_preparation,
             commands::review_coverage,
             commands::check_repository_changed,
+            commands::check_review_freshness,
             commands::read_snapshot_file,
             commands::preview_prompt,
             commands::load_knowledge,
@@ -168,8 +178,6 @@ pub fn run() {
             commands::read_onboarding_step,
             commands::import_onboarding_tour,
             commands::export_onboarding_tour,
-            commands::review_history,
-            commands::read_historical_review,
             commands::open_settings,
             commands::preview_agent_request,
             commands::reveal_storage,

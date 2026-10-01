@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 flate2 = "1.1.10"
 json5 = "0.4"
 notify = "8.2.0"
+parking_lot = "=0.12.5"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 rfd = "0.17.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
@@ -36,8 +37,15 @@ url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.26.1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSImage"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSArray"] }
+
 [lints.rust]
-unsafe_code = "forbid"
+# The macOS 27 menu visibility API is not yet exposed by objc2-app-kit.
+# Only its availability-checked setter has a local exception.
+unsafe_code = "deny"
 
 [features]
 native-validation = ["dep:tauri-plugin-wdio-webdriver"]

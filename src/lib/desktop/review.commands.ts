@@ -9,6 +9,7 @@ import type {
   Repository,
   Review,
   ReviewAction,
+  ReviewFreshness,
   Workspace,
 } from "./contracts.generated"
 
@@ -45,9 +46,6 @@ export const reviewCommands = {
     call<ProjectSettings>("configure_project", { repositoryId, settings }),
   openSettings: () => call<void>("open_settings"),
   revealStorage: () => call<void>("reveal_storage"),
-  history: (id: string) => call<Review[]>("review_history", { id }),
-  historical: (id: string, revision: number) =>
-    call<Workspace>("read_historical_review", { id, revision }),
   repositories: () => call<Repository[]>("list_repositories"),
   choose: () => call<string | null>("choose_repository"),
   open: (path: string) => call<Repository>("open_repository", { path }),
@@ -56,7 +54,11 @@ export const reviewCommands = {
     call<Review[]>("list_reviews", { repositoryId }),
   create: (request: CaptureRequest) =>
     call<Workspace>("create_review", { request }),
-  load: (id: string) => call<Workspace>("load_review", { id }),
+  load: (id: string, repositoryId?: string) =>
+    call<Workspace>("load_review", {
+      id,
+      ...(repositoryId ? { repositoryId } : {}),
+    }),
   update: (id: string, revision: number, action: ReviewAction) =>
     call<Workspace>("update_review", { id, revision, action }),
   refresh: (id: string, revision: number) =>
@@ -65,6 +67,8 @@ export const reviewCommands = {
   content: (snapshotId: string, changeId: string) =>
     call<FileContent>("read_change", { snapshotId, changeId }),
   coverage: (id: string) => call<Coverage>("review_coverage", { id }),
+  freshness: (id: string, repositoryId: string) =>
+    call<ReviewFreshness>("check_review_freshness", { id, repositoryId }),
   changed: (snapshotId: string) =>
     call<boolean>("check_repository_changed", { snapshotId }),
   file: (snapshotId: string, path: string) =>
