@@ -16,6 +16,7 @@ export type PreparationProgress = {
   endedAt?: number
   outcome?: "completed" | "failed" | "cancelled"
   draft?: Extract<AgentProgress, { type: "draft" }>
+  closedBatches: string[]
   plans: Record<string, AgentPlanStep[]>
   helpers: Record<string, Extract<AgentProgress, { type: "delegation" }>>
   usage: Record<string, Extract<AgentProgress, { type: "usage" }>>
@@ -33,6 +34,7 @@ export function beginProgress(
     sequence: 0,
     startedAt: now,
     plan: [],
+    closedBatches: [],
     plans: {},
     helpers: {},
     usage: {},
@@ -86,6 +88,34 @@ export function receiveProgress(
       event.kind as NonNullable<PreparationProgress["outcome"]>,
       now
     )
+  if (event.kind === "batchFinished" && event.batchId) {
+    const batch = event.batchId
+    return {
+      ...next,
+      closedBatches: [
+        ...next.closedBatches.filter((id) => id !== batch),
+        batch,
+      ].slice(-200),
+      plan: Object.entries(next.plans)
+        .filter(([id]) => id !== batch && !next.closedBatches.includes(id))
+        .flatMap(([, steps]) => steps),
+      entries: next.entries.map((entry) =>
+        entry.batchId === batch &&
+        entry.type === "activity" &&
+        entry.status === "inProgress"
+          ? { ...entry, status: "interrupted" }
+          : entry
+      ),
+      helpers: Object.fromEntries(
+        Object.entries(next.helpers).map(([id, helper]) => [
+          id,
+          id.startsWith(`${batch}:`) && helper.status === "inProgress"
+            ? { ...helper, status: "interrupted" }
+            : helper,
+        ])
+      ),
+    }
+  }
   const progress = event.progress
   if (!progress) return next
   if (progress.type === "draft") return { ...next, draft: progress }
@@ -94,9 +124,20 @@ export function receiveProgress(
       Object.entries({
         ...next.plans,
         [event.batchId ?? "main"]: progress.steps,
-      }).slice(-12)
+      }).filter(
+        ([id, steps], index, entries) =>
+          (!next.closedBatches.includes(id) &&
+            steps.some((s) => s.status === "inProgress")) ||
+          index >= entries.length - 12
+      )
     )
-    return { ...next, plans, plan: Object.values(plans).flat() }
+    return {
+      ...next,
+      plans,
+      plan: Object.entries(plans)
+        .filter(([id]) => !next.closedBatches.includes(id))
+        .flatMap(([, steps]) => steps),
+    }
   }
   if (progress.type === "usage")
     return {
@@ -120,7 +161,10 @@ export function receiveProgress(
     return {
       ...next,
       helpers: Object.fromEntries(
-        Object.entries({ ...next.helpers, [progress.id]: helper }).slice(-200)
+        Object.entries({ ...next.helpers, [progress.id]: helper }).filter(
+          ([, item], index, entries) =>
+            item.status === "inProgress" || index >= entries.length - 200
+        )
       ),
     }
   }

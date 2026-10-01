@@ -1,12 +1,11 @@
 "use client"
 
-import type { PreparationBatch } from "@/lib/desktop/contracts.generated"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { MarkdownRenderer } from "@/features/markdown/components/MarkdownRenderer"
 import { Alert02Icon, Tick02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import {
   activityLabels,
   followsProgress,
@@ -57,16 +56,15 @@ export function PreparationProgress({
   complete,
   checking,
   status,
-  batches = [],
   showDraft = true,
 }: {
   progress: Progress
   complete: boolean
   checking: boolean
   status: string
-  batches?: PreparationBatch[]
   showDraft?: boolean
 }) {
+  const contentId = useId()
   const [expanded, setExpanded] = useState(false)
   const scroll = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -114,7 +112,7 @@ export function PreparationProgress({
             size="sm"
             variant="ghost"
             aria-expanded={open}
-            aria-controls="rev-progress-content"
+            aria-controls={contentId}
             onClick={() => setExpanded((value) => !value)}
           >
             {open ? "Hide activity" : "Show activity"}
@@ -131,7 +129,7 @@ export function PreparationProgress({
       </p>
       {open && (
         <div
-          id="rev-progress-content"
+          id={contentId}
           ref={scroll}
           tabIndex={0}
           aria-label="Preparation activity history"
@@ -140,105 +138,6 @@ export function PreparationProgress({
           }}
           className="max-h-96 space-y-4 overflow-y-auto border-t px-4 py-3"
         >
-          {batches.length > 0 && (
-            <section
-              aria-label="Active preparation batches"
-              className="space-y-2"
-            >
-              <h4 className="text-xs font-medium text-muted-foreground">
-                {batches.length}{" "}
-                {batches.length === 1
-                  ? "coordinator assigned"
-                  : "coordinators assigned"}
-              </h4>
-              <ul className="space-y-2 text-sm">
-                {batches.map((batch) => (
-                  <li key={batch.id} className="flex items-start gap-2">
-                    <Spinner className="mt-1 size-3 shrink-0" />
-                    <span className="min-w-0 wrap-anywhere">
-                      {batch.label}
-                      <span className="block text-xs text-muted-foreground">
-                        {batch.model ?? "Harness default"}
-                        {batch.status === "waitingForProvider" &&
-                          " · Waiting for provider capacity"}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-          {Object.values(progress.helpers).length > 0 && (
-            <section
-              aria-label="Delegated preparation work"
-              className="space-y-2"
-            >
-              <h4 className="text-xs font-medium text-muted-foreground">
-                Helpers ·{" "}
-                {
-                  Object.values(progress.helpers).filter(
-                    (helper) => helper.status === "inProgress"
-                  ).length
-                }{" "}
-                active
-              </h4>
-              <ul className="space-y-2 text-sm">
-                {Object.values(progress.helpers)
-                  .slice(-6)
-                  .map((helper) => (
-                    <li key={helper.id} className="flex items-start gap-2">
-                      <ProgressMark status={helper.status} />
-                      <span className="min-w-0 flex-1">
-                        {helper.task}
-                        <span className="block text-xs text-muted-foreground">
-                          {helper.model ?? "Model not reported"}
-                        </span>
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {statusLabels[helper.status]}
-                      </span>
-                    </li>
-                  ))}
-              </ul>
-            </section>
-          )}
-          {Object.entries(progress.plans).map(([batch, plan]) => (
-            <section
-              key={batch}
-              aria-label="Preparation plan"
-              className="space-y-2"
-            >
-              <h4 className="text-xs font-medium text-muted-foreground">
-                Plan
-              </h4>
-              <ol className="space-y-2">
-                {plan.map((step, index) => {
-                  const state =
-                    progress.outcome && step.status === "inProgress"
-                      ? "interrupted"
-                      : step.status
-                  return (
-                    <li key={index} className="flex items-start gap-2 text-sm">
-                      <span
-                        aria-hidden="true"
-                        className="flex h-5 w-4 shrink-0 items-center justify-center text-muted-foreground"
-                      >
-                        <ProgressMark status={state} />
-                      </span>
-                      <span className="min-w-0 flex-1 wrap-anywhere">
-                        {step.text}
-                      </span>
-                      <span className="shrink-0 text-xs leading-5 text-muted-foreground">
-                        {progress.outcome && state === "pending"
-                          ? "Not completed"
-                          : statusLabels[state]}
-                      </span>
-                    </li>
-                  )
-                })}
-              </ol>
-            </section>
-          ))}
           {progress.omitted > 0 && (
             <p className="text-xs text-muted-foreground">
               {progress.omitted} earlier activities omitted.

@@ -1,35 +1,35 @@
 "use client"
-import { useRef } from "react"
-import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  Cancel01Icon,
-  GitBranchIcon,
-  SecurityCheckIcon,
-} from "@hugeicons/core-free-icons"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import type { Repository } from "@/lib/desktop/contracts.generated"
 import {
+  Cancel01Icon,
+  GitBranchIcon,
+  SecurityCheckIcon,
+} from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { useRef } from "react"
+import { NewReviewStepper } from "../components/NewReviewStepper"
+import { PreparationStep } from "../components/PreparationStep"
+import {
+  FrozenFilesNotice,
+  PreparationExplanation,
+  ScopeExplanation,
+} from "../components/ReviewExplanation"
+import { ReviewScopeStep, fileCount } from "../components/ReviewScopeStep"
+import { WizardColumns } from "../components/WizardColumns"
+import {
   useNewReviewWizard,
   type CreatedReview,
 } from "../hooks/useNewReviewWizard"
-import { NewReviewStepper } from "../components/NewReviewStepper"
-import { ReviewScopeStep, fileCount } from "../components/ReviewScopeStep"
-import {
-  FrozenFilesNotice,
-  ScopeExplanation,
-  PreparationExplanation,
-} from "../components/ReviewExplanation"
-import { PreparationStep } from "../components/PreparationStep"
-import { WizardColumns } from "../components/WizardColumns"
 import { HarnessSetupStep } from "./HarnessSetupStep"
 
 interface Props {
@@ -79,7 +79,7 @@ function NewReviewWizard({ repository, onCreated, onClose }: Props) {
         initialFocus={dialogRef}
         showCloseButton={false}
         backdropClassName="top-13 bg-transparent! backdrop-blur-none!"
-        className="top-13! right-2 bottom-2 left-2! flex w-auto! max-w-none! translate-x-0! translate-y-0! flex-col gap-0 overflow-hidden bg-card! p-0 sm:max-w-none!"
+        className="top-13! right-2 bottom-2 left-2! flex w-auto! max-w-none! translate-x-0! translate-y-0! flex-col gap-0 overflow-hidden rounded-panel bg-card! p-0 sm:max-w-none!"
         onKeyDownCapture={(event) => {
           if (
             event.defaultPrevented ||

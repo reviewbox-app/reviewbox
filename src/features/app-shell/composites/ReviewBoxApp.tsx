@@ -17,6 +17,8 @@ import { CommandPalette } from "./CommandPalette"
 import { RepositoryHome } from "@/features/repositories/composites/RepositoryHome"
 import { NewReviewDialog } from "@/features/repositories/composites/NewReviewDialog"
 import { preparationCommands } from "@/features/agents/services/preparation.commands"
+import { useReviewUpdate } from "@/features/agents/hooks/useReviewUpdate"
+import { ReviewUpdateStatus } from "@/features/agents/composites/ReviewUpdateStatus"
 import { PreparingReview } from "@/features/agents/composites/PreparingReview"
 import { ReviewReader } from "@/features/review/composites/ReviewReader"
 import { ResumeReviews } from "@/features/review/composites/ResumeReviews"
@@ -45,9 +47,7 @@ export function ReviewBoxApp() {
     space,
     setSpace,
     view,
-    setView,
     setReaderLevel,
-    setCodeMode,
     settings,
     setSettings,
     palette,
@@ -74,7 +74,26 @@ export function ReviewBoxApp() {
     nextTopic,
     choose,
     setNewReview,
+    selectView: setView,
   } = session
+  const [dismissedChange, setDismissedChange] = useState<string | null>(null)
+  const update = useReviewUpdate(
+    workspace,
+    preparing?.provider ?? rev.harness?.provider ?? "codex",
+    (value) => {
+      // An adaptation preserves the chosen view and reading mode, including forks.
+      initializedReview.current = `${value.review.repositoryId}/${value.review.id}`
+      session.install(value, false)
+    },
+    !!preparing &&
+      preparing.reviewId === workspace?.review.id &&
+      preparing.snapshotId === workspace?.snapshot.id
+  )
+  const updating = update.active || update.pending
+  const refresh = () =>
+    workspace?.review.preparationId || workspace?.review.mode === "guided"
+      ? update.start()
+      : session.refresh()
   /** Opens the first step of a review Rev has just written. */
   const startReading = (value: Workspace) => {
     const first = readingUnits(value)[0]
@@ -147,7 +166,6 @@ export function ReviewBoxApp() {
     view,
     setView,
     setReaderLevel,
-    setCodeMode,
     settings,
     palette,
     session.newReview,
@@ -163,16 +181,18 @@ export function ReviewBoxApp() {
     workspace?.review.mode === "guided" &&
     !!workspace.review.topics.some((t) => t.steps.length)
   useEffect(() => {
-    if (readingIdentity && initializedReview.current !== readingIdentity) {
-      initializedReview.current = readingIdentity
+    const selection = workspace
+      ? `${workspace.review.repositoryId}/${workspace.review.id}`
+      : null
+    if (selection && initializedReview.current !== selection) {
+      initializedReview.current = selection
       setView(written ? "document" : "code")
-      if (!written) setCodeMode("real")
       setReaderLevel(
-        initialLevels.current.get(readingIdentity) ??
-          (written ? getReadingPreferences().level : "developer")
+        initialLevels.current.get(readingIdentity ?? "") ??
+          (written ? getReadingPreferences().level : "technical")
       )
     }
-  }, [readingIdentity, written, setView, setReaderLevel, setCodeMode])
+  }, [readingIdentity, workspace, written, setView, setReaderLevel])
   if (
     preparing &&
     workspace &&
@@ -181,12 +201,14 @@ export function ReviewBoxApp() {
       preparing.snapshotId !== workspace.snapshot.id)
   )
     setPreparing(null)
+  const preparationIsDraft = workspace?.review.publication.status === "draft"
   const preparationRepositoryId = workspace?.review.repositoryId
   const preparationSnapshotId = workspace?.snapshot.id
   const preparationStepId = workspace?.review.position.stepId
   const preparationError = session.setError
   useEffect(() => {
     if (
+      !preparationIsDraft ||
       !openedReview ||
       !preparationRepositoryId ||
       !readingIdentity ||
@@ -198,7 +220,13 @@ export function ReviewBoxApp() {
     void preparationCommands
       .get(openedReview)
       .then((job) => {
-        if (!alive || !job || job.snapshotId !== preparationSnapshotId) return
+        if (
+          !alive ||
+          !job ||
+          job.adaptation ||
+          job.snapshotId !== preparationSnapshotId
+        )
+          return
         if (job.status !== "ready" || !preparationStepId)
           setPreparing({
             repositoryId: preparationRepositoryId,
@@ -212,6 +240,7 @@ export function ReviewBoxApp() {
       alive = false
     }
   }, [
+    preparationIsDraft,
     openedReview,
     preparationStepId,
     preparationSnapshotId,
@@ -248,6 +277,34 @@ export function ReviewBoxApp() {
         repository={repository}
         rev={rev}
         onHome={session.home}
+        reviewControl={
+          workspace && (
+            <ReviewUpdateStatus
+              key={workspace.review.id}
+              workspace={workspace}
+              update={update}
+              changed={session.changed}
+              freshnessChecked={session.freshnessChecked}
+              onCheck={session.checkFreshness}
+              staleStepIds={session.staleStepIds}
+              busy={busy}
+              onRead={() => {
+                if (update.state && !update.state.adaptation) {
+                  dismissedPreparations.current.add(readerIdentity(workspace))
+                  setPreparing(null)
+                  if (!workspace.review.position.stepId) startReading(workspace)
+                  else setSpace("review")
+                } else setSpace("review")
+              }}
+              onDelete={async () => {
+                await reviewCommands.delete(workspace.review.id)
+                session.deleted(workspace.review.id)
+                setPreparing(null)
+                setSpace("resume")
+              }}
+            />
+          )
+        }
       />
       {session.error && (
         <div
@@ -270,7 +327,7 @@ export function ReviewBoxApp() {
           </Button>
         </div>
       )}
-      {session.changed && workspace && (
+      {session.changed && workspace && dismissedChange !== readingIdentity && (
         <div
           role="status"
           className="mx-2 mb-2 flex items-center gap-2.5 rounded-2xl bg-review-attention-soft py-1.5 pr-1.5 pl-3 text-sm"
@@ -287,10 +344,25 @@ export function ReviewBoxApp() {
           <Button
             variant="secondary"
             size="sm"
-            disabled={busy}
-            onClick={() => void session.refresh()}
+            disabled={
+              busy ||
+              updating ||
+              (!!update.state && update.state.status !== "ready")
+            }
+            onClick={() => void refresh()}
           >
-            Refresh snapshot
+            {workspace.review.preparationId ||
+            workspace.review.mode === "guided"
+              ? "Update with Rev"
+              : "Refresh"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Dismiss repository changes"
+            onClick={() => setDismissedChange(readingIdentity)}
+          >
+            <HugeiconsIcon icon={Cancel01Icon} size={14} />
           </Button>
         </div>
       )}
@@ -303,19 +375,19 @@ export function ReviewBoxApp() {
           onForget={(id) => void session.forget(id)}
         />
       ) : workspace &&
+        workspace.review.publication.status === "draft" &&
         preparing?.repositoryId === workspace.review.repositoryId &&
         preparing?.reviewId === workspace.review.id &&
         preparing?.snapshotId === workspace.snapshot.id ? (
         <PreparingReview
           key={`${readingIdentity}/${preparing.provider}`}
           workspace={workspace}
-          provider={preparing.provider}
-          onApplied={() =>
-            reviewCommands.load(workspace.review.id).then((value) => {
-              if (readerIdentity(value) === readerIdentity(workspace))
-                session.acceptCurrent(value)
-            })
-          }
+          preparation={{
+            ...update,
+            error: update.error || update.state?.error?.message || "",
+            status: update.active ? "Rev is working…" : "Loading preparation…",
+            start: update.startCreation,
+          }}
           onStart={() => {
             dismissedPreparations.current.add(readerIdentity(workspace))
             setPreparing(null)
@@ -329,6 +401,7 @@ export function ReviewBoxApp() {
       ) : space === "resume" ? (
         <ResumeReviews
           repository={repository}
+          lockedReviewId={updating ? workspace?.review.id : undefined}
           onOpen={(id) => void session.load(id)}
           onDeleted={session.deleted}
           onNew={() => setNewReview(true)}
@@ -356,10 +429,15 @@ export function ReviewBoxApp() {
             key={readingIdentity}
             workspace={workspace}
             selected={selected}
-            busy={busy}
+            busy={busy || updating}
+            menuEnabled={!session.newReview && !settings && !palette}
+            onRefresh={() => void refresh()}
+            staleStepIds={session.staleStepIds}
+            updatePending={!!update.state && update.state.status !== "ready"}
             onSelect={session.select}
             onSelectStep={session.selectStep}
             onSelectFile={session.selectFile}
+            onViewChange={setView}
             onAction={action}
             isCurrentCursor={session.isCurrentCursor}
             onStep={next}

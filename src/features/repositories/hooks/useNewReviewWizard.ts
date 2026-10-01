@@ -204,7 +204,7 @@ export function useNewReviewWizard(
           warning,
           readingLevel:
             effectiveMode === "manual"
-              ? "developer"
+              ? "technical"
               : preferences.askEachReview
                 ? readingLevel
                 : preferences.level,

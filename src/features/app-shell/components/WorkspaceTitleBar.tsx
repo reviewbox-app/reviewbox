@@ -1,4 +1,5 @@
 "use client"
+import type { ReactNode } from "react"
 import { reviewCommands, desktopAvailable } from "@/lib/desktop/review.commands"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -20,9 +21,11 @@ export function WorkspaceTitleBar({
   repository,
   rev,
   onHome,
+  reviewControl,
 }: {
   repository: Repository | null
   rev: RevStatus
+  reviewControl?: ReactNode
   onHome: () => void
 }) {
   const { space, setSpace, setSettings, setPalette } = useReviewWorkspaceStore()
@@ -55,22 +58,32 @@ export function WorkspaceTitleBar({
         )}
       </div>
       {repository ? (
-        <Tabs
-          value={space}
-          onValueChange={(value) => setSpace(value as typeof space)}
-        >
-          <TabsList>
-            <TabsTrigger value="resume">Home</TabsTrigger>
-            <TabsTrigger value="review">Review</TabsTrigger>
-            <TabsTrigger value="understand">Code Explain</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="relative shrink-0" data-testid="workspace-navigation">
+          <Tabs
+            value={space}
+            onValueChange={(value) => setSpace(value as typeof space)}
+          >
+            <TabsList>
+              <TabsTrigger value="resume">Home</TabsTrigger>
+              <TabsTrigger value="review">Review</TabsTrigger>
+              <TabsTrigger value="understand">Code Explain</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {reviewControl && (
+            <div
+              className="absolute top-1/2 left-full ml-2 -translate-y-1/2"
+              data-testid="rev-control"
+            >
+              {reviewControl}
+            </div>
+          )}
+        </div>
       ) : (
         <span className="text-sm font-medium text-muted-foreground">
           ReviewBox
         </span>
       )}
-      <div className="flex flex-1 items-center justify-end gap-2">
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-2 pl-10">
         <RevStatusBadge status={rev} />
         {repository && (
           <button

@@ -20,7 +20,6 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
-import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
 import { FileIcon } from "@/features/file-icons/components/FileIcon"
 import type { Workspace } from "@/lib/desktop/contracts.generated"
 
@@ -47,7 +46,6 @@ export function CommandPalette({
   workspace: Workspace | null
   actions: PaletteActions
 }) {
-  const level = useReviewWorkspaceStore((state) => state.readerLevel)
   const run = (action: () => void) => () => {
     onOpenChange(false)
     action()
@@ -76,16 +74,14 @@ export function CommandPalette({
                 Previous step
                 <CommandShortcut>K</CommandShortcut>
               </CommandItem>
-              {level !== "beginner" && (
-                <CommandItem onSelect={run(actions.view)}>
-                  <HugeiconsIcon icon={CodeIcon} />
-                  Switch document / code
-                  <CommandShortcut>D</CommandShortcut>
-                </CommandItem>
-              )}
+              <CommandItem onSelect={run(actions.view)}>
+                <HugeiconsIcon icon={CodeIcon} />
+                Switch document / code
+                <CommandShortcut>D</CommandShortcut>
+              </CommandItem>
             </CommandGroup>
           )}
-          {workspace && level !== "beginner" && (
+          {workspace && (
             <CommandGroup heading="Go to">
               {workspace.review.files.map((change) => (
                 <CommandItem

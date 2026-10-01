@@ -211,3 +211,59 @@ it("keeps concurrent plans, helper models and activities scoped to their batch",
   )
   expect(beginProgress("retry").helpers).toEqual({})
 })
+
+it("keeps active agents and plans despite later completed history and interrupts retired batches", () => {
+  let state = beginProgress("run")
+  let sequence = 0
+  const receive = (progress: AgentEvent["progress"], batchId = "active") => {
+    state = receiveProgress(state, {
+      runId: "run",
+      sequence: ++sequence,
+      batchId,
+      kind: "progress",
+      text: "",
+      progress,
+    })
+  }
+  receive({
+    type: "delegation",
+    id: "active:helper",
+    parent: "root",
+    task: "Still writing",
+    model: "Luna",
+    status: "inProgress",
+  })
+  receive({
+    type: "plan",
+    steps: [{ text: "Still planning", status: "inProgress" }],
+  })
+  for (let i = 0; i < 220; i++) {
+    receive(
+      {
+        type: "delegation",
+        id: `done:${i}`,
+        parent: "root",
+        task: "Done",
+        model: null,
+        status: "completed",
+      },
+      `done:${i}`
+    )
+    receive(
+      { type: "plan", steps: [{ text: "Done", status: "completed" }] },
+      `done:${i}`
+    )
+  }
+  expect(state.helpers["active:helper"].status).toBe("inProgress")
+  expect(state.plans.active[0].text).toBe("Still planning")
+  state = receiveProgress(state, {
+    runId: "run",
+    sequence: ++sequence,
+    batchId: "active",
+    kind: "batchFinished",
+    text: "",
+  })
+  expect(state.helpers["active:helper"].status).toBe("interrupted")
+  expect(state.closedBatches).toContain("active")
+  expect(state.outcome).toBeUndefined()
+})

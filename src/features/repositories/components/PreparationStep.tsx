@@ -1,17 +1,17 @@
-import { HugeiconsIcon } from "@hugeicons/react"
-import { AiMagicIcon, Route01Icon } from "@hugeicons/core-free-icons"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Button } from "@/components/ui/button"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { ReadingLevelChoice } from "@/features/settings/components/ReadingSettings"
 import type {
-  ReadingLevel,
   PreparationMode,
+  ReadingLevel,
   Scope,
   ScopePreview,
 } from "@/lib/desktop/contracts.generated"
-import { ReadingLevelChoice } from "@/features/settings/components/ReadingSettings"
 import { cn } from "@/lib/utils"
-import { scopeTitles } from "./ReviewScopeStep"
+import { AiMagicIcon, Route01Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { ReviewStats } from "./ReviewExplanation"
+import { scopeTitles } from "./ReviewScopeStep"
 
 export function PreparationStep({
   mode,
@@ -71,9 +71,9 @@ export function PreparationStep({
               </span>
               <span className="mt-0.5 block text-xs text-muted-foreground">
                 {value === "manual"
-                  ? "Review captured files directly in Developer mode."
+                  ? "Review captured files directly in Technical mode."
                   : ready
-                    ? "Rev prepares a guided review in all three reading levels."
+                    ? "Rev prepares a guided review in all three reading modes."
                     : "Rev is not set up yet · Settings › Rev"}
               </span>
             </span>
@@ -86,7 +86,7 @@ export function PreparationStep({
           onChange={onReadingLevelChange}
         />
       )}
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-secondary px-4 py-3.5">
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-accent px-4 py-3.5">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-muted-foreground">You will review</p>
           <p className="mt-0.5 text-sm font-medium">{scopeTitles[scope]}</p>
