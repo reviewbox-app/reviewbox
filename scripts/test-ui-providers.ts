@@ -27,7 +27,10 @@ try {
   await ui.named("Explain with Rev")
   for (const provider of ["codex", "claude"]) {
     console.log(`Provider UI: ${provider}`)
-    await ui.select('select[aria-label="Rev\'s harness"]', provider)
+    await ui.select(
+      'button[aria-label="Rev\'s harness"]',
+      provider === "codex" ? "Codex" : "Claude Code"
+    )
     await ui.fill(
       '[aria-label="Question for Rev"]',
       "Explain this tiny file in one source-linked section. Do not use tools."
@@ -57,7 +60,7 @@ try {
     results.push({ provider, outcome: "explanation streamed as a proposal" })
     await ui.screenshot(`provider-${provider}`)
   }
-  await ui.select('select[aria-label="Rev\'s harness"]', "codex")
+  await ui.select('button[aria-label="Rev\'s harness"]', "Codex")
   await ui.click('button[aria-label="Ask Rev"]')
   await ui.named("Stop")
   await ui.has("Agent request stopped")
@@ -89,7 +92,10 @@ try {
     outcome: "source-linked explanation edited, accepted and rendered",
   })
   await ui.named("Explain with Rev")
-  await ui.select('select[aria-label="What Rev should do"]', "glossary")
+  await ui.select(
+    'button[aria-label="What Rev should do"]',
+    "Suggest project definitions"
+  )
   await ui.fill(
     '[aria-label="Question for Rev"]',
     "Suggest exactly one glossary term: answer, meaning the exported response constant."

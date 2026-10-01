@@ -31,7 +31,7 @@ for await(const line of createInterface({input:process.stdin})) {
   else {
    if(mode==='error') {console.log(JSON.stringify({id:m.id,error:{message:'failure'}}));continue;}
    const second=!!m.params.cursor;
-   result={data: mode==='empty'?[]:second?[{model:'gpt-6-luna',displayName:'GPT-6 Luna',description:'Fast model for small tasks',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}]:[{model:'gpt-6-sol',displayName:'GPT-6 Sol',description:'Everyday coding work',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}],nextCursor:second||mode==='empty'?null:'next'};
+   result={data: mode==='empty'?[]:second?[{model:'gpt-6-luna',displayName:'GPT-6 Luna',description:'Fast model for small tasks',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}]:[{model:'gpt-6.1-sol',displayName:'GPT-6.1 Sol',description:'Everyday coding work',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}],nextCursor:second||mode==='empty'?null:'next'};
   }
   console.log(JSON.stringify({id:m.id,result}));
  } else {
@@ -44,7 +44,14 @@ for await(const line of createInterface({input:process.stdin})) {
   await chmod(executable, 0o700)
 }
 const openPicker = async (selector: string) => {
+  // Project preferences and provider settings arrive independently. Do not
+  // click the temporarily disabled picker before its provider is available.
+  await ui.until(
+    `document.querySelector(${JSON.stringify(selector)})?.disabled === false`,
+    `${selector} ready`
+  )
   await ui.click(selector)
+  await ui.element('[aria-label="Search models"]')
   await ui.until("!document.body.innerText.includes('Loading models…')")
 }
 const choose = (name: string) => ui.named(name, '[role="option"]', false)
@@ -109,14 +116,14 @@ try {
   await openPicker("#helper-model")
   // The native click driver refocuses an option after selection; use the same
   // keyboard path as the primary model picker for this immediate-save field.
-  await ui.fill('[aria-label="Search models"]', "GPT-6 Sol")
+  await ui.fill('[aria-label="Search models"]', "GPT-6.1 Sol")
   await ui.keys("\uE015", "\uE007")
   await ui.until(
     "!document.querySelector('[role=listbox]')",
     "helper picker closes after saving"
   )
   await ui.until(
-    "!!document.querySelector('#helper-model')?.textContent.match(/gpt[- ]6[- ]sol/i)"
+    "!!document.querySelector('#helper-model')?.textContent.match(/gpt[- ]6[.]1[- ]sol/i)"
   )
   await ui.until(
     "!document.querySelector('#helper-model')?.disabled",
@@ -124,6 +131,12 @@ try {
   )
   await ui.harnessOption("codex", "Details")
   phase = "main catalog"
+  assert(
+    await ui.execute(
+      "return !!document.querySelector('#model-codex')?.textContent.match(/gpt[- ]6[.]1[- ]sol/i)"
+    ),
+    "new settings select GPT-6.1 Sol as the primary review model"
+  )
   await openPicker("#model-codex")
   await ui.has("GPT-6 Luna")
   await ui.has("Everyday coding work")
@@ -148,7 +161,7 @@ try {
   )
   assert(
     await ui.execute(
-      "return !!document.querySelector('#helper-model')?.textContent.match(/gpt[- ]6[- ]sol/i)"
+      "return !!document.querySelector('#helper-model')?.textContent.match(/gpt[- ]6[.]1[- ]sol/i)"
     ),
     "main model selection preserves the independent helper preference"
   )
@@ -192,22 +205,33 @@ try {
   await ui.until("!document.querySelector('#model-claude')")
   await ui.named("Project", "nav button")
   phase = "project selection"
+  await ui.element("#project-scope")
+  await ui.select("#project-scope", "staged")
+  await ui.select("#project-preparation", "Myself")
+  assert(
+    !(await ui.execute(
+      "return [...document.querySelectorAll('form [role=status]')].some(el => el.textContent === 'Saved in .reviewbox')"
+    )),
+    "selecting a form option must not submit the form"
+  )
   await openPicker("#project-model")
   await ui.fill('[aria-label="Search models"]', "no-such-model")
   await ui.has("No matching models.")
   await ui.keys("\uE00C")
   await ui.element("#project-model")
   await openPicker("#project-model")
-  await choose("GPT-6 Sol")
+  await choose("GPT-6.1 Sol")
   await ui.named("Save project settings")
   await ui.has("Saved in .reviewbox")
   assert.equal((await savedProject()).provider, "codex")
-  assert.equal((await savedProject()).model, "gpt-6-sol")
+  assert.equal((await savedProject()).model, "gpt-6.1-sol")
+  assert.equal((await savedProject()).defaultScope, "staged")
+  assert.equal((await savedProject()).defaultPreparation, "manual")
   assert(
     !("helperModel" in (await savedProject())),
     "helper preference stays private"
   )
-  await ui.select("#project-provider", "claude")
+  await ui.select("#project-provider", "Claude Code")
   phase = "Claude project selection"
   await ui.until(
     "document.querySelector('#project-model')?.textContent.includes('Use application settings')"
@@ -237,15 +261,26 @@ try {
     "Search models"
   )
   await ui.keys("\uE00C")
-  await ui.select("#project-provider", "codex")
+  await ui.select("#project-provider", "Codex")
   await writeFile(mode, "normal")
   await openPicker("#project-model")
-  await ui.has("GPT-6 Sol")
+  await ui.has("GPT-6.1 Sol")
   assert(!(await ui.text()).includes("Sonnet 5 · Efficient"))
   await ui.keys("\uE00C")
   await ui.named("Save project settings")
   await ui.has("Saved in .reviewbox")
   assert.equal((await savedProject()).model, null)
+  phase = "project application-default option"
+  await ui.select("#project-provider", "Use application default")
+  await ui.named("Save project settings")
+  await ui.has("Saved in .reviewbox")
+  assert.equal((await savedProject()).provider, null)
+  await ui.named("General", "nav button")
+  await ui.named("Project", "nav button")
+  await ui.until(
+    "document.querySelector('#project-provider')?.textContent.includes('Use application default') && document.querySelector('#project-preparation')?.textContent.includes('Myself') && document.querySelector('#project-scope')?.textContent.includes('staged')",
+    "custom select labels restored before opening their popups"
+  )
   for (const theme of ["Dark", "Light"]) {
     await ui.named("General", "nav button")
     await ui.named(theme, '[role="tab"]')

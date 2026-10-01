@@ -106,7 +106,7 @@ export function HarnessConfigurationDialog({
                 ? "No update required."
                 : status.compatibility === "outdated" &&
                     status.installation.canRun
-                  ? "Available from Options › Update harness."
+                  ? "Available from Options › Check updates."
                   : status.installation.message}
             </dd>
           </dl>

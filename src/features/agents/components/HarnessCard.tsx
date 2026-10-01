@@ -111,12 +111,13 @@ export function HarnessCard({
             <HugeiconsIcon icon={InformationCircleIcon} size={16} aria-hidden />
             Details
           </DropdownMenuItem>
-          {outdated && (
-            <DropdownMenuItem disabled={busy || checking} onClick={onUpdate}>
-              <HugeiconsIcon icon={Download04Icon} size={16} aria-hidden />
-              Update harness
-            </DropdownMenuItem>
-          )}
+          <DropdownMenuItem
+            disabled={busy || checking || !status.available}
+            onClick={onUpdate}
+          >
+            <HugeiconsIcon icon={Download04Icon} size={16} aria-hidden />
+            Check updates
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={busy || checking} onClick={onDetect}>
             <HugeiconsIcon

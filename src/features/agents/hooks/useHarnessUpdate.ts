@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import type {
   ProviderSetupEvent,
   ProviderStatus,
+  ProviderUpdateCheck,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { setupCommands } from "../services/setup.commands"
@@ -15,6 +16,30 @@ export function useHarnessUpdate() {
   const [event, setEvent] = useState<ProviderSetupEvent | null>(null)
   const [error, setError] = useState("")
   const [completed, setCompleted] = useState(false)
+  const checkToken = useRef<object | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [checked, setChecked] = useState<ProviderUpdateCheck | null>(null)
+  const check = async (provider: string) => {
+    const token = {}
+    checkToken.current = token
+    setChecking(true)
+    setChecked(null)
+    setError("")
+    setEvent(null)
+    setCompleted(false)
+    try {
+      const result = await setupCommands.checkUpdates(provider)
+      if (!alive.current || token !== checkToken.current) return null
+      setChecked(result)
+      return result
+    } catch (e) {
+      if (alive.current && token === checkToken.current)
+        setError(errorMessage(e))
+      return null
+    } finally {
+      if (alive.current && token === checkToken.current) setChecking(false)
+    }
+  }
   const cancel = async () => {
     const current = operation.current
     if (!current) return
@@ -29,6 +54,7 @@ export function useHarnessUpdate() {
     alive.current = true
     return () => {
       alive.current = false
+      checkToken.current = null
       const current = operation.current
       if (current) {
         current.cancelled = true
@@ -49,12 +75,17 @@ export function useHarnessUpdate() {
     operation.current = current
     setBusy(true)
     try {
-      await setupCommands.install(status.provider, current.id, (next) => {
-        // Also catch cancellation that raced the native operation's registration.
-        if (current.cancelled || !alive.current)
-          void setupCommands.cancel(current.id).catch(() => {})
-        if (alive.current && operation.current === current) setEvent(next)
-      })
+      await setupCommands.install(
+        status.provider,
+        current.id,
+        (next) => {
+          // Also catch cancellation that raced the native operation's registration.
+          if (current.cancelled || !alive.current)
+            void setupCommands.cancel(current.id).catch(() => {})
+          if (alive.current && operation.current === current) setEvent(next)
+        },
+        status.executable
+      )
       if (alive.current) setCompleted(true)
     } catch (e) {
       if (alive.current) setError(errorMessage(e))
@@ -63,5 +94,15 @@ export function useHarnessUpdate() {
       if (alive.current) setBusy(false)
     }
   }
-  return { busy, event, error, completed, start, cancel }
+  return {
+    busy,
+    checking,
+    checked,
+    check,
+    event,
+    error,
+    completed,
+    start,
+    cancel,
+  }
 }

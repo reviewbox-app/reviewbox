@@ -22,7 +22,7 @@ pub(crate) fn for_project(mut config: ProviderConfig, project: ProjectSettings) 
 
 pub(super) fn default_model(provider: &str) -> Option<&'static str> {
     match provider {
-        "codex" => Some("gpt-6-sol"),
+        "codex" => Some("gpt-6.1-sol"),
         "claude" => Some("claude-sonnet-5"),
         _ => None,
     }

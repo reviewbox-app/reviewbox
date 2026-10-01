@@ -17,6 +17,7 @@ import { harnessNames } from "../hooks/useRevStatus"
 
 export function HarnessUpdateDialog({
   status,
+  latestVersion,
   busy,
   event,
   error,
@@ -27,6 +28,7 @@ export function HarnessUpdateDialog({
   onChooseExecutable,
 }: {
   status: ProviderStatus
+  latestVersion: string
   busy: boolean
   event: ProviderSetupEvent | null
   error: string
@@ -37,6 +39,7 @@ export function HarnessUpdateDialog({
   onChooseExecutable: () => void
 }) {
   const name = harnessNames[status.provider] ?? status.provider
+  const confirming = !busy && !event && !error && !completed
   return (
     <Dialog
       open
@@ -50,13 +53,20 @@ export function HarnessUpdateDialog({
             {completed ? `${name} updated` : `Update ${name}`}
           </DialogTitle>
           <DialogDescription>
-            Updates the selected installation and checks it again automatically.
+            {confirming
+              ? `${name} ${latestVersion} is available. You have ${status.version}. Install the update?`
+              : "Updates the selected installation and checks it again automatically."}
           </DialogDescription>
         </DialogHeader>
-        {status.installation.command && (
+        {error && status.installation.command && (
           <code className="rounded-2xl bg-muted p-3 text-xs wrap-anywhere whitespace-pre-wrap">
             {status.installation.command}
           </code>
+        )}
+        {!status.installation.canRun && (
+          <p role="alert" className="text-sm">
+            {status.installation.message}
+          </p>
         )}
         {(busy || event || completed) && (
           <p role="status" className="flex items-start gap-2 text-sm">
@@ -81,8 +91,11 @@ export function HarnessUpdateDialog({
           ) : (
             <>
               {!completed && status.installation.canRun && (
-                <Button variant="secondary" onClick={onRetry}>
-                  Retry update
+                <Button
+                  variant={confirming ? "default" : "secondary"}
+                  onClick={onRetry}
+                >
+                  {confirming ? "Install update" : "Retry update"}
                 </Button>
               )}
               {!status.installation.canRun && (
@@ -90,7 +103,12 @@ export function HarnessUpdateDialog({
                   Choose another exec
                 </Button>
               )}
-              <Button onClick={onClose}>Done</Button>
+              <Button
+                variant={confirming ? "secondary" : "default"}
+                onClick={onClose}
+              >
+                {confirming ? "Not now" : "Done"}
+              </Button>
             </>
           )}
         </DialogFooter>

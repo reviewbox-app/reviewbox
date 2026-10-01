@@ -34,7 +34,7 @@ fn defaults_migrate_once_and_preserve_explicit_choices() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("data")).unwrap();
     let initial = settings(&storage).unwrap();
-    assert_eq!(initial.providers[0].model.as_deref(), Some("gpt-6-sol"));
+    assert_eq!(initial.providers[0].model.as_deref(), Some("gpt-6.1-sol"));
     assert_eq!(
         initial.providers[1].model.as_deref(),
         Some("claude-sonnet-5")
@@ -54,10 +54,15 @@ fn defaults_migrate_once_and_preserve_explicit_choices() {
     let mut migrated = settings(&storage).unwrap();
     assert_eq!(migrated.model_defaults_version, 1);
     assert_eq!(migrated.default_provider, "claude");
-    assert_eq!(migrated.providers[0].model.as_deref(), Some("gpt-6-sol"));
+    assert_eq!(migrated.providers[0].model.as_deref(), Some("gpt-6.1-sol"));
     assert_eq!(migrated.providers[1].model.as_deref(), Some("custom-model"));
     let revision = migrated.revision;
     assert_eq!(settings(&storage).unwrap().revision, revision);
+    // A saved selection of the former default is still an explicit choice.
+    migrated.providers[0].model = Some("gpt-6-sol".into());
+    configure(&storage, migrated).unwrap();
+    let mut migrated = settings(&storage).unwrap();
+    assert_eq!(migrated.providers[0].model.as_deref(), Some("gpt-6-sol"));
     migrated.providers[0].model = None;
     configure(&storage, migrated).unwrap();
     drop(storage);
@@ -120,7 +125,7 @@ for line in sys.stdin:
             continue
         cursor=value['params'].get('cursor')
         assert not value['params']['includeHidden']
-        models=[{'model':'gpt-6-sol' if cursor is None else 'gpt-6-luna','displayName':'Test model','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]},{'model':'hidden','hidden':True,'displayName':'Hidden'}]
+        models=[{'model':'gpt-6.1-sol' if cursor is None else 'gpt-6-luna','displayName':'Test model','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]},{'model':'hidden','hidden':True,'displayName':'Hidden'}]
         send({'id':value['id'],'result':{'data':[] if mode=='empty' else models,'nextCursor':None if cursor or mode=='empty' else 'page-two'}})
 "#.replace("PROVIDER", &serde_json::to_string(provider).unwrap()).replace("MODE", &serde_json::to_string(mode).unwrap());
     std::fs::write(&executable, script).unwrap();

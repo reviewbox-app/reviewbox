@@ -78,6 +78,8 @@ export function ProviderSettingsPanel() {
     void update.cancel()
     setDialog(null)
   }
+  const checkingUpdates = update.checking
+  const settingsBusy = busy || update.busy || checkingUpdates
   return (
     <div className="space-y-5">
       {!providers.length && checking && (
@@ -96,7 +98,7 @@ export function ProviderSettingsPanel() {
             status={status}
             isDefault={status.provider === defaultProvider}
             checking={checking}
-            busy={busy || update.busy}
+            busy={settingsBusy}
             onDetails={() =>
               setDialog({ provider: status.provider, mode: "details" })
             }
@@ -105,12 +107,36 @@ export function ProviderSettingsPanel() {
             }
             onDetect={() => void redetect()}
             onUpdate={() => {
-              setDialog({ provider: status.provider, mode: "update" })
-              void update.start(status)
+              void update.check(status.provider).then((result) => {
+                if (result?.updateAvailable)
+                  setDialog({ provider: status.provider, mode: "update" })
+              })
             }}
           />
         ))}
       </div>
+      {checkingUpdates && (
+        <p
+          role="status"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+        >
+          <Spinner />
+          Checking for updates…
+        </p>
+      )}
+      {!checkingUpdates &&
+        update.checked &&
+        !update.checked.updateAvailable && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {harnessNames[update.checked.status.provider]} is up to date (
+            {update.checked.status.version}).
+          </p>
+        )}
+      {!dialog && update.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {update.error}
+        </p>
+      )}
       {(error || detectionError) && (
         <div className="space-y-2">
           <p role="alert" className="text-sm wrap-anywhere text-destructive">
@@ -137,7 +163,7 @@ export function ProviderSettingsPanel() {
           <Select
             items={harnessItems}
             value={defaultProvider}
-            disabled={busy || update.busy}
+            disabled={settingsBusy}
             onValueChange={(value) => {
               if (value && value !== defaultProvider)
                 void mutate((latest) => ({
@@ -181,7 +207,7 @@ export function ProviderSettingsPanel() {
               }
               value={settings.helperModel}
               defaultLabel="Default · GPT-6 Luna"
-              disabled={busy || update.busy}
+              disabled={settingsBusy}
               onChange={(model) =>
                 void mutate((latest) => ({
                   ...latest,
@@ -214,16 +240,17 @@ export function ProviderSettingsPanel() {
           }
         />
       )}
-      {dialog?.mode === "update" && selected && (
+      {dialog?.mode === "update" && selected && update.checked && (
         <HarnessUpdateDialog
-          status={selected}
+          status={update.checked.status}
+          latestVersion={update.checked.latestVersion}
           busy={update.busy}
           event={update.event}
           error={update.error}
           completed={update.completed}
           onClose={closeUpdate}
           onCancel={() => void update.cancel()}
-          onRetry={() => void update.start(selected)}
+          onRetry={() => void update.start(update.checked!.status)}
           onChooseExecutable={() =>
             setDialog({ provider: selected.provider, mode: "executable" })
           }

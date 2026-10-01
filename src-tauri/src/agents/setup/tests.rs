@@ -271,6 +271,7 @@ fn install_orchestration_updates_only_fixture_and_persists_detected_path() {
             &fixture.storage,
             &manager,
             ProviderSetupRequest {
+                expected_executable: None,
                 operation_id: "fixture-install".into(),
                 provider: "codex".into(),
             },
@@ -366,6 +367,7 @@ fn install_cancellation_does_not_publish_success_or_change_preferences() {
             &fixture.storage,
             &manager,
             ProviderSetupRequest {
+                expected_executable: None,
                 operation_id: "fixture-cancel".into(),
                 provider: "codex".into(),
             },
@@ -397,4 +399,38 @@ fn install_cancellation_does_not_publish_success_or_change_preferences() {
         assert_eq!(original.version.as_deref(), Some("codex-cli 0.147.0"));
         assert_eq!(original.compatibility, ProviderCompatibility::Outdated);
     });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn update_confirmation_does_not_authorize_a_different_executable() {
+    let fixture = NpmFixture::new();
+    let marker = fixture.prefix.join("unexpected-install");
+    executable(
+        &fixture.npm,
+        &format!("touch {}", shell_quote(&marker.to_string_lossy())),
+    );
+    let (channel, _) = fixture.channel();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(install(
+            &fixture.storage,
+            &SetupManager::default(),
+            ProviderSetupRequest {
+                operation_id: "changed-selection".into(),
+                provider: "codex".into(),
+                expected_executable: Some("/previous/codex".into()),
+            },
+            channel,
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "conflict");
+    assert!(!marker.exists());
+    assert_eq!(
+        crate::agents::settings(&fixture.storage).unwrap().revision,
+        fixture.initial.revision
+    );
 }

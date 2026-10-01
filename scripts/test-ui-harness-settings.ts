@@ -67,6 +67,11 @@ await writeFile(
 import {readFileSync,appendFileSync,writeFileSync} from "node:fs";
 const args=process.argv.slice(2),mode=readFileSync(${JSON.stringify(modeFile)},"utf8");
 appendFileSync(${JSON.stringify(auditFile)},JSON.stringify({args,mode})+"\\n");
+if(args[0]==="view") {
+ if(mode==="check-failure") process.exit(1);
+ console.log(JSON.stringify([args[1]==="@openai/codex@latest"?"0.157.0":"2.1.282"]));
+ process.exit(0);
+}
 if(mode==="failure") process.exit(1);
 await Bun.sleep(mode==="slow"?60000:1000);
 const versions=JSON.parse(readFileSync(${JSON.stringify(versions)},"utf8"));
@@ -77,6 +82,12 @@ writeFileSync(${JSON.stringify(versions)},JSON.stringify(versions));
 `
 )
 await chmod(npm, 0o700)
+const menuItems = (name: string) =>
+  ui.execute<string[]>(
+    `const trigger=document.querySelector('[aria-label="'+arguments[0]+' options"]');
+   return [...document.getElementById(trigger.getAttribute('aria-controls')).querySelectorAll('[role=menuitem]')].map(el=>el.textContent.trim())`,
+    [name]
+  )
 const closeDialog = () => ui.named("Done")
 const card = (provider: "codex" | "claude") =>
   `article[aria-label="${provider === "codex" ? "Codex" : "Claude Code"} harness"]`
@@ -94,6 +105,10 @@ try {
   await ui.execute(
     "window.__uiErrors=[];addEventListener('error',e=>window.__uiErrors.push(e.message));addEventListener('unhandledrejection',e=>window.__uiErrors.push(String(e.reason)));return true"
   )
+  await ui.execute(`window.BASE_UI_ANIMATIONS_DISABLED=true;
+    const frame=window.requestAnimationFrame.bind(window),cancel=window.cancelAnimationFrame.bind(window);
+    window.requestAnimationFrame=callback=>document.hidden?-setTimeout(()=>callback(performance.now()),16):frame(callback);
+    window.cancelAnimationFrame=id=>id<0?clearTimeout(-id):cancel(id);return true`)
   await ui.named("Dark", '[role="tab"]')
   await ui.named("Rev", "nav button")
   await ui.setHarnessExecutable("codex", paths.codex)
@@ -111,16 +126,16 @@ try {
   await ui.resize(1040, 720)
   await ui.screenshot("harness-settings-compact-dark")
   await ui.named("Codex options")
-  assert.deepEqual(
-    await ui.execute(
-      "return [...document.querySelectorAll('[role=menuitem]')].map(e=>e.textContent.trim())"
-    ),
-    ["Details", "Update harness", "Redetect", "Choose another exec"]
-  )
+  assert.deepEqual(await menuItems("Codex"), [
+    "Details",
+    "Check updates",
+    "Redetect",
+    "Choose another exec",
+  ])
   await ui.screenshot("harness-settings-menu-dark")
   await ui.keys("\uE00C")
   await ui.until(
-    "!document.querySelector('[role=menu]')",
+    "!document.querySelector('button[aria-label=\"Codex options\"][aria-expanded=true]')",
     "Escape closes menu without closing settings"
   )
   await ui.harnessOption("codex", "Details")
@@ -149,7 +164,20 @@ try {
     `!!document.querySelector('${card("claude")} [data-slot=badge]')`,
     "default autosaved"
   )
-  await ui.harnessOption("codex", "Update harness")
+  await ui.harnessOption("codex", "Check updates")
+  await ui.has("Install the update?")
+  assert(
+    !(await readFile(auditFile, "utf8")).includes('"install"'),
+    "checking never installs"
+  )
+  await ui.screenshot("harness-update-confirmation")
+  await ui.named("Not now")
+  assert(
+    !(await readFile(auditFile, "utf8")).includes('"install"'),
+    "declining never installs"
+  )
+  await ui.harnessOption("codex", "Check updates")
+  await ui.named("Install update")
   await ui.has("Update complete. Harness detected.")
   await closeDialog()
   await ui.until(
@@ -169,14 +197,27 @@ try {
   for (const name of ["Codex", "Claude Code"]) {
     await ui.named(`${name} options`)
     assert.deepEqual(
-      await ui.execute(
-        "return [...document.querySelectorAll('[role=menuitem]')].map(e=>e.textContent.trim())"
-      ),
-      ["Details", "Redetect", "Choose another exec"],
-      "supported harness hides update"
+      await menuItems(name),
+      ["Details", "Check updates", "Redetect", "Choose another exec"],
+      "supported harness can still check for newer releases"
     )
     await ui.keys("\uE00C")
   }
+  await ui.harnessOption("codex", "Check updates")
+  await ui.has("Codex is up to date")
+  assert(!(await ui.text()).includes("Install the update?"))
+  await writeFile(modeFile, "check-failure")
+  await ui.harnessOption("codex", "Check updates")
+  await ui.has("Could not check for updates")
+  assert(!(await ui.text()).includes("Codex is up to date"))
+  await writeFile(modeFile, "success")
+  await ui.harnessOption("claude", "Check updates")
+  await ui.has("Claude Code 2.1.282 is available")
+  await ui.named("Install update")
+  await ui.has("Update complete. Harness detected.")
+  await closeDialog()
+  await ui.harnessOption("claude", "Check updates")
+  await ui.has("Claude Code is up to date")
   // Failure is surfaced, and Retry uses the same installation.
   await writeFile(
     versions,
@@ -185,7 +226,8 @@ try {
   await ui.harnessOption("codex", "Redetect")
   await ui.has("Outdated")
   await writeFile(modeFile, "failure")
-  await ui.harnessOption("codex", "Update harness")
+  await ui.harnessOption("codex", "Check updates")
+  await ui.named("Install update")
   await ui.has("The installer failed")
   await writeFile(modeFile, "success")
   await ui.named("Retry update")
@@ -202,7 +244,8 @@ try {
   await ui.harnessOption("codex", "Redetect")
   await ui.has("Outdated")
   await writeFile(modeFile, "slow")
-  await ui.harnessOption("codex", "Update harness")
+  await ui.harnessOption("codex", "Check updates")
+  await ui.named("Install update")
   await ui.has("Updating this npm installation")
   await ui.named("Cancel update")
   await ui.has("Installation cancelled")
@@ -242,10 +285,11 @@ try {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line))
+    .filter((entry) => entry.args[0] === "install")
   assert.equal(
     audit.length,
-    4,
-    "one update, failure/retry/cancel, no duplicate update"
+    5,
+    "two updates, failure/retry/cancel, no installation from checking or declining"
   )
   for (const entry of audit)
     assert.deepEqual(entry.args.slice(0, 4), [
@@ -255,10 +299,10 @@ try {
       await realpath(prefix),
     ])
   assert.equal(audit[0].args.at(-1), "@openai/codex@latest")
-  assert.equal(audit[1].args.at(-1), "@openai/codex@latest")
+  assert.equal(audit[1].args.at(-1), "@anthropic-ai/claude-code@latest")
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
-    "Native harness settings: compact cards, exact menu, orange Outdated, model/path persistence, cancelled edit, default autosave, conditional update visibility, failure/retry/cancel, redetection, dark/light and 800px layout passed"
+    "Native harness settings: compact cards, exact menu, orange Outdated, model/path persistence, cancelled edit, default autosave, read-only checks, confirmation/decline, up-to-date and network errors, failure/retry/cancel, redetection, dark/light and 800px layout passed"
   )
 } catch (error) {
   await ui.screenshot("harness-settings-failure").catch(() => {})

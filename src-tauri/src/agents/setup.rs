@@ -12,6 +12,8 @@ use std::{
 };
 use tauri::ipc::Channel;
 
+pub mod updates;
+
 const CODEX_INSTALLER: &str = "https://chatgpt.com/codex/install.sh";
 const CLAUDE_INSTALLER: &str = "https://claude.ai/install.sh";
 
@@ -310,6 +312,17 @@ async fn perform(
     )?;
     let config = configured(storage, provider)?;
     let path = resolve_executable(&config.executable);
+    if progress
+        .request
+        .expected_executable
+        .as_deref()
+        .is_some_and(|expected| path != Path::new(expected))
+    {
+        return Err(AppError::new(
+            "conflict",
+            "The selected executable changed. Check updates again before installing.",
+        ));
+    }
     let status = installation(&config, &path);
     if !status.can_run {
         return Err(AppError::new("setup_unavailable", status.message));

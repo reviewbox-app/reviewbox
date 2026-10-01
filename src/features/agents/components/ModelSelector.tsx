@@ -1,7 +1,4 @@
 "use client"
-import { useRef, useState } from "react"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { ArrowReloadHorizontalIcon } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
 import {
   Combobox,
@@ -13,6 +10,9 @@ import {
   ComboboxTrigger,
 } from "@/components/ui/combobox"
 import { Spinner } from "@/components/ui/spinner"
+import { ArrowReloadHorizontalIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { useRef, useState } from "react"
 import { selectedModel } from "../helpers/model.helpers"
 import { useProviderModels } from "../hooks/useProviderModels"
 
