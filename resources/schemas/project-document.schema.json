@@ -857,6 +857,10 @@
         "data": {
           "properties": {
             "content": { "$ref": "#/$defs/ProposalContent" },
+            "contextId": {
+              "description": "Code Explain source context; no review is required when present.",
+              "type": ["string", "null"]
+            },
             "createdAt": { "type": "string" },
             "id": { "type": "string" },
             "reviewId": { "type": "string" },

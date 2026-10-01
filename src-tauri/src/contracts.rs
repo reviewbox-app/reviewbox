@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod source_control;
+pub use source_control::*;
 mod appearance;
 mod creation;
 pub use appearance::*;
@@ -54,6 +56,7 @@ impl From<serde_json::Error> for AppError {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewMenuAction {
+    ViewLocalChanges,
     Refresh,
     CompleteManual,
     CompleteUpdated,
@@ -489,6 +492,15 @@ pub fn typescript() -> String {
         ReviewMenuAction::decl(&cfg),
         ReviewMenuEntry::decl(&cfg),
         ReviewMenuState::decl(&cfg),
+        LocalFile::decl(&cfg),
+        GitCommitSummary::decl(&cfg),
+        GitCommitFile::decl(&cfg),
+        GitCommitDetail::decl(&cfg),
+        GitRemoteCheck::decl(&cfg),
+        LocalGitState::decl(&cfg),
+        LocalFileDiff::decl(&cfg),
+        GitCommitRequest::decl(&cfg),
+        GitOperation::decl(&cfg),
         ReviewMenuEvent::decl(&cfg),
         ProjectSettings::decl(&cfg),
         PreparationMode::decl(&cfg),
@@ -616,6 +628,10 @@ pub fn typescript() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRequest {
+    /// Code Explain source context; no review is required when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_id: Option<String>,
     pub id: String,
     pub review_id: String,
     pub provider: String,
@@ -707,6 +723,13 @@ pub enum AgentActivityStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRun {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repository_id: Option<String>,
+    /// Code Explain source context; no review is required when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_id: Option<String>,
     pub id: String,
     pub review_id: String,
     pub snapshot_id: String,
@@ -762,6 +785,10 @@ pub enum ProposalContent {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Proposal {
+    /// Code Explain source context; no review is required when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_id: Option<String>,
     pub id: String,
     pub review_id: String,
     pub snapshot_id: String,
