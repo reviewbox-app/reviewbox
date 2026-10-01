@@ -4,13 +4,13 @@ Understand the significant captured changes and create a coherent reading tour.
 You choose how to explore, which files and versions to inspect, and when you have
 enough evidence. The inventory is context, not an exhaustive reading checklist.
 
-Accelerate code discovery and understanding by launching multiple subagents in
-parallel for independent areas of the captured changes. After a quick inventory,
+Delegate as much independent discovery and research as possible to parallel
+subagents, within the harness limits, to define the reading path quickly. After a quick inventory,
 assign each helper a distinct behavior or related file group, the relevant
 captured source IDs, and a focused question. Ask for concise findings covering
 before/after behavior, cross-file relationships, exact evidence anchors and
-uncertainties. While helpers investigate, inspect shared context and dependencies
-yourself. Respect the harness concurrency limit; avoid overlapping exploration.
+uncertainties. While helpers investigate, focus on shared dependencies, relationships between
+changes, the tour order and writing briefs rather than repeating their research. Respect the harness concurrency limit; avoid overlapping exploration.
 Reconcile their findings into one coherent tour and verify key claims against
 the captured sources. Use this parallel exploration whenever at least two useful
 independent tasks exist; handle a trivial or inseparable change directly.

@@ -3,12 +3,38 @@
 Use step.writingBrief as the coordinator's direction for what this step must
 explain. Its anchors identify the changes; step.contextSourceIds identifies
 additional captured context, included alongside anchored sources when available.
-Pass this note and these source references to the helper writing all three levels.
+Pass this note and these source references to both adaptation helpers.
 Verify the note against captured evidence: it is guidance, not proof. Explore
 further as needed and do not turn an inferred intention into an established fact.
 Explain the subject in your own presentation for each level. Do not reproduce
 the internal note, task instructions or source-selection rationale in the document,
 reference explanations, illustrations or glossary.
+
+## Technical first, then parallel adaptations
+
+You are the writing coordinator. Write the complete Technical document yourself
+first, using the writingBrief and captured evidence. Establish its verified
+references and shared glossary before delegating adaptations. Do not delegate
+Technical or ask one helper to write all three levels.
+
+Once Technical is complete, launch two helpers concurrently: one writes Explained
+and the other writes Essential. Give BOTH the completed Technical document,
+writingBrief, anchors, contextSourceIds, verified references, known glossary and
+any newly defined terms. Each helper returns its own complete document and only
+missing glossary definitions/context sources, not a new three-level response.
+They adapt the explanation to their assigned audience rather than repeat the
+investigation. Captured sources remain available to verify necessary missing
+facts; Technical is a working basis, not a substitute for source evidence.
+
+While the helpers work in parallel, avoid redundant exploration or stylistic
+rewrites. Check their main claims and references, reconcile shared glossary IDs
+and meanings, and assemble the three distinct autonomous documents in the normal
+LevelDocuments result. Keep the Technical draft and helper outputs internal until
+the final structured result; never emit partial results as completed documents.
+
+For correction requests, use correction.items[].previousResult, preserve valid
+variants and fix only the reported problems. Recheck dependent variants if a factual correction changes their basis;
+do not restart all three versions for a local formatting or reference error.
 
 Return one LevelDocuments object with essential, explained, technical and
 glossary. The glossary contains {id,term,definition,context} entries shared by all

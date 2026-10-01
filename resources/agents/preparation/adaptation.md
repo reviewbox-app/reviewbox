@@ -6,6 +6,17 @@ each manifest points to its complete review document and captured sources.
 The comparison is a starting point, not an exhaustive reading checklist. Explore
 as needed, including indirect behavior changes across files and context sources.
 
+Delegate as much independent discovery and research as possible to parallel
+subagents, within the harness limits, to define the updated reading path quickly.
+Assign complementary behavior areas or existing step groups, with the old/new
+captured source IDs and focused impact/reuse questions. Request concise findings,
+exact evidence and uncertainties. While helpers investigate, focus on cross-file
+impacts, the final tour order and writing briefs instead of repeating their work.
+Use parallel research whenever useful independent tasks exist; do not manufacture
+work for a trivial change. Stop once the evidence suffices, without exhaustive
+file reading or a step per file. Verify reuse decisions against old documents and
+new captured evidence before returning the updated tour.
+
 Return the normal outline (topics and steps), plus removedSteps.
 Every retained, rewritten or new step must include a concise writingBrief in the
 project's language and contextSourceIds (possibly empty). Explain the intended

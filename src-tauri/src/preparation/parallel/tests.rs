@@ -42,6 +42,13 @@ for line in sys.stdin:
  check_schema(params['outputSchema'])
  assert 'agents.enabled=true' in args and 'agents.max_concurrent_threads_per_session=3' in args
  prompt=params['input'][0]['text']
+ assert 'Keep the three variants of a reading step with one helper' not in prompt
+ if '# Write three distinct reading levels' in prompt:
+  assert 'Write the complete Technical document yourself' in prompt
+  assert 'launch two helpers concurrently' in prompt
+  assert 'correction.items[].previousResult' in prompt
+ else:
+  assert 'Delegate as much independent discovery and research as possible' in prompt
  context=json.loads(prompt.split('Context:\n',1)[1].split('\n\nBatch input:',1)[0])
  batch=json.loads(prompt.split('Batch input:\n',1)[1].split('\n\nContract:',1)[0])
  record('start',model=model,items=[i['id'] for i in batch['items']]);time.sleep(.15)

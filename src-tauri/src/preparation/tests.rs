@@ -257,6 +257,13 @@ if '--input-format' in sys.argv:
     request=json.loads(sys.stdin.readline())
     print(json.dumps({'type':'control_response','response':{'request_id':request['request_id'],'subtype':'success','response':{'models':[{'value':'claude-sonnet-5','displayName':'Sonnet 5','supportsEffort':True,'supportedEffortLevels':['medium','high']}]}}}),flush=True);sys.exit(0)
 prompt=sys.stdin.read()
+assert 'Keep the three variants of a reading step with one helper' not in prompt
+if '# Write three distinct reading levels' in prompt:
+    assert 'Write the complete Technical document yourself' in prompt
+    assert 'launch two helpers concurrently' in prompt
+    assert 'correction.items[].previousResult' in prompt
+else:
+    assert 'Delegate as much independent discovery and research as possible' in prompt
 context=json.loads(prompt.split('Context:\n',1)[1].split('\n\nBatch input:',1)[0])
 value=json.loads(prompt.split('Batch input:\n',1)[1].split('\n\nContract:',1)[0])
 batch=value;results=[]
