@@ -177,7 +177,7 @@ try {
               id: "step",
               title: "Return the expected value",
               documents: Object.fromEntries(
-                ["beginner", "intermediate", "developer"].map((level) => [
+                ["essential", "explained", "technical"].map((level) => [
                   level,
                   {
                     body: "The exported value changes from 41 to 42.",
@@ -217,7 +217,6 @@ try {
     action: {
       kind: "validateFile",
       fileId: workspace.review.files[0].id,
-      level: "developer",
     },
   })
   assert.equal(
@@ -259,7 +258,7 @@ try {
     })
   )
   await execute(
-    'localStorage.setItem("reviewbox.reading-preferences",JSON.stringify({level:"developer",askEachReview:false}));window.location.reload();return true'
+    'localStorage.setItem("reviewbox.reading-preferences",JSON.stringify({level:"technical",askEachReview:false}));window.location.reload();return true'
   )
   await waitFor(
     `return Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes(${JSON.stringify(repositoryPath)}))`

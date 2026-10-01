@@ -189,13 +189,17 @@ export class NativeUI {
     await this.request(this.route("/actions"), undefined, "DELETE")
     await Bun.sleep(150)
   }
-  async select(selector: string, value: string) {
-    await this.element(selector)
-    await this.execute(
-      "const el=document.querySelector(arguments[0]);el.value=arguments[1];el.dispatchEvent(new Event('change',{bubbles:true}));return true",
-      [selector, value]
+  async select(selector: string, label: string) {
+    await this.click(selector)
+    const popupId = await this.execute<string>(
+      "return document.querySelector(arguments[0]).getAttribute('aria-controls')",
+      [selector]
     )
-    await Bun.sleep(100)
+    await this.named(label, `[id=${JSON.stringify(popupId)}] [role="option"]`)
+    await this.until(
+      `document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-expanded') === 'false'`,
+      "selection committed"
+    )
   }
   async harnessOption(provider: "codex" | "claude", option: string) {
     const name = provider === "codex" ? "Codex" : "Claude Code"

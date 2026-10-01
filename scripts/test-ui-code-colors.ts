@@ -12,29 +12,12 @@ const ui = new NativeUI()
 let originalTheme: "Dark" | "Light" | "System" | undefined
 const harness = await createPreparationHarness(f.root, false, 2)
 const lsp = await createLanguageHarness(f.root)
-const pseudo = `FUNCTION renderUser(userId, options)
-  IF userId IS NOT NULL THEN
-    RETURN fetchUser(userId).displayName
-  ELSE IF isLoading
-    SHOW "Loading ${"a readable value ".repeat(35)}"
-  # Preserve indentation and comment coloring
-  SET retryCount = -2.5`
 const source = `export function renderUser(userId: string): string {
   const state = { loading: false, label: "hello" };
   return state.loading ? "Loading..." : userId + "${"a readable value ".repeat(55)}";
 }
 `
 await writeFile(harness.mode, "done")
-// Fixture setup only: the production pipeline still receives actual CLI events.
-await writeFile(
-  harness.executable,
-  (await readFile(harness.executable, "utf8"))
-    .replace(
-      "'Remember the captured value and make it available.'",
-      JSON.stringify(pseudo)
-    )
-    .replace("Remember the new value", "IF ready THEN RETURN value")
-)
 await f.write("src/answer.ts", source)
 f.git("add", "src/answer.ts")
 await f.write("src/answer.ts", source.replace("hello", "updated"))
@@ -54,17 +37,6 @@ async function theme(name: "Dark" | "Light" | "System") {
     await ui.until(
       `document.documentElement.classList.contains(${JSON.stringify(name.toLowerCase())})`
     )
-}
-async function representation(name: "Code" | "Pseudo-code") {
-  const tab = '[role="tab"][aria-label="Code"]'
-  if (
-    !(await ui.execute(
-      `return document.querySelector('${tab}').getAttribute('aria-selected')==='true'`
-    ))
-  )
-    await ui.click(tab)
-  await ui.click(tab)
-  await ui.named(name, '[role="menuitemradio"]')
 }
 const editorSelector = ".monaco-diff-editor .modified > .monaco-editor"
 async function colors() {
@@ -127,13 +99,8 @@ try {
   )
   await ui.named("Start review")
   await ui.has("Step 1 of 2")
-  await ui.until(
-    '!!document.querySelector("[data-language=\\"reviewbox-pseudocode\\"] [data-token=\\"keyword.control\\"]")',
-    "Markdown uses shared pseudo-code tokens"
-  )
-  await ui.click('[aria-label="Reading level"]')
-  await ui.named("Developer", '[role="option"]')
-  await representation("Code")
+  await ui.named("Technical", '[aria-label="Reading mode"] [role="tab"]')
+  await ui.named("Code", '[role="tab"]')
   await ui.until(
     `document.querySelector('${editorSelector} .view-lines:not(.line-delete)')?.textContent.includes('renderUser')`
   )
@@ -185,22 +152,6 @@ try {
     "Tokyo Night restored"
   )
 
-  await representation("Pseudo-code")
-  await ui.until(
-    `document.querySelector('${editorSelector} .view-lines:not(.line-delete)')?.textContent.includes('renderUser')`
-  )
-  assert(
-    (await colors()).length >= 6,
-    "pseudo-code separates conditions, actions, calls, parameters, properties and strings"
-  )
-  await ui.resize(800, 900)
-  await ui.until(
-    `document.querySelectorAll('${editorSelector} .view-line').length > 7`,
-    "pseudo-code wraps"
-  )
-  await ui.screenshot("pseudo-dark-800")
-  await representation("Code")
-  await ui.resize(1440, 900)
   // Definitions remain available through the editor shortcut, outside display options.
   await ui.execute(`const input=document.querySelector('${editorSelector} textarea');
     input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{
@@ -245,7 +196,7 @@ try {
   assert(methods.includes("textDocument/definition"))
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
-    "Native code colors: Tokyo Night/ReviewBox, light/dark, Markdown and Monaco pseudo-code, wrapping, Material headers, snapshot LSP and multiple read-only definitions passed."
+    "Native code colors: Tokyo Night/ReviewBox, light/dark,  wrapping, Material headers, snapshot LSP and multiple read-only definitions passed."
   )
 } catch (error) {
   console.error(await readFile(lsp.calls, "utf8").catch(() => "No LSP call"))
