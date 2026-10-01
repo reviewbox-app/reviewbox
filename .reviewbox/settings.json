@@ -1,0 +1,15 @@
+{
+  "format": "reviewbox",
+  "version": 4,
+  "kind": "project_settings",
+  "id": "settings",
+  "data": {
+    "defaultPreparation": "rev",
+    "defaultScope": "local",
+    "includeUntracked": true,
+    "language": "French",
+    "model": null,
+    "provider": null,
+    "revision": 10
+  }
+}
