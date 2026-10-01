@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState, type ReactNode } from "react"
+import { useCallback, useRef, useState, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -20,15 +20,11 @@ import type {
   ReadingLevel,
   ReviewDocument,
   ReviewFile,
-  ReviewFileContent,
 } from "@/lib/desktop/contracts.generated"
-import { errorMessage } from "@/lib/desktop/review.commands"
-import { readerCommands } from "@/features/review/services/reader.commands"
 import { ReviewIllustration } from "./ReviewIllustration"
 import { MermaidBlock } from "./MermaidBlock"
 import { MarkdownRenderer } from "./MarkdownRenderer"
 import { MarkdownCodeBlock } from "./MarkdownCodeBlock"
-import { resolveCodeLanguage } from "@/lib/code/languages"
 
 interface Context {
   level: ReadingLevel
@@ -36,10 +32,9 @@ interface Context {
   snapshotId: string
   files: ReviewFile[]
   glossary?: DocumentTerm[]
-  sourceMode?: "real" | "pseudo"
 }
 
-/** The same lexer colors the diff, inline blocks and reference cards. */
+/** Keep legacy Markdown blocks on the shared syntax highlighter. */
 export function PseudoCode({ text }: { text: string }) {
   return (
     <MarkdownCodeBlock
@@ -52,130 +47,21 @@ export function PseudoCode({ text }: { text: string }) {
 
 export function ReviewReferenceContent({
   reference,
-  level,
-  reviewId,
-  snapshotId,
-  files,
-  sourceMode = "real",
-}: Context & { reference: DocumentReference }) {
-  const [content, setContent] = useState<{
-    key: string
-    text?: string | null
-    error?: string
-    path?: string
-  } | null>(null)
-  const pseudo = level === "intermediate" || sourceMode === "pseudo"
-  const key = `${reviewId}/${snapshotId}/${reference.sourceId}/${reference.startLine}/${reference.endLine}/${pseudo}/${level}`
-  useEffect(() => {
-    if (level === "beginner") return
-    let alive = true
-    const load = async () => {
-      if (pseudo) {
-        let file =
-          files.find((f) =>
-            f.translations.some((t) => t.sourceId === reference.sourceId)
-          ) ?? files.find((f) => reference.sourceId === `file:${f.path}`)
-        let sourceHash: string | undefined
-        if (!file) {
-          // A context-file ID may address the exact same frozen bytes as a
-          // change side. Reuse that translation only after checking identity.
-          const source = await readerCommands.source(
-            snapshotId,
-            reference.sourceId
-          )
-          sourceHash = source.hash
-          file = files.find((f) =>
-            f.translations.some((t) => t.sourceHash === sourceHash)
-          )
-        }
-        if (!file)
-          throw new Error("Pseudo-code is unavailable for this reference.")
-        const data: ReviewFileContent = await readerCommands.file(
-          reviewId,
-          file.id
-        )
-        if (data.pseudocodeSelected === false || data.pseudocodeSkipReason)
-          return null
-        const translation = data.translations.find(
-          (t) =>
-            t.sourceId === reference.sourceId ||
-            (sourceHash !== undefined && t.sourceHash === sourceHash)
-        )
-        if (!translation || translation.unavailableReason)
-          throw new Error(
-            translation?.unavailableReason ||
-              "Pseudo-code is unavailable for this reference."
-          )
-        const blocks = translation.blocks.filter(
-          (b) =>
-            b.endLine >= reference.startLine && b.startLine <= reference.endLine
-        )
-        if (!blocks.length) throw new Error("No pseudo-code for this passage")
-        return { text: blocks.map((b) => b.text).join("\n\n") }
-      }
-      const source = await readerCommands.source(snapshotId, reference.sourceId)
-      if (source.text === null)
-        throw new Error(
-          source.unavailableReason || "This captured source is unavailable."
-        )
-      const lines = source.text.split("\n")
-      if (
-        reference.startLine < 1 ||
-        reference.endLine < reference.startLine ||
-        reference.endLine > lines.length
-      )
-        throw new Error("This reference is outside the captured source.")
-      return {
-        text: lines
-          .slice(reference.startLine - 1, reference.endLine)
-          .join("\n"),
-        path: source.path,
-      }
-    }
-    void load()
-      .then((result) => {
-        if (alive) setContent({ key, ...(result ?? { text: null }) })
-      })
-      .catch((e) => {
-        if (alive) setContent({ key, error: errorMessage(e) })
-      })
-    return () => {
-      alive = false
-    }
-  }, [
-    key,
-    files,
-    level,
-    pseudo,
-    reference.sourceId,
-    reference.startLine,
-    reference.endLine,
-    reviewId,
-    snapshotId,
-  ])
+  onOpenReference,
+}: {
+  reference: DocumentReference
+  onOpenReference?: (reference: DocumentReference) => void
+}) {
   return (
     <div className="markdown min-w-0 space-y-2">
       <p className="text-sm leading-6 text-muted-foreground">
         {reference.explanation}
       </p>
-      {level !== "beginner" &&
-        (content?.key !== key ? (
-          <p role="status" className="text-xs text-muted-foreground">
-            Loading the captured reference…
-          </p>
-        ) : content.error ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {content.error}
-          </p>
-        ) : content.text === null ? null : pseudo ? (
-          <PseudoCode text={content.text ?? ""} />
-        ) : (
-          <MarkdownCodeBlock
-            source={content.text ?? ""}
-            language={resolveCodeLanguage(content.path ?? "").id}
-            label="Captured source"
-          />
-        ))}
+      {onOpenReference && (
+        <Button variant="secondary" onClick={() => onOpenReference(reference)}>
+          Open in code
+        </Button>
+      )}
     </div>
   )
 }
@@ -184,51 +70,66 @@ function ReferenceLink({
   children,
   reference,
   onOpenReference,
-  ...context
-}: Context & {
+}: {
   children: ReactNode
   reference: DocumentReference
   onOpenReference?: (reference: DocumentReference) => void
 }) {
   const [open, setOpen] = useState(false)
+  const card = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLElement | null>(null)
   return (
-    <>
-      <HoverCard>
-        <HoverCardTrigger
-          render={<button type="button" />}
-          onClick={() => setOpen(true)}
-          className="cursor-pointer rounded-sm text-primary underline decoration-primary/35 decoration-dotted underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {children}
-        </HoverCardTrigger>
-        <HoverCardContent className="max-h-96 w-96 max-w-[85vw] overflow-y-auto">
-          <p className="mb-1 font-medium">{reference.label}</p>
-          <ReviewReferenceContent reference={reference} {...context} />
-        </HoverCardContent>
-      </HoverCard>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{reference.label}</DialogTitle>
-            <DialogDescription>
-              Reference from this review’s captured changes.
-            </DialogDescription>
-          </DialogHeader>
-          <ReviewReferenceContent reference={reference} {...context} />
-          {onOpenReference && (
-            <Button
-              variant="secondary"
-              onClick={() => {
-                onOpenReference(reference)
-                setOpen(false)
-              }}
-            >
-              Open alongside the document
-            </Button>
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
+    <HoverCard open={open} onOpenChange={setOpen}>
+      <HoverCardTrigger
+        ref={(element) => {
+          trigger.current = element
+        }}
+        render={<button type="button" />}
+        onClick={() => setOpen(true)}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setOpen(false)
+          if (event.key === "Tab" && !event.shiftKey && open) {
+            const action =
+              card.current?.querySelector<HTMLButtonElement>("button")
+            if (action) {
+              event.preventDefault()
+              action.focus()
+            }
+          }
+        }}
+        className="cursor-pointer rounded-sm text-primary underline decoration-primary/35 decoration-dotted underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {children}
+      </HoverCardTrigger>
+      <HoverCardContent
+        ref={card}
+        className="max-h-96 w-96 max-w-[85vw] overflow-y-auto"
+        onKeyDown={(event) => {
+          if (
+            event.key === "Escape" ||
+            (event.key === "Tab" && event.shiftKey)
+          ) {
+            event.preventDefault()
+            trigger.current?.focus()
+            if (event.key === "Escape") setOpen(false)
+          }
+        }}
+      >
+        <p className="mb-1 font-medium">{reference.label}</p>
+        <ReviewReferenceContent
+          reference={reference}
+          onOpenReference={
+            onOpenReference
+              ? (value) => {
+                  setOpen(false)
+                  onOpenReference(value)
+                }
+              : undefined
+          }
+        />
+      </HoverCardContent>
+    </HoverCard>
   )
 }
 
@@ -281,12 +182,11 @@ export function ReviewMarkdown({
   ...context
 }: Context & {
   document: ReviewDocument
-  onOpenReference?: (reference: DocumentReference) => void
+  onOpenReference: (reference: DocumentReference) => void
   className?: string
 }) {
   const [openedTerm, setOpenedTerm] = useState<DocumentTerm | null>(null)
-  const [openedReference, setOpenedReference] =
-    useState<DocumentReference | null>(null)
+  const [referenceError, setReferenceError] = useState("")
   const link = useCallback(
     (href: string, children: ReactNode) => {
       const match = /^reviewbox:(ref|term)\/([a-zA-Z0-9_-]+)$/.exec(href)
@@ -297,7 +197,6 @@ export function ReviewMarkdown({
           <ReferenceLink
             reference={reference}
             onOpenReference={onOpenReference}
-            {...context}
           >
             {children}
           </ReferenceLink>
@@ -331,9 +230,10 @@ export function ReviewMarkdown({
             onReference={(id) => {
               const reference = document.references.find((r) => r.id === id)
               if (reference) {
-                if (onOpenReference) onOpenReference(reference)
-                else setOpenedReference(reference)
-              }
+                setReferenceError("")
+                onOpenReference(reference)
+              } else
+                setReferenceError("This captured reference is unavailable.")
             }}
             onTerm={(id) => {
               const term = [
@@ -416,7 +316,13 @@ export function ReviewMarkdown({
           (r) => r.id === source.trim()
         )
         return reference ? (
-          <ReviewReferenceContent reference={reference} {...context} />
+          <section className="my-4 space-y-2 rounded-lg border p-4">
+            <p className="font-medium">{reference.label}</p>
+            <ReviewReferenceContent
+              reference={reference}
+              onOpenReference={onOpenReference}
+            />
+          </section>
         ) : (
           <p className="text-sm text-muted-foreground">
             This captured reference is unavailable.
@@ -428,7 +334,7 @@ export function ReviewMarkdown({
         return (
           <MermaidBlock
             chart={source.trim()}
-            showSource={context.level === "developer"}
+            showSource={context.level === "technical"}
           />
         )
       // Real source is only rendered by a verified source reference, never a model-authored fence.
@@ -452,32 +358,24 @@ export function ReviewMarkdown({
       >
         {document.body}
       </MarkdownRenderer>
+      {referenceError && <p role="alert">{referenceError}</p>}
       <Dialog
-        open={!!openedTerm || !!openedReference}
+        open={!!openedTerm}
         onOpenChange={(open) => {
           if (!open) {
             setOpenedTerm(null)
-            setOpenedReference(null)
           }
         }}
       >
         <DialogContent className="max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
-              {openedTerm?.term ?? openedReference?.label}
-            </DialogTitle>
-            <DialogDescription>
-              {openedTerm?.definition ??
-                "Reference from this review’s captured changes."}
-            </DialogDescription>
+            <DialogTitle>{openedTerm?.term}</DialogTitle>
+            <DialogDescription>{openedTerm?.definition}</DialogDescription>
           </DialogHeader>
           {openedTerm && (
             <p className="text-sm text-muted-foreground">
               {openedTerm.context}
             </p>
-          )}
-          {openedReference && (
-            <ReviewReferenceContent reference={openedReference} {...context} />
           )}
         </DialogContent>
       </Dialog>

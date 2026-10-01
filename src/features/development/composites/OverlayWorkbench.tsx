@@ -1,6 +1,8 @@
 "use client"
 
 import { useTheme } from "next-themes"
+import { useEffect, useState } from "react"
+import { ReviewMarkdown } from "@/features/markdown/components/ReviewMarkdown"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -89,6 +91,60 @@ import { Toaster, toast } from "@/components/ui/toast"
 const rows = Array.from({ length: 60 }, (_, index) => `Passage ${index + 1}`)
 const scrollable = "max-h-64 overflow-y-auto"
 
+/** Recreate parent props as native polling does, without changing the document. */
+function LiveReviewDocument() {
+  const [revision, setRevision] = useState(0)
+  const [openedSource, setOpenedSource] = useState("")
+  useEffect(() => {
+    const timer = setInterval(() => setRevision((value) => value + 1), 800)
+    return () => clearInterval(timer)
+  }, [])
+  return (
+    <section className="mt-8" data-testid="live-review-document">
+      <p role="status" data-testid="document-refresh-count">
+        {revision}
+      </p>
+      <output data-testid="opened-source">{openedSource}</output>
+      <ReviewMarkdown
+        onOpenReference={(reference) =>
+          setOpenedSource(
+            `${reference.sourceId}:${reference.startLine}-${reference.endLine}`
+          )
+        }
+        reviewId="fixture"
+        snapshotId="snapshot"
+        level="essential"
+        files={[]}
+        glossary={[
+          {
+            id: "snapshot",
+            term: "Snapshot",
+            definition: "A frozen copy of the reviewed changes.",
+            context: `Definition context at update ${revision}.`,
+          },
+        ]}
+        document={{
+          body: "[Snapshot](reviewbox:term/snapshot) and [Captured behavior](reviewbox:ref/behavior).\n\n```summary\n[Embedded definition](reviewbox:term/snapshot).\n```",
+          readingSeconds: 10,
+          termAliases: {},
+          terms: [],
+          references: [
+            {
+              id: "behavior",
+              label: "Captured behavior",
+              explanation:
+                "A reference keeps its dialog open while progress updates.",
+              sourceId: "file:fixture.ts",
+              startLine: 1,
+              endLine: 1,
+            },
+          ],
+        }}
+      />
+    </section>
+  )
+}
+
 function ReadingContent() {
   return rows.map((row) => (
     <p key={row} className="py-2">
@@ -124,6 +180,7 @@ export function OverlayWorkbench() {
         className="pointer-events-none fixed inset-0 -z-10 bg-[repeating-linear-gradient(90deg,var(--background)_0px,var(--background)_8px,var(--primary)_8px,var(--primary)_16px)]"
       />
       <h1 className="mb-4 text-xl">Overlay scroll validation</h1>
+      <LiveReviewDocument />
       <div className="mb-4 flex gap-2">
         <Button onClick={() => setTheme("light")}>Light</Button>
         <Button onClick={() => setTheme("dark")}>Dark</Button>

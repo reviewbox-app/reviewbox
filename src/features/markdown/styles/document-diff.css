@@ -1,0 +1,90 @@
+.document-diff {
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+
+.document-diff-row {
+  display: grid;
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.document-diff[data-layout="split"] .document-diff-row {
+  max-width: 1440px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.document-diff-block {
+  min-width: 0;
+  padding: 0.5rem 1.5rem 1rem;
+  border-inline-start: 2px solid transparent;
+}
+
+.document-diff[data-layout="split"] .document-diff-block:last-child {
+  border-inline-start-color: var(--border);
+}
+
+.document-diff-block[data-change="added"] {
+  background: var(--diff-added-bg);
+  border-inline-start-color: var(--diff-added-fg);
+}
+
+.document-diff-block[data-change="removed"] {
+  background: var(--diff-removed-bg);
+  border-inline-start-color: var(--diff-removed-fg);
+}
+
+.document-diff-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+
+[data-change="added"] > .document-diff-label {
+  color: var(--diff-added-fg);
+}
+
+[data-change="removed"] > .document-diff-label {
+  color: var(--diff-removed-fg);
+}
+
+.document-diff-detail {
+  border: 1px solid currentColor;
+  border-radius: 0.5rem;
+  padding-inline: 0.4rem;
+}
+
+.document-diff-block .markdown > :first-child {
+  margin-top: 0;
+}
+
+.document-diff-block .markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.document-diff-text {
+  color: inherit;
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+[data-change="added"] .document-diff-text {
+  background: color-mix(in srgb, var(--diff-added-fg) 25%, transparent);
+}
+
+[data-change="removed"] .document-diff-text {
+  background: color-mix(in srgb, var(--diff-removed-fg) 25%, transparent);
+}
+
+/* Keep code syntax visible on the same subdued diff surface as surrounding prose. */
+.document-diff-block .markdown-code {
+  background: transparent;
+}

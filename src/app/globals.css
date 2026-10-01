@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "../features/markdown/styles/markdown.css";
+@import "../features/markdown/styles/document-diff.css";
 
 @plugin "@tailwindcss/typography";
 
@@ -94,7 +95,7 @@
   --popover-foreground: oklch(1 0 0);
   --primary: #3969ff;
   --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(1 0 0 / 10%);
+  --secondary: oklch(1 0 0 / 20%);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(1 0 0 / 10%);
   --muted-foreground: oklch(1 0 0 / 50%);
@@ -140,7 +141,8 @@
   --color-review-step: var(--review-step);
   --color-diff-added: var(--diff-added-fg);
   --color-diff-removed: var(--diff-removed-fg);
-  --radius-panel: 24px;
+  --color-git-modified: var(--git-modified);
+  --radius-panel: 12px;
 }
 
 /* Reading states, diff and syntax colors from RB / Colors in the prototype. */
@@ -156,6 +158,7 @@
   --diff-removed-bg: #e7000b0d;
   --diff-removed-gutter: #e7000b1f;
   --diff-removed-fg: #c10007;
+  --git-modified: #2563eb;
 }
 .dark {
   --review-validated: #4ade80;
@@ -169,6 +172,7 @@
   --diff-removed-bg: #ff646712;
   --diff-removed-gutter: #ff646729;
   --diff-removed-fg: #fca5a5;
+  --git-modified: #93c5fd;
 }
 
 /* Floating bars keep 80% of their surface and blur what scrolls beneath. */

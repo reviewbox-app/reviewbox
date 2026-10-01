@@ -7,7 +7,7 @@ import type {
 import { ReviewMarkdown } from "./ReviewMarkdown"
 function render(
   body: string,
-  level: ReadingLevel = "intermediate",
+  level: ReadingLevel = "explained",
   extra: Partial<ReviewDocument> = {}
 ) {
   return renderToStaticMarkup(
@@ -24,18 +24,19 @@ function render(
       reviewId="review"
       snapshotId="snapshot"
       files={[]}
+      onOpenReference={() => {}}
     />
   )
 }
 describe("review documents", () => {
-  test("only source references may render real code; intermediate never falls back", () => {
+  test("source references render explanations without loading code", () => {
     const html = render(
       "```typescript\nconst secret = 42\n```\n\n```source\nmissing\n```"
     )
     expect(html).not.toContain("const secret")
     expect(html).toContain("captured reference is unavailable")
     expect(
-      render("```source\nknown\n```", "intermediate", {
+      render("```source\nknown\n```", "explained", {
         references: [
           {
             id: "known",
@@ -47,12 +48,12 @@ describe("review documents", () => {
           },
         ],
       })
-    ).toContain("Loading the captured reference")
+    ).toContain("Behavior")
   })
-  test("beginner supports pseudo-code while keeping diagram source hidden", () => {
+  test("legacy essential documents support pseudo-code while keeping diagram source hidden", () => {
     const html = render(
       '```pseudocode\nRETURN 42\n```\n\n```mermaid\ngraph TD; A-->B\n```\n\n```before-after\n{"before":["One attempt"],"after":["Two attempts"]}\n```',
-      "beginner"
+      "essential"
     )
     expect(html).toContain("RETURN")
     expect(html).not.toContain("A--&gt;B")
@@ -71,18 +72,18 @@ describe("review documents", () => {
   test("summary blocks preserve the reading level restrictions", () => {
     const body =
       "````summary\nA short summary.\n\n```typescript\nconst privateValue = 42\n```\n\n```pseudocode\nRETURN privateValue\n```\n````"
-    const beginner = render(body, "beginner")
-    const intermediate = render(body, "intermediate")
-    expect(beginner).toContain("A short summary")
-    expect(beginner).not.toContain("const privateValue")
-    expect(beginner).toContain("RETURN")
-    expect(intermediate).not.toContain("const privateValue")
-    expect(intermediate).toContain("RETURN")
+    const essential = render(body, "essential")
+    const explained = render(body, "explained")
+    expect(essential).toContain("A short summary")
+    expect(essential).not.toContain("const privateValue")
+    expect(essential).toContain("RETURN")
+    expect(explained).not.toContain("const privateValue")
+    expect(explained).toContain("RETURN")
   })
   test("controlled references become keyboard accessible controls, never external links", () => {
     const html = render(
       "[Value](reviewbox:ref/value) and [Term](reviewbox:term/term)",
-      "developer",
+      "technical",
       {
         references: [
           {

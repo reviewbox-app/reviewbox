@@ -7,6 +7,7 @@ const workerEntries = {
   css: "monaco-editor/languages/features/css/css.worker.js",
   html: "monaco-editor/languages/features/html/html.worker.js",
   typescript: "monaco-editor/languages/features/typescript/ts.worker.js",
+  "document-diff": "../src/features/markdown/workers/documentDiff.worker.ts",
 } as const
 
 const outdir = fileURLToPath(new URL("../public/monaco/", import.meta.url))
@@ -18,6 +19,8 @@ await Promise.all(
       outdir,
       naming: `${name}.worker.js`,
       target: "browser",
+      // Markdown entity decoding has separate DOM and worker entrypoints.
+      conditions: ["worker"],
       format: "esm",
       minify: true,
       splitting: false,
