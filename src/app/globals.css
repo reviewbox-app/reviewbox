@@ -197,28 +197,45 @@
   border-left: 2px solid var(--review-validated);
 }
 
-.custom-scrollbar {
-  scrollbar-color: hsl(var(--card) / 0.35) transparent;
-  scrollbar-width: thin;
-}
+/* Native scrolling only: Monaco and ScrollArea own their scrollbar rendering.
+   Keep this in the base layer so intentional no-scrollbar utilities still win. */
+@layer base {
+  :where(*):not(
+    :where(
+      .monaco-editor,
+      .monaco-editor *,
+      .monaco-diff-editor,
+      .monaco-diff-editor *,
+      [data-slot="scroll-area"],
+      [data-slot="scroll-area"] *
+    )
+  ) {
+    scrollbar-color: rgb(255 255 255 / 50%) transparent;
+    scrollbar-width: thin;
 
-@supports selector(::-webkit-scrollbar) {
-  .custom-scrollbar {
-    scrollbar-color: auto;
-    scrollbar-width: auto;
+    @supports selector(::-webkit-scrollbar) {
+      scrollbar-color: auto;
+      scrollbar-width: auto;
+    }
+
+    &::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+      margin-block: 25px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background-color: rgb(255 255 255 / 50%);
+      border-radius: 50px;
+    }
   }
-}
 
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-  margin-block: 25px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--card) / 0.35);
-  border-radius: 50px;
+  /* scrollbar-color inherits: do not leak it into independently styled widgets. */
+  :where(.monaco-editor, .monaco-diff-editor, [data-slot="scroll-area"]) {
+    scrollbar-color: auto;
+  }
 }
