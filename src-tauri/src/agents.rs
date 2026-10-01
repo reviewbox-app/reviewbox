@@ -2,7 +2,9 @@ mod claude;
 mod codex;
 mod continuity;
 mod exploration;
+mod outline_preview;
 mod preparation;
+pub(crate) use outline_preview::{OutlineItem, OutlineObserver};
 pub(crate) use preparation::PreparationRuntime;
 pub(crate) mod models;
 pub(crate) mod providers;
@@ -114,7 +116,11 @@ impl Transport {
         })
     }
     async fn send(&mut self, value: &Value) -> AppResult<()> {
-        let mut bytes = serde_json::to_vec(value)?;
+        let mut bytes = if value.pointer("/params/outputSchema").is_some() {
+            outline_preview::schema_message(value)?
+        } else {
+            serde_json::to_vec(value)?
+        };
         bytes.push(b'\n');
         let input = self
             .input
@@ -176,6 +182,7 @@ struct Stream {
     sequence: u32,
     channel: Channel<AgentEvent>,
     text: String,
+    preview: Option<outline_preview::Preview>,
 }
 impl Stream {
     fn emit(&mut self, kind: &str, text: &str) -> AppResult<()> {
@@ -310,6 +317,7 @@ pub async fn run(
         sequence: 0,
         channel,
         text: String::new(),
+        preview: None,
     };
     let result = async {
         let config = settings(&storage)?

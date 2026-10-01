@@ -21,7 +21,7 @@ for line in sys.stdin:
  value=json.loads(line);method=value.get('method');rpc=value.get('id')
  if method=='initialize':send({'id':rpc,'result':{}})
  if method=='model/list':
-  models=[{'model':'gpt-6-sol','displayName':'Sol','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]}]
+  models=[{'model':'gpt-6.1-sol','displayName':'Sol','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]}]
   if not (base/'missing-helper').exists():models.append({'model':'gpt-6-luna','displayName':'Luna','supportedReasoningEfforts':[{'reasoningEffort':'high'}]})
   send({'id':rpc,'result':{'data':models,'nextCursor':None}})
  if method=='thread/start':
@@ -61,21 +61,34 @@ for line in sys.stdin:
   key=item['id'];data=item['input']
   if key=='outline':
    manifest=json.loads(pathlib.Path(context['reviewManifest']).read_text());change=json.loads(pathlib.Path(manifest['changes'][0]['metadata']).read_text())
-   choices=[f['id'] for f in data['files'] if not (base/'skip-all').exists() and f['path'] not in (json.loads((base/'skip-paths').read_text()) if (base/'skip-paths').exists() else [])]
-   result={'translationFiles':choices,'topics':[{'title':'Amount','brief':'The amount changes.','steps':[{'title':'Explain amount '+str(i),'anchors':[change['anchors'][0]]} for i in range(4)]}]}
-  elif key.startswith('pseudo:'):
-   segment=data['segment'];result={'blocks':[{'startLine':segment['startLine'],'endLine':segment['endLine'],'text':'Remember the captured amount.'}]}
+   result={'topics':[{'title':'Amount','brief':'The amount changes.','steps':[{'draftId':'0:'+str(i),'title':'Explain amount '+str(i),'writingBrief':'Private direction '+str(i)+': explain the amount before and after this change.','contextSourceIds':[],'anchors':[change['anchors'][0]]} for i in range(int((base/'step-count').read_text()) if (base/'step-count').exists() else 4)]}]}
   else:
-   result={level:{'body':body,'readingSeconds':30,'references':[],'terms':[]}for level,body in [('beginner','The remembered amount changes.'),('intermediate','The stored amount now reflects the requested value.'),('developer','The assignment changes its value while retaining its public role.')]}
+   assert data['step']['writingBrief'].startswith('Private direction '+key.rsplit(':',1)[1]+': explain the amount before and after this change.')
+   assert data['step']['contextSourceIds']==[]
+   record('writing',id=key,brief=data['step']['writingBrief'])
+   if (base/'descendants').exists():
+    import subprocess
+    child=subprocess.Popen(['sleep','90']);record('descendant',id=key,child=child.pid)
+   result={level:{'body':body,'readingSeconds':30,'references':[],'terms':[]}for level,body in [('essential','The remembered amount changes.'),('explained','The stored amount now reflects the requested value.'),('technical','The assignment changes its value while retaining its public role.')]}
    if (base/'repair').exists() and key=='step:0:1':
     flag=base/'repaired'
     if not flag.exists():flag.write_text('1');result={'invalid':True}
   results.append({'id':key,'result':result})
  if (base/'pause').exists() and any(i['id'].startswith('step:') for i in batch['items']):
   while (base/'pause').exists():time.sleep(.03)
- if (base/'pause-translations').exists() and any(i['id'].startswith('pseudo:') for i in batch['items']):
-  while (base/'pause-translations').exists():time.sleep(.03)
  payload={'items':results}
+ if (base/'stream-outline').exists() and any(i['id']=='outline' for i in batch['items']):
+  text=json.dumps(payload)
+  send({'method':'item/started','params':{'threadId':thread,'turnId':turn,'item':{'type':'agentMessage','id':'final','phase':'final_answer'}}})
+  for offset in range(0,len(text),30):
+   send({'method':'item/agentMessage/delta','params':{'threadId':thread,'turnId':turn,'itemId':'final','delta':text[offset:offset+30]}});time.sleep(.003)
+  while (base/'outline-pause').exists():time.sleep(.03)
+  if (base/'revise-outline').exists():
+   steps=payload['items'][0]['result']['topics'][0]['steps']
+   steps[0]['writingBrief']+=' Revised.'
+   steps.pop(1);steps.reverse()
+  if (base/'outline-fails').exists():
+   send({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':turn,'status':'failed','error':{'message':'Outline rejected'}}}});continue
  if (base/'oversize').exists() and len(results)>1:payload['padding']='x'*600000
  if (base/'rate-limit').exists():
   send({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':turn,'status':'failed','error':{'codexErrorInfo':'rateLimitExceeded','message':'capacity'}}}});record('end');continue
@@ -124,7 +137,7 @@ fn start(manager: &PreparationManager, storage: &Storage, workspace: &Workspace)
 }
 fn calls(dir: &Path) -> Vec<Value> {
     fs::read_to_string(dir.join("parallel-calls"))
-        .unwrap()
+        .unwrap_or_default()
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect()
@@ -139,28 +152,26 @@ fn schedules_parallel_batches_isolates_children_and_repairs_only_invalid_items()
         s.status != PreparationStatus::Running
     });
     assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
-    assert_eq!(state.step_titles.len(), 4);
+    assert_eq!(state.steps.len(), 4);
     assert_eq!(state.completed_batches, state.total_batches);
     assert!(state.events.iter().any(|event| matches!(&event.progress, Some(AgentProgress::Delegation { model: Some(model), .. }) if model == "gpt-6-luna")));
     assert!(state.events.iter().any(|event| matches!(&event.progress, Some(AgentProgress::Delegation { id, model: Some(model), .. }) if id.ends_with("new-child") && model == "gpt-6-luna")));
     let calls = calls(dir.path());
     for event in calls.iter().filter(|event| event["event"] == "start") {
         let items = event["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "One step per writing call");
         assert!(
             items
                 .iter()
                 .all(|item| !item.as_str().unwrap().starts_with("file:")),
             "File explanations must never be scheduled"
         );
-        let translation = items[0].as_str().unwrap().starts_with("pseudo:");
-        assert_eq!(
-            event["model"],
-            if translation {
-                "gpt-6-luna"
-            } else {
-                "gpt-6-sol"
-            }
+        assert!(
+            items
+                .iter()
+                .all(|id| !id.as_str().unwrap().starts_with("pseudo:"))
         );
+        assert_eq!(event["model"], "gpt-6.1-sol");
     }
     let mut active = 0;
     let mut maximum = 0;
@@ -180,7 +191,7 @@ fn schedules_parallel_batches_isolates_children_and_repairs_only_invalid_items()
             _ => {}
         }
     }
-    assert_eq!(maximum, 3);
+    assert_eq!(maximum, 4);
     assert!(processes.len() <= 4);
     assert_eq!(counts["step:0:0"], 1);
     assert_eq!(counts["step:0:1"], 2);
@@ -269,11 +280,11 @@ fn two_preparations_share_category_and_global_limits() {
         assert!(start.elapsed() < Duration::from_secs(20));
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(max >= 3);
+    assert_eq!(max, 8);
 }
 
 #[test]
-fn oversized_groups_split_without_losing_results_and_later_runs_reuse_translations() {
+fn oversized_document_groups_split_without_losing_results() {
     let (dir, storage, workspace) = fixture();
     fs::write(dir.path().join("oversize"), "").unwrap();
     let manager = PreparationManager::default();
@@ -282,26 +293,15 @@ fn oversized_groups_split_without_losing_results_and_later_runs_reuse_translatio
         s.status != PreparationStatus::Running
     });
     assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
-    let pseudo_calls = |events: Vec<Value>| {
-        events
-            .into_iter()
-            .filter(|e| e["event"] == "start")
-            .flat_map(|e| e["items"].as_array().unwrap().clone())
-            .filter(|id| id.as_str().unwrap().starts_with("pseudo:"))
-            .count()
-    };
-    let before = pseudo_calls(calls(dir.path()));
-    assert!(before > 0);
-    fs::remove_file(dir.path().join("oversize")).unwrap();
-    start(&manager, &storage, &workspace);
-    let state = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.status != PreparationStatus::Running
-    });
-    assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
-    assert_eq!(
-        pseudo_calls(calls(dir.path())),
-        before,
-        "a second preparation reuses verified translations"
+    assert!(
+        calls(dir.path())
+            .iter()
+            .filter(|event| event["event"] == "start")
+            .all(|event| event["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|id| !id.as_str().unwrap().starts_with("pseudo:")))
     );
 }
 #[test]
@@ -342,7 +342,7 @@ fn missing_helper_stops_before_generation_without_a_model_fallback() {
         s.status != PreparationStatus::Running
     });
     assert_eq!(state.status, PreparationStatus::Failed);
-    assert_eq!(state.error.unwrap().code, "translation_model");
+    assert_eq!(state.error.unwrap().code, "helper_model");
     assert!(!calls(dir.path()).iter().any(|e| e["event"] == "start"));
 }
 
@@ -379,249 +379,6 @@ fn uncertain_cleanup_replaces_coordinators_without_discarding_valid_results() {
 }
 
 #[test]
-fn model_selection_precedes_translation_and_is_not_an_extension_filter() {
-    let (dir, storage, workspace) = fixture();
-    let root = dir.path().join("repo");
-    for (path, text) in [
-        ("README.md", "# Description\nOnly documentation.\n"),
-        ("settings.json", "{\"mode\":\"light\"}\n"),
-        (
-            "types.ts",
-            "export interface Options { enabled: boolean }\n",
-        ),
-        ("copy.ts", "const amount = 2;\n"),
-        ("workflow.json", "{\"if\":\"ready\",\"then\":\"run\"}\n"),
-    ] {
-        fs::write(root.join(path), text).unwrap();
-    }
-    let workspace = reviews::create(
-        &storage,
-        CaptureRequest {
-            repository_id: workspace.review.repository_id,
-            scope: Scope::Local,
-            base: None,
-            target: None,
-            include_untracked: true,
-        },
-    )
-    .unwrap();
-    let skipped = ["README.md", "settings.json", "types.ts", "copy.ts"];
-    fs::write(
-        dir.path().join("skip-paths"),
-        serde_json::to_vec(&skipped).unwrap(),
-    )
-    .unwrap();
-    let manager = PreparationManager::default();
-    start(&manager, &storage, &workspace);
-    let state = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.status != PreparationStatus::Running
-    });
-    assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
-    let selection = state.translation_selection.unwrap();
-    assert_eq!((selection.selected_files, selection.skipped_files), (2, 4));
-    let events = calls(dir.path());
-    let first_start = events
-        .iter()
-        .position(|event| event["event"] == "start")
-        .unwrap();
-    let first_end = events
-        .iter()
-        .position(|event| event["event"] == "end")
-        .unwrap();
-    assert_eq!(events[first_start]["items"], json!(["outline"]));
-    assert!(
-        !events[first_start + 1..first_end]
-            .iter()
-            .any(|event| event["event"] == "start")
-    );
-    let mut review = reviews::load(&storage, &workspace.review.id).unwrap();
-    for file in review.review.files.clone() {
-        let content = reader::read_file(&storage, &review.review.id, &file.id).unwrap();
-        assert!(
-            content.documents.is_none(),
-            "Only contextual steps have documents"
-        );
-        assert_eq!(
-            content.pseudocode_selected == Some(false),
-            skipped.contains(&file.path.as_str())
-        );
-        if content.pseudocode_selected == Some(false) {
-            assert!(
-                content.translations.is_empty(),
-                "Identical cached bytes must not resurrect an omitted translation"
-            );
-            review = reviews::apply(
-                &storage,
-                &review.review.id,
-                review.review.revision,
-                ReviewAction::ValidateFile {
-                    file_id: file.id,
-                    level: ReadingLevel::Intermediate,
-                },
-            )
-            .unwrap();
-        } else {
-            assert!(
-                !content.translations.is_empty(),
-                "A selected JSON file is translated too"
-            );
-        }
-    }
-    assert_eq!(review.review.decisions.len(), skipped.len());
-}
-
-#[test]
-fn zero_selected_files_is_complete_and_only_selected_ids_are_validated() {
-    let (dir, storage, workspace) = fixture();
-    fs::write(dir.path().join("skip-all"), "").unwrap();
-    let manager = PreparationManager::default();
-    start(&manager, &storage, &workspace);
-    let state = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.status != PreparationStatus::Running
-    });
-    assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
-    assert_eq!(state.translation_selection.unwrap().selected_files, 0);
-    assert!(
-        calls(dir.path())
-            .iter()
-            .all(|event| event["items"].as_array().is_none_or(|items| items
-                .iter()
-                .all(|item| !item.as_str().unwrap().starts_with("pseudo:"))))
-    );
-    let checkpoint = optional_checkpoint(
-        &storage,
-        &format!("{}:{}", workspace.review.repository_id, workspace.review.id),
-    )
-    .unwrap()
-    .unwrap();
-    let outline: Outline = serde_json::from_value(checkpoint.results["outline"].clone()).unwrap();
-    validate_outline(&outline, &workspace.snapshot).unwrap();
-    assert!(outline.translation_files.is_empty());
-    let selected = reader::files(&workspace.snapshot)[0].id.clone();
-    let mut invalid = outline.clone();
-    invalid.translation_files = vec![selected.clone(), selected.clone()];
-    assert!(validate_outline(&invalid, &workspace.snapshot).is_err());
-    invalid.translation_files = vec!["unknown".into()];
-    assert!(validate_outline(&invalid, &workspace.snapshot).is_err());
-    invalid.translation_files = vec![selected];
-    validate_outline(&invalid, &workspace.snapshot).unwrap();
-}
-
-#[test]
-fn translation_groups_bound_file_count_without_losing_versions() {
-    let units: Vec<_> = (0..20)
-        .flat_map(|file| {
-            (0..2).map(move |side| {
-                unit(
-                    format!("pseudo:{file}:{side}"),
-                    format!("file-{file}"),
-                    PreparationPhase::Pseudocode,
-                    json!({"file":format!("file-{file}"),"text":"x".repeat(12000)}),
-                    Kind::Translation(Segment {
-                        start_line: 1,
-                        end_line: 1,
-                        text: "x".into(),
-                    }),
-                )
-            })
-        })
-        .collect();
-    let expected: BTreeSet<_> = units.iter().map(|unit| unit.key.clone()).collect();
-    let groups = translation_groups(units);
-    let mut seen = BTreeSet::new();
-    for group in groups {
-        assert!(
-            group
-                .iter()
-                .map(|unit| unit.input["file"].as_str().unwrap())
-                .collect::<BTreeSet<_>>()
-                .len()
-                <= 9
-        );
-        for unit in group {
-            assert!(seen.insert(unit.key));
-        }
-    }
-    assert_eq!(seen, expected);
-}
-
-#[test]
-fn eight_coordinators_keep_document_capacity_while_translating_many_files() {
-    let (dir, storage, first) = fixture();
-    for i in 0..72 {
-        fs::write(
-            dir.path().join("repo").join(format!("algorithm-{i}.ts")),
-            format!("export function f{i}(x) {{ return x > {i} ? x * 2 : 0; }}\n"),
-        )
-        .unwrap();
-    }
-    let workspace = reviews::create(
-        &storage,
-        CaptureRequest {
-            repository_id: first.review.repository_id,
-            scope: Scope::Local,
-            base: None,
-            target: None,
-            include_untracked: true,
-        },
-    )
-    .unwrap();
-    // Hold document batches while translation groups saturate their own six slots.
-    fs::write(dir.path().join("pause"), "").unwrap();
-    fs::write(dir.path().join("pause-translations"), "").unwrap();
-    let manager = PreparationManager::default();
-    start(&manager, &storage, &workspace);
-    let state = wait(&manager, &storage, &workspace.review.id, |state| {
-        state.active_batches.len() == MAX_COORDINATORS || state.status != PreparationStatus::Running
-    });
-    assert_eq!(
-        state.status,
-        PreparationStatus::Running,
-        "{:?}",
-        state.error
-    );
-    assert_eq!(
-        state
-            .active_batches
-            .iter()
-            .filter(|batch| batch.phase == PreparationPhase::Documents)
-            .count(),
-        2
-    );
-    assert_eq!(
-        state
-            .active_batches
-            .iter()
-            .filter(|batch| batch.phase == PreparationPhase::Pseudocode)
-            .count(),
-        6
-    );
-    fs::remove_file(dir.path().join("pause")).unwrap();
-    fs::remove_file(dir.path().join("pause-translations")).unwrap();
-    let ready = wait(&manager, &storage, &workspace.review.id, |state| {
-        state.status != PreparationStatus::Running
-    });
-    assert_eq!(ready.status, PreparationStatus::Ready, "{:?}", ready.error);
-    assert_eq!(ready.step_titles.len(), 4);
-    assert!(
-        ready
-            .phases
-            .iter()
-            .all(|phase| phase.phase != PreparationPhase::Files)
-    );
-    assert!(
-        calls(dir.path())
-            .iter()
-            .filter(|event| event["event"] == "start")
-            .all(|event| event["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|item| !item.as_str().unwrap().starts_with("file:")))
-    );
-}
-
-#[test]
 fn free_outline_accepts_empty_and_large_tours_and_long_documents() {
     let (_dir, storage, workspace) = fixture();
     let change = &workspace.snapshot.changes[0];
@@ -631,8 +388,8 @@ fn free_outline_accepts_empty_and_large_tours_and_long_documents() {
         passage_id: change.passages[0].id.clone(),
     };
     let mut outline = Outline {
+        removed_steps: vec![],
         topics: vec![],
-        translation_files: vec![],
     };
     validate_outline(&outline, &workspace.snapshot).unwrap();
     outline.topics.push(OutlineTopic {
@@ -640,7 +397,12 @@ fn free_outline_accepts_empty_and_large_tours_and_long_documents() {
         brief: "Context".into(),
         steps: (0..30)
             .map(|i| OutlineStep {
+                draft_id: format!("0:{i}"),
+                previous_step_id: None,
+                reuse: false,
                 title: format!("Step {i} {}", "explanation ".repeat(40)),
+                writing_brief: format!("Explain behavior {i} before and after the change."),
+                context_source_ids: vec![],
                 anchors: vec![anchor.clone()],
             })
             .collect(),
@@ -654,42 +416,72 @@ fn free_outline_accepts_empty_and_large_tours_and_long_documents() {
         reading_seconds: 60,
     };
     let documents = LevelDocuments {
+        dependencies: None,
+        context_sources: vec![],
         glossary: vec![],
-        beginner: doc(format!(
-            "{}\n```pseudocode\nIF ready\n  RETURN result\n```",
+        essential: doc(format!(
+            "{}\nThe result is returned when ready.",
             "Plain explanation. ".repeat(10_000)
         )),
-        intermediate: doc("Technical explanation of `a.ts`.".into()),
-        developer: doc("Tradeoffs and consequences.".into()),
+        explained: doc("Technical explanation of `a.ts`.".into()),
+        technical: doc("Tradeoffs and consequences.".into()),
     };
     validate_documents(&documents, &workspace.snapshot, &storage).unwrap();
 }
 #[test]
-fn condensed_translations_allow_gaps_and_no_logic() {
-    let source = Segment {
-        start_line: 1,
-        end_line: 10_000,
-        text: "source".into(),
+fn document_glossary_accepts_unused_definitions_but_rejects_broken_links() {
+    let (_dir, storage, workspace) = fixture();
+    let term = |id: &str| DocumentTerm {
+        id: id.into(),
+        term: "Atomic publication".into(),
+        definition: "Make the complete bundle visible together.".into(),
+        context: "Publishing a completed review.".into(),
     };
-    validate_translation(&TranslationResult { blocks: vec![] }, &source).unwrap();
-    validate_translation(
-        &TranslationResult {
-            blocks: vec![
-                PseudoBlock {
-                    start_line: 100,
-                    end_line: 105,
-                    text: "IF ready\n  RETURN result".into(),
-                },
-                PseudoBlock {
-                    start_line: 999,
-                    end_line: 1000,
-                    text: "HANDLE failure".into(),
-                },
-            ],
-        },
-        &source,
-    )
-    .unwrap();
+    let doc = |body: &str| ReviewDocument {
+        term_aliases: Default::default(),
+        body: body.into(),
+        terms: vec![],
+        references: vec![],
+        reading_seconds: 60,
+    };
+    let mut documents = LevelDocuments {
+        dependencies: None,
+        context_sources: vec![],
+        glossary: vec![term("shared")],
+        essential: doc("The finished review becomes available."),
+        explained: doc("The bundle is published after validation."),
+        technical: doc("The writer commits the verified bundle."),
+    };
+    documents.technical.terms.push(term("local"));
+    // Neither declared term occurs in any variant. This used to exhaust repairs.
+    validate_documents(&documents, &workspace.snapshot, &storage).unwrap();
+    for body in [
+        "Understand atomic publication.",
+        "Understand [the operation](reviewbox:term/shared).",
+    ] {
+        documents.essential.body = body.into();
+        validate_documents(&documents, &workspace.snapshot, &storage).unwrap();
+    }
+    documents.essential.body = "Read [the meaning](reviewbox:term/missing).".into();
+    assert_eq!(
+        validate_documents(&documents, &workspace.snapshot, &storage)
+            .unwrap_err()
+            .code,
+        "invalid_term"
+    );
+    documents.essential.body = "Read [the source](reviewbox:ref/missing).".into();
+    assert_eq!(
+        validate_documents(&documents, &workspace.snapshot, &storage)
+            .unwrap_err()
+            .code,
+        "invalid_reference"
+    );
+    documents.essential.body = "The finished review becomes available.".into();
+    documents.glossary.push(term("shared"));
+    assert!(validate_documents(&documents, &workspace.snapshot, &storage).is_err());
+    documents.glossary.pop();
+    documents.glossary[0].definition.clear();
+    assert!(validate_documents(&documents, &workspace.snapshot, &storage).is_err());
 }
 
 #[test]
@@ -699,10 +491,7 @@ fn an_empty_tour_publishes_manual_review_without_artificial_steps() {
         .iter()
         .map(|file| ReviewFileContent {
             file_id: file.id.clone(),
-            pseudocode_selected: Some(false),
-            pseudocode_skip_reason: None,
             documents: None,
-            translations: vec![],
         })
         .collect();
     let result = reader::publish_preparation(
@@ -719,13 +508,7 @@ fn an_empty_tour_publishes_manual_review_without_artificial_steps() {
     assert_eq!(result.review.position.context, ReadingContext::Files);
     assert!(result.review.topics.is_empty());
     let restored = reviews::load(&storage, &result.review.id).unwrap();
-    assert!(
-        restored
-            .review
-            .files
-            .iter()
-            .all(|file| file.pseudocode_selected == Some(false))
-    );
+    assert!(restored.review.files.iter().all(|file| !file.has_documents));
 }
 
 #[test]
@@ -743,4 +526,458 @@ fn structured_generation_does_not_accept_application_owned_aliases() {
             .get("termAliases")
             .is_none()
     );
+}
+
+#[test]
+fn preparation_needs_only_the_project_and_selected_helper_models() {
+    let (dir, storage, workspace) = fixture();
+    let executable = dir.path().join("parallel-codex");
+    let script = fs::read_to_string(&executable).unwrap().replace(
+        "'supportedReasoningEfforts':[{'reasoningEffort':'medium'}]",
+        "'supportedReasoningEfforts':[{'reasoningEffort':'medium'},{'reasoningEffort':'high'}]",
+    );
+    fs::write(&executable, script).unwrap();
+    fs::write(dir.path().join("missing-helper"), "").unwrap();
+    let mut settings = agents::settings(&storage).unwrap();
+    settings.helper_model = "gpt-6.1-sol".into();
+    agents::configure(&storage, settings).unwrap();
+    let manager = PreparationManager::default();
+    start(&manager, &storage, &workspace);
+    let state = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.status != PreparationStatus::Running
+    });
+    assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
+    assert!(
+        !storage
+            .root()
+            .join("translation-cache-logic-v2.sqlite3")
+            .exists()
+    );
+    assert!(
+        calls(dir.path())
+            .iter()
+            .filter(|e| e["event"] == "start")
+            .all(|e| e["model"] == "gpt-6.1-sol")
+    );
+}
+
+#[test]
+fn writing_briefs_validate_and_context_uses_the_shared_evidence_budget() {
+    let (_dir, _storage, mut workspace) = fixture();
+    let change = &workspace.snapshot.changes[0];
+    let mut content = change.after.clone().unwrap();
+    content.hash = "supplemental-content".into();
+    content.size = 65_537;
+    let anchor = CodeAnchor {
+        snapshot_id: workspace.snapshot.id.clone(),
+        change_id: change.id.clone(),
+        passage_id: change.passages[0].id.clone(),
+    };
+    workspace.snapshot.files.push(SnapshotFile {
+        path: "context.ts".into(),
+        content,
+    });
+    let context_id = "file:context.ts".to_owned();
+    let mut outline = Outline {
+        removed_steps: vec![],
+        topics: vec![OutlineTopic {
+            title: "Amounts".into(),
+            brief: "Public behavior".into(),
+            steps: vec![OutlineStep {
+                draft_id: "0:0".into(),
+                previous_step_id: None,
+                reuse: false,
+                title: "New amount".into(),
+                writing_brief:
+                    "Private note: explain the old and new amount and the effect of context.ts."
+                        .into(),
+                context_source_ids: vec![context_id.clone()],
+                anchors: vec![anchor.clone()],
+            }],
+        }],
+    };
+    validate_outline(&outline, &workspace.snapshot).unwrap();
+    let step = &outline.topics[0].steps[0];
+    let schema = unit(
+        "outline".into(),
+        "Outline".into(),
+        PreparationPhase::Outline,
+        json!({}),
+        Kind::Outline,
+    )
+    .schema();
+    let required = schema["$defs"]["OutlineStep"]["required"]
+        .as_array()
+        .unwrap();
+    assert!(required.contains(&json!("writingBrief")));
+    assert!(required.contains(&json!("contextSourceIds")));
+    let mut missing_note = serde_json::to_value(&outline).unwrap();
+    missing_note["topics"][0]["steps"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("writingBrief");
+    assert!(serde_json::from_value::<Outline>(missing_note).is_err());
+
+    let sources = reader::sources(&workspace.snapshot);
+    let inline = BTreeMap::from([("supplemental-content".into(), "x".repeat(65_537))]);
+    let input = document_input(&outline.topics[0], step, &sources, &inline);
+    assert_eq!(input["step"]["writingBrief"], step.writing_brief);
+    assert!(
+        input["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["sourceId"] == context_id)
+    );
+    let evidence = input["capturedSources"].as_array().unwrap();
+    let supplemental = evidence
+        .iter()
+        .find(|s| s["sourceId"] == context_id)
+        .unwrap();
+    assert_eq!(supplemental["readFromManifest"], true);
+    assert!(
+        supplemental.get("text").is_none(),
+        "Never truncate oversized context"
+    );
+    let small = BTreeMap::from([(
+        "supplemental-content".into(),
+        "Useful captured context".into(),
+    )]);
+    let supplied = document_input(&outline.topics[0], step, &sources, &small);
+    assert!(
+        supplied["capturedSources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["text"] == "Useful captured context")
+    );
+    let full_text: BTreeMap<_, _> = sources
+        .iter()
+        .map(|s| (s.hash.clone(), "x".repeat(40_000)))
+        .collect();
+    let bounded = document_input(&outline.topics[0], step, &sources, &full_text);
+    let evidence = bounded["capturedSources"].as_array().unwrap();
+    assert!(
+        evidence
+            .iter()
+            .filter_map(|s| s["text"].as_str())
+            .map(str::len)
+            .sum::<usize>()
+            <= 64 * 1024
+    );
+    assert!(evidence.iter().any(|s| s["readFromManifest"] == true));
+
+    let mut docs = LevelDocuments::default();
+    adaptation::attach_dependencies(
+        &mut docs,
+        &step.anchors,
+        &step.context_source_ids,
+        &workspace.snapshot,
+        "signature",
+    )
+    .unwrap();
+    assert!(
+        docs.dependencies
+            .as_ref()
+            .unwrap()
+            .sources
+            .iter()
+            .any(|s| s.source_id == context_id)
+    );
+    assert_eq!(
+        serde_json::to_value(&step.anchors).unwrap(),
+        json!([anchor])
+    );
+    adaptation::attach_dependencies(
+        &mut docs,
+        &step.anchors,
+        &[],
+        &workspace.snapshot,
+        "signature",
+    )
+    .unwrap();
+    assert!(
+        docs.dependencies
+            .as_ref()
+            .unwrap()
+            .sources
+            .iter()
+            .any(|s| s.source_id == context_id),
+        "Reassembly preserves coordinator-only dependencies"
+    );
+    let published = serde_json::to_value(&docs).unwrap().to_string();
+    assert!(!published.contains("Private note"));
+    assert!(!published.contains("writingBrief"));
+    assert!(
+        docs.context_sources.is_empty(),
+        "Coordinator dependencies do not become authored prose or references"
+    );
+
+    for ids in [
+        vec!["unknown".into()],
+        vec![context_id.clone(), context_id.clone()],
+    ] {
+        outline.topics[0].steps[0].context_source_ids = ids;
+        assert!(validate_outline(&outline, &workspace.snapshot).is_err());
+    }
+    outline.topics[0].steps[0].context_source_ids.clear();
+    validate_outline(&outline, &workspace.snapshot).unwrap();
+    outline.topics[0].steps[0].writing_brief = " \n ".into();
+    assert!(validate_outline(&outline, &workspace.snapshot).is_err());
+}
+
+#[test]
+fn eight_writers_and_complete_outline_previews_are_independent_of_final_output() {
+    let (dir, storage, workspace) = fixture();
+    fs::write(dir.path().join("step-count"), "12").unwrap();
+    for flag in ["stream-outline", "outline-pause", "pause"] {
+        fs::write(dir.path().join(flag), "").unwrap();
+    }
+    let manager = PreparationManager::default();
+    start(&manager, &storage, &workspace);
+    let preview = wait(&manager, &storage, &workspace.review.id, |s| {
+        !s.steps.is_empty() && s.steps.len() < 12
+    });
+    assert!(
+        !serde_json::to_string(&preview)
+            .unwrap()
+            .contains("Private direction")
+    );
+    let complete = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.steps.len() == 12
+    });
+    assert_eq!(complete.phase, PreparationPhase::Outline);
+    let concurrent = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.active_batches.len() == 8
+            && s.steps
+                .iter()
+                .filter(|s| s.status == PreparationStepStatus::Writing)
+                .count()
+                == 7
+    });
+    assert!(
+        concurrent
+            .active_batches
+            .iter()
+            .any(|b| b.phase == PreparationPhase::Outline)
+    );
+    assert!(calls(dir.path()).iter().any(|c| c["event"] == "writing"));
+    assert!(
+        reviews::load(&storage, &workspace.review.id)
+            .unwrap()
+            .review
+            .topics
+            .is_empty()
+    );
+    fs::remove_file(dir.path().join("outline-pause")).unwrap();
+    let writing = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.active_batches.len() == 8
+            && s.steps
+                .iter()
+                .filter(|s| s.status == PreparationStepStatus::Writing)
+                .count()
+                == 8
+    });
+    assert!(
+        writing
+            .steps
+            .iter()
+            .all(|s| s.status != PreparationStepStatus::Ready)
+    );
+    assert_eq!(
+        writing
+            .steps
+            .iter()
+            .filter(|s| s.status == PreparationStepStatus::Writing)
+            .count(),
+        8
+    );
+    fs::remove_file(dir.path().join("pause")).unwrap();
+    let ready = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.status != PreparationStatus::Running
+    });
+    assert_eq!(ready.status, PreparationStatus::Ready, "{:?}", ready.error);
+    assert!(
+        ready
+            .steps
+            .iter()
+            .all(|s| s.status == PreparationStepStatus::Ready)
+    );
+}
+
+#[test]
+fn changed_and_removed_definitions_cancel_only_their_jobs_and_descendants() {
+    let (dir, storage, workspace) = fixture();
+    for flag in [
+        "stream-outline",
+        "outline-pause",
+        "pause",
+        "revise-outline",
+        "descendants",
+    ] {
+        fs::write(dir.path().join(flag), "").unwrap();
+    }
+    let manager = PreparationManager::default();
+    start(&manager, &storage, &workspace);
+    wait(&manager, &storage, &workspace.review.id, |_| {
+        calls(dir.path())
+            .iter()
+            .filter(|c| c["event"] == "descendant")
+            .count()
+            == 4
+    });
+    let original = calls(dir.path());
+    fs::remove_file(dir.path().join("outline-pause")).unwrap();
+    let revised = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.steps.len() == 3
+            && s.active_batches.len() == 3
+            && calls(dir.path())
+                .iter()
+                .filter(|c| c["event"] == "writing" && c["id"] == "step:0:0")
+                .count()
+                == 2
+    });
+    assert_eq!(
+        revised
+            .steps
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["step:0:3", "step:0:2", "step:0:0"]
+    );
+    for call in original.iter().filter(|c| c["event"] == "descendant") {
+        let alive = |pid: &Value| {
+            let status = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            let status = String::from_utf8_lossy(&status.stdout);
+            !status.trim().is_empty() && !status.trim().starts_with('Z')
+        };
+        if matches!(call["id"].as_str(), Some("step:0:0" | "step:0:1")) {
+            assert!(
+                !alive(&call["pid"]),
+                "obsolete coordinator survives: {call}"
+            );
+            assert!(!alive(&call["child"]), "obsolete helper survives: {call}");
+        } else {
+            assert!(alive(&call["pid"]), "unrelated writer was interrupted");
+        }
+    }
+    fs::remove_file(dir.path().join("pause")).unwrap();
+    let ready = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.status != PreparationStatus::Running
+    });
+    assert_eq!(ready.status, PreparationStatus::Ready, "{:?}", ready.error);
+    let checkpoint: Checkpoint = storage
+        .get(
+            KIND,
+            &format!("{}:{}", workspace.review.repository_id, workspace.review.id),
+        )
+        .unwrap();
+    assert!(!checkpoint.results.contains_key("step:0:1"));
+    assert_eq!(
+        calls(dir.path())
+            .iter()
+            .filter(|c| c["event"] == "writing" && c["id"] == "step:0:2")
+            .count(),
+        1
+    );
+    assert_eq!(
+        reviews::load(&storage, &workspace.review.id)
+            .unwrap()
+            .review
+            .topics[0]
+            .steps
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn failed_final_analysis_cannot_publish_early_ready_documents() {
+    let (dir, storage, workspace) = fixture();
+    for flag in ["stream-outline", "outline-pause", "outline-fails"] {
+        fs::write(dir.path().join(flag), "").unwrap();
+    }
+    let manager = PreparationManager::default();
+    start(&manager, &storage, &workspace);
+    wait(&manager, &storage, &workspace.review.id, |s| {
+        s.steps.len() == 4
+            && s.steps
+                .iter()
+                .all(|s| s.status == PreparationStepStatus::Ready)
+    });
+    assert!(
+        reviews::load(&storage, &workspace.review.id)
+            .unwrap()
+            .review
+            .topics
+            .is_empty()
+    );
+    fs::remove_file(dir.path().join("outline-pause")).unwrap();
+    let failed = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.status != PreparationStatus::Running
+    });
+    assert_eq!(failed.status, PreparationStatus::Failed);
+    assert!(
+        failed
+            .steps
+            .iter()
+            .all(|s| s.status == PreparationStepStatus::Ready)
+    );
+    assert!(
+        reviews::load(&storage, &workspace.review.id)
+            .unwrap()
+            .review
+            .topics
+            .is_empty()
+    );
+}
+
+#[test]
+fn two_live_analyses_share_eight_slots_with_their_early_writers() {
+    let (a, sa, wa) = fixture();
+    let (b, sb, wb) = fixture();
+    for dir in [&a, &b] {
+        fs::write(dir.path().join("step-count"), "12").unwrap();
+        for flag in ["stream-outline", "outline-pause", "pause"] {
+            fs::write(dir.path().join(flag), "").unwrap();
+        }
+    }
+    let manager = PreparationManager::default();
+    start(&manager, &sa, &wa);
+    start(&manager, &sb, &wb);
+    wait(&manager, &sa, &wa.review.id, |left| {
+        let right = manager.get(&sb, &wb.review.id, None).unwrap().unwrap();
+        let batches: Vec<_> = left
+            .active_batches
+            .iter()
+            .chain(&right.active_batches)
+            .collect();
+        assert!(batches.len() <= 8);
+        batches.len() == 8
+            && batches
+                .iter()
+                .filter(|b| b.phase == PreparationPhase::Outline)
+                .count()
+                == 2
+            && left
+                .steps
+                .iter()
+                .chain(&right.steps)
+                .filter(|s| s.status == PreparationStepStatus::Writing)
+                .count()
+                == 6
+    });
+    for dir in [&a, &b] {
+        fs::remove_file(dir.path().join("outline-pause")).unwrap();
+        fs::remove_file(dir.path().join("pause")).unwrap();
+    }
+    for (storage, workspace) in [(&sa, &wa), (&sb, &wb)] {
+        let state = wait(&manager, storage, &workspace.review.id, |s| {
+            s.status != PreparationStatus::Running
+        });
+        assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
+    }
 }

@@ -3,11 +3,11 @@ use super::*;
 
 pub(crate) struct PreparationRuntime {
     context: String,
+    _baseline: Option<exploration::Exploration>,
     exploration: exploration::Exploration,
     config: ProviderConfig,
     prepared: Option<codex::Prepared>,
-    idle: tokio::sync::Mutex<BTreeMap<bool, Vec<codex::Session>>>,
-    cancel: Arc<AtomicBool>,
+    idle: tokio::sync::Mutex<Vec<codex::Session>>,
 }
 impl PreparationRuntime {
     pub(crate) async fn new(
@@ -16,6 +16,7 @@ impl PreparationRuntime {
         config: ProviderConfig,
         helper: String,
         cancel: Arc<AtomicBool>,
+        baseline: Option<Workspace>,
     ) -> AppResult<Self> {
         let request = AgentRequest {
             id: id(),
@@ -26,10 +27,31 @@ impl PreparationRuntime {
             paths: vec![],
         };
         let flag = cancel.clone();
-        let (context, exploration) = tokio::task::spawn_blocking(move || {
+        let (context, exploration, baseline) = tokio::task::spawn_blocking(move || {
+            let mut context: Value =
+                serde_json::from_str(&exploration::descriptor(&storage, &workspace, &request)?)?;
+            let baseline = if let Some(old) = baseline {
+                let old_request = AgentRequest {
+                    id: id(),
+                    review_id: old.review.id.clone(),
+                    ..request.clone()
+                };
+                let descriptor: Value =
+                    serde_json::from_str(&exploration::descriptor(&storage, &old, &old_request)?)?;
+                context["previousReviewManifest"] = descriptor["reviewManifest"].clone();
+                Some(exploration::materialize(
+                    &storage,
+                    &old,
+                    &old_request,
+                    &flag,
+                )?)
+            } else {
+                None
+            };
             Ok::<_, AppError>((
-                exploration::descriptor(&storage, &workspace, &request)?,
+                serde_json::to_string_pretty(&context)?,
                 exploration::materialize(&storage, &workspace, &request, &flag)?,
+                baseline,
             ))
         })
         .await
@@ -37,48 +59,29 @@ impl PreparationRuntime {
         let prepared = if config.provider == "codex" {
             Some(codex::prepare(&config, cancel.clone(), Some(helper)).await?)
         } else {
-            let catalog = models::discover(&config, cancel.clone()).await?;
-            if !catalog.iter().any(|model| {
-                model.id == "claude-sonnet-5"
-                    || model.resolved_model.as_deref() == Some("claude-sonnet-5")
-            }) {
-                return Err(AppError::new(
-                    "translation_model",
-                    "The translation model claude-sonnet-5 is unavailable. No alternative model was selected.",
-                ));
-            }
             None
         };
         Ok(Self {
             context,
+            _baseline: baseline,
             exploration,
             config,
             prepared,
             idle: Default::default(),
-            cancel,
         })
     }
     pub(crate) async fn run(
         &self,
-        translation: bool,
         template: &str,
         mut variables: BTreeMap<String, String>,
         schema: Value,
         progress: Arc<dyn Fn(AgentEvent) + Send + Sync>,
+        outline: Option<OutlineObserver>,
+        cancel: Arc<AtomicBool>,
     ) -> AppResult<String> {
         variables.insert("context".into(), self.context.clone());
         let prompt = prompts::render(template, &variables)?;
-        let mut config = self.config.clone();
-        if translation {
-            config.model = Some(
-                if config.provider == "codex" {
-                    "gpt-6-luna"
-                } else {
-                    "claude-sonnet-5"
-                }
-                .into(),
-            );
-        }
+        let config = self.config.clone();
         let channel = Channel::new(move |body| {
             if let tauri::ipc::InvokeResponseBody::Json(text) = body
                 && let Ok(event) = serde_json::from_str::<AgentEvent>(&text)
@@ -93,13 +96,10 @@ impl PreparationRuntime {
             sequence: 0,
             channel,
             text: String::new(),
+            preview: outline.map(outline_preview::Preview::new),
         };
-        if let Some(mut prepared) = self.prepared.clone() {
-            if translation {
-                prepared.effort = prepared.translation_effort.clone();
-                prepared.helper = Some("gpt-6-luna".into());
-            }
-            let idle = self.idle.lock().await.entry(translation).or_default().pop();
+        if let Some(prepared) = self.prepared.clone() {
+            let idle = self.idle.lock().await.pop();
             let mut session = match idle {
                 Some(session) => session,
                 None => {
@@ -107,19 +107,15 @@ impl PreparationRuntime {
                         &self.exploration.project,
                         &config,
                         prepared,
-                        self.cancel.clone(),
+                        cancel.clone(),
                     )
                     .await?
                 }
             };
+            session.set_cancel(cancel.clone());
             let result = session.run(&prompt, Some(schema), &mut stream).await;
-            if result.is_ok() && session.reusable {
-                self.idle
-                    .lock()
-                    .await
-                    .entry(translation)
-                    .or_default()
-                    .push(session);
+            if result.is_ok() && session.reusable && !cancel.load(Ordering::Relaxed) {
+                self.idle.lock().await.push(session);
             } else {
                 session.finish().await;
             }
@@ -129,7 +125,7 @@ impl PreparationRuntime {
                 &self.exploration.project,
                 &prompt,
                 &config,
-                self.cancel.clone(),
+                cancel.clone(),
                 &mut stream,
             )
             .await?;
@@ -137,10 +133,7 @@ impl PreparationRuntime {
         Ok(stream.text)
     }
     pub(crate) async fn finish(&self) {
-        for mut session in std::mem::take(&mut *self.idle.lock().await)
-            .into_values()
-            .flatten()
-        {
+        for mut session in std::mem::take(&mut *self.idle.lock().await) {
             session.finish().await;
         }
     }

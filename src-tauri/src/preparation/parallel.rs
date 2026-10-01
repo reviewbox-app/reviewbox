@@ -1,19 +1,15 @@
 //! Bounded Codex scheduling; the Run remains the sole checkpoint/publication writer.
 use super::*;
-use cache::{TranslationCache, rebase, relative};
 use std::{collections::VecDeque, time::Duration};
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::sync::mpsc;
+mod scheduler;
+pub(super) use scheduler::Definition;
 
 #[derive(Clone)]
 enum Kind {
     Outline,
+    Adaptation,
     Documents,
-    Translation(Segment),
-}
-#[derive(Clone)]
-struct Binding {
-    key: String,
-    offset: u32,
 }
 #[derive(Clone)]
 struct Unit {
@@ -22,40 +18,68 @@ struct Unit {
     phase: PreparationPhase,
     input: Value,
     kind: Kind,
-    bindings: Vec<Binding>,
-    cache_key: Option<String>,
     attempts: u8,
+    version: u64,
 }
 impl Unit {
     fn template(&self) -> &'static str {
         match self.kind {
             Kind::Outline => "outline",
+            Kind::Adaptation => "adaptation",
             Kind::Documents => "documents",
-            Kind::Translation(_) => "pseudocode",
         }
     }
     fn validate(&self, value: &Value, workspace: &Workspace, storage: &Storage) -> AppResult<()> {
         match &self.kind {
-            Kind::Outline => {
-                validate_outline(&serde_json::from_value(value.clone())?, &workspace.snapshot)
+            Kind::Outline | Kind::Adaptation => {
+                let outline: Outline = serde_json::from_value(value.clone())?;
+                validate_outline(&outline, &workspace.snapshot)?;
+                if matches!(self.kind, Kind::Adaptation) {
+                    let update = workspace
+                        .review
+                        .update_origin
+                        .as_ref()
+                        .ok_or_else(state_error)?;
+                    adaptation::validate_outline_update(
+                        &outline,
+                        &storage.get::<Review>("review", &update.source_review_id)?,
+                    )?;
+                } else if !outline.removed_steps.is_empty()
+                    || outline
+                        .topics
+                        .iter()
+                        .flat_map(|t| &t.steps)
+                        .any(|s| s.previous_step_id.is_some() || s.reuse)
+                {
+                    return Err(invalid(
+                        "A new reading path cannot reference previous steps.",
+                    ));
+                }
+                Ok(())
             }
             Kind::Documents => validate_documents(
                 &serde_json::from_value(value.clone())?,
                 &workspace.snapshot,
                 storage,
             ),
-            Kind::Translation(segment) => {
-                validate_translation(&serde_json::from_value(value.clone())?, segment)
-            }
         }
     }
     fn schema(&self) -> Value {
         let mut result = match self.kind {
-            Kind::Outline => serde_json::to_value(schemars::schema_for!(Outline)),
+            Kind::Outline | Kind::Adaptation => {
+                serde_json::to_value(schemars::schema_for!(Outline))
+            }
             Kind::Documents => serde_json::to_value(schemars::schema_for!(LevelDocuments)),
-            Kind::Translation(_) => serde_json::to_value(schemars::schema_for!(TranslationResult)),
         }
         .expect("schema serialization");
+        if matches!(self.kind, Kind::Documents) {
+            if let Some(properties) = result.get_mut("properties").and_then(Value::as_object_mut) {
+                properties.remove("dependencies");
+            }
+            if let Some(required) = result.get_mut("required").and_then(Value::as_array_mut) {
+                required.retain(|key| key != "dependencies");
+            }
+        }
         // Aliases are assembled by the application, never authored by the model.
         // Keep the generation schema closed (structured outputs forbid free-form maps).
         if let Some(document) = result.pointer_mut("/$defs/ReviewDocument") {
@@ -104,6 +128,11 @@ fn strict_schema(value: &mut Value) {
         _ => {}
     }
 }
+enum WorkUpdate {
+    Completed(Completed),
+    Preview(Vec<scheduler::Candidate>),
+    Status(String, u64, PreparationStepStatus),
+}
 struct Completed {
     unit: Unit,
     value: Value,
@@ -120,11 +149,10 @@ struct Worker {
     coordination: String,
     glossary: Arc<Mutex<BTreeMap<String, Vec<DocumentTerm>>>>,
     helper: String,
-    translation_model: String,
     language: String,
     model: Option<String>,
     cancel: Arc<AtomicBool>,
-    completed: mpsc::UnboundedSender<Completed>,
+    completed: mpsc::UnboundedSender<WorkUpdate>,
 }
 impl Worker {
     async fn permit(
@@ -144,14 +172,6 @@ impl Worker {
         }
     }
     async fn work(&self, units: Vec<Unit>) -> AppResult<()> {
-        let translation = matches!(units[0].kind, Kind::Translation(_));
-        let _category = self
-            .permit(if translation {
-                self.manager.translation_slots.clone()
-            } else {
-                self.manager.document_slots.clone()
-            })
-            .await?;
         let _permit = self.permit(self.manager.slots.clone()).await?;
         let batch_id = id();
         if let Ok(mut active) = self.manager.active.lock()
@@ -166,11 +186,7 @@ impl Worker {
                     .collect::<Vec<_>>()
                     .join(" · "),
                 phase: units[0].phase.clone(),
-                model: if translation {
-                    Some(self.translation_model.clone())
-                } else {
-                    self.model.clone()
-                },
+                model: self.model.clone(),
                 started_at: now(),
                 status: PreparationBatchStatus::Running,
             });
@@ -186,6 +202,13 @@ impl Worker {
                 .retain(|batch| batch.id != batch_id);
         }
         result
+    }
+    fn step_status(&self, unit: &Unit, status: PreparationStepStatus) {
+        if !self.cancel.load(Ordering::Relaxed) {
+            let _ = self
+                .completed
+                .send(WorkUpdate::Status(unit.key.clone(), unit.version, status));
+        }
     }
     async fn run_groups(&self, units: Vec<Unit>, batch_id: &str) -> AppResult<()> {
         let mut groups = VecDeque::from([units]);
@@ -236,12 +259,47 @@ impl Worker {
                     event.run_id = format!("preparation:{run_id}");
                     manager.event(&operation, event, &namespace);
                 });
-                let translation = matches!(pending[0].kind, Kind::Translation(_));
-                let model = if translation {
-                    Some(self.translation_model.clone())
-                } else {
-                    self.model.clone()
-                };
+                for unit in &pending {
+                    self.step_status(unit, PreparationStepStatus::Writing);
+                }
+                let outline_observer: Option<agents::OutlineObserver> =
+                    if matches!(pending[0].kind, Kind::Outline | Kind::Adaptation) {
+                        self.completed
+                            .send(WorkUpdate::Preview(vec![]))
+                            .map_err(|_| state_error())?;
+                        let tx = self.completed.clone();
+                        let workspace = self.workspace.clone();
+                        let cancel = self.cancel.clone();
+                        Some(Arc::new(move |items: Vec<agents::OutlineItem>| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            let steps = items
+                                .into_iter()
+                                .filter_map(|item| {
+                                    let step: OutlineStep =
+                                        serde_json::from_value(item.value).ok()?;
+                                    let outline = Outline {
+                                        removed_steps: vec![],
+                                        topics: vec![OutlineTopic {
+                                            title: item.title.clone(),
+                                            brief: item.brief.clone(),
+                                            steps: vec![step.clone()],
+                                        }],
+                                    };
+                                    validate_outline(&outline, &workspace.snapshot).ok()?;
+                                    Some(scheduler::Candidate {
+                                        topic: outline.topics.into_iter().next()?,
+                                        order: (item.topic, item.step),
+                                    })
+                                })
+                                .collect();
+                            let _ = tx.send(WorkUpdate::Preview(steps));
+                        }))
+                    } else {
+                        None
+                    };
+                let model = self.model.clone();
                 let known_glossary = self
                     .glossary
                     .lock()
@@ -252,14 +310,7 @@ impl Worker {
                     .collect::<Vec<_>>();
                 let variables = BTreeMap::from([
                     ("language".into(), self.language.clone()),
-                    (
-                        "helper_model".into(),
-                        if translation {
-                            self.translation_model.clone()
-                        } else {
-                            self.helper.clone()
-                        },
-                    ),
+                    ("helper_model".into(), self.helper.clone()),
                     (
                         "input".into(),
                         serde_json::to_string(
@@ -281,13 +332,26 @@ impl Worker {
                 let response = self
                     .runtime
                     .run(
-                        translation,
                         &template,
                         variables,
                         pending[0].schema(),
                         callback,
+                        outline_observer,
+                        self.cancel.clone(),
                     )
                     .await;
+                self.manager.event(
+                    &self.operation,
+                    AgentEvent {
+                        batch_id: None,
+                        run_id: format!("preparation:{}", self.run_id),
+                        sequence: 0,
+                        kind: "batchFinished".into(),
+                        text: String::new(),
+                        progress: None,
+                    },
+                    &format!("{batch_id}:{serial}"),
+                );
                 if let Ok(mut active) = self.manager.active.lock()
                     && let Some(operation) = active.get_mut(&self.operation)
                     && operation.state.id == self.run_id
@@ -338,6 +402,7 @@ impl Worker {
                 let mut retry = Vec::new();
                 let mut errors = Vec::new();
                 for mut unit in pending {
+                    self.step_status(&unit, PreparationStepStatus::Checking);
                     // A duplicate or missing id invalidates that item only.
                     // Unknown ids never enter the checkpoint or publication.
                     let mut value = values.and_then(|values| {
@@ -377,23 +442,12 @@ impl Worker {
                                     serde_json::from_value(value.clone().unwrap_or(Value::Null))?,
                                 );
                                 value = Some(serde_json::to_value(&documents)?);
-                                self.glossary.lock().map_err(|_| state_error())?.insert(
-                                    unit.key.clone(),
-                                    documents
-                                        .glossary
-                                        .iter()
-                                        .chain(&documents.beginner.terms)
-                                        .chain(&documents.intermediate.terms)
-                                        .chain(&documents.developer.terms)
-                                        .cloned()
-                                        .collect(),
-                                );
                             }
                             self.completed
-                                .send(Completed {
+                                .send(WorkUpdate::Completed(Completed {
                                     unit,
                                     value: value.unwrap_or(Value::Null),
-                                })
+                                }))
                                 .map_err(|_| state_error())?;
                         }
                         Err(error) if unit.attempts < 3 => {
@@ -403,20 +457,15 @@ impl Worker {
                             );
                             retry.push(unit);
                         }
-                        Err(error) => match unit.kind {
-                            Kind::Translation(_) => {
-                                self.completed.send(Completed { unit, value: json!({"unavailable":"Rev could not produce a faithful translation after three corrections."}) }).map_err(|_| state_error())?;
-                            }
-                            _ => {
-                                return Err(AppError::new(
-                                    "invalid_preparation",
-                                    format!(
-                                        "{} remains invalid after three corrections: {}",
-                                        unit.label, error.message
-                                    ),
-                                ));
-                            }
-                        },
+                        Err(error) => {
+                            return Err(AppError::new(
+                                "invalid_preparation",
+                                format!(
+                                    "{} remains invalid after three corrections: {}",
+                                    unit.label, error.message
+                                ),
+                            ));
+                        }
                     }
                 }
                 pending = retry;
@@ -441,62 +490,15 @@ impl Worker {
 }
 fn unit(key: String, label: String, phase: PreparationPhase, input: Value, kind: Kind) -> Unit {
     Unit {
-        bindings: vec![Binding {
-            key: key.clone(),
-            offset: 0,
-        }],
         key,
         label,
         phase,
         input,
         kind,
-        cache_key: None,
         attempts: 0,
+        version: 0,
     }
 }
-fn group(units: Vec<Unit>, size: usize) -> VecDeque<Vec<Unit>> {
-    let mut groups: VecDeque<Vec<Unit>> = VecDeque::new();
-    for unit in units {
-        if let Some(last) = groups.back_mut()
-            && last.len() < size
-            && last[0].phase == unit.phase
-        {
-            last.push(unit);
-        } else {
-            groups.push_back(vec![unit]);
-        }
-    }
-    groups
-}
-
-// Group complete versions by logical file, including renamed paths.
-// Keep each content independently checkpointed; no source is truncated to fit.
-fn translation_groups(mut units: Vec<Unit>) -> VecDeque<Vec<Unit>> {
-    fn file(unit: &Unit) -> &str {
-        unit.input["fileId"]
-            .as_str()
-            .or_else(|| unit.input["file"].as_str())
-            .unwrap_or_default()
-    }
-    units.sort_by(|a, b| file(a).cmp(file(b)).then(a.key.cmp(&b.key)));
-    let mut groups = VecDeque::new();
-    let mut current = Vec::new();
-    let mut files = std::collections::BTreeSet::new();
-    for unit in units {
-        let path = file(&unit).to_owned();
-        if !current.is_empty() && (!files.contains(&path) && files.len() == 9) {
-            groups.push_back(std::mem::take(&mut current));
-            files.clear();
-        }
-        files.insert(path);
-        current.push(unit);
-    }
-    if !current.is_empty() {
-        groups.push_back(current);
-    }
-    groups
-}
-
 // Inline complete small sources, with explicit manifest lookups for larger ones.
 // Never send a truncated source as though it were the complete captured file.
 fn document_evidence(
@@ -514,6 +516,27 @@ fn document_evidence(
     }).collect()
 }
 
+fn document_input(
+    topic: &OutlineTopic,
+    step: &OutlineStep,
+    sources: &[SourceDescriptor],
+    inline: &BTreeMap<String, String>,
+) -> Value {
+    let relevant: Vec<_> = sources
+        .iter()
+        .filter(|source| {
+            step.context_source_ids.contains(&source.source_id)
+                || step.anchors.iter().any(|anchor| {
+                    source
+                        .source_id
+                        .starts_with(&format!("change:{}:", anchor.change_id))
+                })
+        })
+        .collect();
+    let evidence = document_evidence(&relevant, inline);
+    json!({"scope":"readingStep","topic":topic.title,"brief":topic.brief,"step":step,"sources":relevant,"capturedSources":evidence})
+}
+
 impl Run {
     pub(super) async fn execute_parallel(
         &mut self,
@@ -526,13 +549,12 @@ impl Run {
             tokio::task::spawn_blocking(move || agents::settings(&storage).map(|s| s.helper_model))
                 .await
                 .map_err(|e| AppError::new("task", e.to_string()))??;
-        let translation_model = if config.provider == "codex" {
-            "gpt-6-luna"
-        } else {
-            helper = "claude-sonnet-5".into();
-            "claude-sonnet-5"
+        if config.provider != "codex" {
+            helper = config
+                .model
+                .clone()
+                .unwrap_or_else(|| "claude-sonnet-5".into());
         }
-        .to_owned();
         if self
             .checkpoint
             .helper_model
@@ -553,6 +575,11 @@ impl Run {
                 config.clone(),
                 helper.clone(),
                 self.cancel.clone(),
+                if let Some(update) = &self.checkpoint.state.adaptation {
+                    Some(reviews::load(&self.storage, &update.source_review_id)?)
+                } else {
+                    None
+                },
             )
             .await?,
         );
@@ -569,359 +596,58 @@ impl Run {
             workspace: workspace.clone(),
             templates: Arc::new(self.templates.clone()),
             coordination,
-            glossary: Arc::new(Mutex::new(
-                self.checkpoint
-                    .results
-                    .iter()
-                    .filter_map(|(key, value)| {
-                        serde_json::from_value::<LevelDocuments>(value.clone())
-                            .ok()
-                            .map(|docs| {
-                                (
-                                    key.clone(),
-                                    docs.glossary
-                                        .iter()
-                                        .chain(&docs.beginner.terms)
-                                        .chain(&docs.intermediate.terms)
-                                        .chain(&docs.developer.terms)
-                                        .cloned()
-                                        .collect(),
-                                )
-                            })
-                    })
-                    .collect(),
-            )),
+            glossary: Arc::new(Mutex::new(BTreeMap::new())),
             helper: helper.clone(),
-            translation_model,
             language: self.language.clone(),
             model: config.model.clone(),
             cancel: self.cancel.clone(),
             completed: tx,
         };
-        let cache_storage = self.storage.clone();
-        let cache = tokio::task::spawn_blocking(move || TranslationCache::new(&cache_storage))
-            .await
-            .map_err(|e| AppError::new("task", e.to_string()))??;
-        let result = self.schedule(&worker, &cache, &sources, &mut rx).await;
+        let result = self.schedule(&worker, &sources, &mut rx).await;
         runtime.finish().await;
         result
     }
     async fn schedule(
         &mut self,
         worker: &Worker,
-        cache: &TranslationCache,
         sources: &[SourceDescriptor],
-        rx: &mut mpsc::UnboundedReceiver<Completed>,
+        rx: &mut mpsc::UnboundedReceiver<WorkUpdate>,
     ) -> AppResult<()> {
         let workspace = &worker.workspace;
         let files = reader::files(&workspace.snapshot);
-        let source_files: BTreeMap<_, _> = files
-            .iter()
-            .flat_map(|file| {
-                file.translations
-                    .iter()
-                    .map(|source| (source.source_id.clone(), file.id.clone()))
-            })
-            .collect();
-        let mut registered = BTreeMap::new();
-        let outline = unit(
-            "outline".into(),
-            "Organizing the reading path and choosing files to translate".into(),
-            PreparationPhase::Outline,
-            json!({"sources":sources,"files":files}),
-            Kind::Outline,
-        );
-        registered.insert("outline".into(), PreparationPhase::Outline);
-        self.update(|state| state.phase = PreparationPhase::Outline);
-        if let Some(value) = self.checkpoint.results.get("outline") {
-            outline.validate(value, workspace, &self.storage)?;
-        } else {
-            // No translation or cache lookup starts until Rev has selected its scope.
-            worker.work(vec![outline]).await?;
-            while let Ok(completed) = rx.try_recv() {
-                self.record(completed, cache).await?;
-            }
-        }
-        let outline: Outline = serde_json::from_value(self.checkpoint.results["outline"].clone())?;
-        let selected_sources = outline.translation_sources(&workspace.snapshot);
-        self.update(|state| {
-            state.translation_selection = Some(outline.translation_selection(&workspace.snapshot))
-        });
-        self.persist().await?;
-        self.check_cancel()?;
-        let mut translations: BTreeMap<String, Vec<Unit>> = BTreeMap::new();
-        let mut inline_sources = BTreeMap::new();
-        let mut unavailable = BTreeMap::new();
-        let mut dedup: BTreeMap<String, Unit> = BTreeMap::new();
-        let translation_contract = serde_json::to_value(schemars::schema_for!(TranslationResult))?;
-        for source in sources
-            .iter()
-            .filter(|s| s.source_id.starts_with("change:"))
-        {
-            if translations.contains_key(&source.hash) || unavailable.contains_key(&source.hash) {
-                continue;
-            }
-            if !selected_sources.contains(&source.source_id) && source.size > 32 * 1024 {
-                continue;
-            }
-            let storage = self.storage.clone();
-            let snapshot = workspace.snapshot.clone();
-            let source_id = source.source_id.clone();
-            let frozen = tokio::task::spawn_blocking(move || {
-                reader::source(&storage, &snapshot, &source_id)
-            })
-            .await
-            .map_err(|e| AppError::new("task", e.to_string()))??;
-            let Some(text) = frozen.text else {
-                unavailable.insert(
-                    source.hash.clone(),
-                    frozen
-                        .unavailable_reason
-                        .unwrap_or_else(|| "This source is not text.".into()),
-                );
-                continue;
-            };
-            if text.len() <= 32 * 1024 {
-                inline_sources.insert(source.hash.clone(), text.clone());
-            }
-            if !selected_sources.contains(&source.source_id) {
-                continue;
-            }
-            let parts = match segments(&text) {
-                Ok(parts) => parts,
-                Err(error) if error.code == "translation_unavailable" => {
-                    unavailable.insert(source.hash.clone(), error.message);
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            let mut items = Vec::new();
-            for part in parts {
-                let segment = relative(&part);
-                let format = Path::new(&source.path)
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default();
-                let key = fingerprint(&serde_json::to_vec(&json!([
-                    source.hash,
-                    format,
-                    "English",
-                    self.templates["pseudocode"],
-                    worker.translation_model,
-                    worker.translation_model,
-                    translation_contract,
-                    "coordinator-medium:helper-high",
-                    "whole-source-logic-v2"
-                ]))?);
-                let mut item = unit(
-                    format!("pseudo:{}", source.hash),
-                    format!(
-                        "{} · lines {}–{}",
-                        source.path, part.start_line, part.end_line
-                    ),
-                    PreparationPhase::Pseudocode,
-                    json!({"fileId":source_files.get(&source.source_id),"file":source.path,"sourceId":source.source_id,"hash":source.hash,"segment":{"startLine":1,"endLine":segment.end_line,"text":if segment.text.len() <= 64 * 1024 { Some(segment.text.clone()) } else { None }},"readFromManifest":segment.text.len() > 64 * 1024,"format":format}),
-                    Kind::Translation(segment),
-                );
-                item.bindings[0].offset = part.start_line - 1;
-                item.cache_key = Some(key.clone());
-                registered.insert(item.key.clone(), PreparationPhase::Pseudocode);
-                items.push(item.clone());
-                if let Some(existing) = dedup.get_mut(&key) {
-                    existing.bindings.extend(item.bindings);
-                } else {
-                    dedup.insert(key, item);
-                }
-            }
-            translations.insert(source.hash.clone(), items);
-        }
-        let mut queue = translation_groups(dedup.into_values().collect());
-        let mut tasks = JoinSet::new();
-        let mut expanded = false;
-        let mut fatal = None;
-        self.update(|state| {
-            state.phase = PreparationPhase::Outline;
-        });
-        loop {
-            while let Ok(completed) = rx.try_recv() {
-                if let Err(error) = self.record(completed, cache).await {
-                    fatal = Some(error);
-                    break;
-                }
-            }
-            if !expanded && let Some(value) = self.checkpoint.results.get("outline").cloned() {
-                let outline: Outline = serde_json::from_value(value)?;
-                validate_outline(&outline, &workspace.snapshot)?;
-                let mut documents = Vec::new();
-                for (ti, topic) in outline.topics.iter().enumerate() {
-                    for (si, step) in topic.steps.iter().enumerate() {
-                        let relevant: Vec<_> = sources
-                            .iter()
-                            .filter(|source| {
-                                step.anchors.iter().any(|a| {
-                                    source
-                                        .source_id
-                                        .starts_with(&format!("change:{}:", a.change_id))
-                                })
-                            })
-                            .collect();
-                        let evidence = document_evidence(&relevant, &inline_sources);
-                        documents.push(unit(format!("step:{ti}:{si}"),step.title.clone(),PreparationPhase::Documents,json!({"scope":"readingStep","topic":topic.title,"brief":topic.brief,"step":step,"sources":relevant,"capturedSources":evidence}),Kind::Documents));
-                    }
-                }
-                for document in &documents {
-                    registered.insert(document.key.clone(), document.phase.clone());
-                }
-                // Interleave documents with already queued translations; neither category starves.
-                let mut docs = group(documents, 2);
-                let mut combined = VecDeque::new();
-                while !docs.is_empty() || !queue.is_empty() {
-                    if let Some(job) = docs.pop_front() {
-                        combined.push_back(job)
-                    }
-                    if let Some(job) = queue.pop_front() {
-                        combined.push_back(job)
-                    }
-                }
-                queue = combined;
-                let titles = outline
-                    .topics
-                    .iter()
-                    .flat_map(|t| t.steps.iter().map(|s| s.title.clone()))
-                    .collect();
-                self.update(|state| state.step_titles = titles);
-                expanded = true;
-            }
-            while let Some(result) = tasks.try_join_next() {
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        fatal = Some(error);
-                    }
-                    Err(error) => {
-                        fatal = Some(AppError::new("task", error.to_string()));
-                    }
-                }
-            }
-            if self.cancel.load(Ordering::Relaxed) && fatal.is_none() {
-                fatal = Some(AppError::new(
-                    "cancelled",
-                    "Preparation stopped. Completed results can be resumed.",
-                ));
-            }
-            if fatal.is_some() {
-                self.cancel.store(true, Ordering::Relaxed);
-                tasks.abort_all();
-                while tasks.join_next().await.is_some() {}
-                while let Ok(completed) = rx.try_recv() {
-                    self.record(completed, cache).await?;
-                }
-                break;
-            }
-            while tasks.len() < MAX_COORDINATORS
-                && let Some(job) = queue.pop_front()
-            {
-                let mut pending = Vec::new();
-                for item in job {
-                    let mut value = None;
-                    for binding in &item.bindings {
-                        if let Some(old) = self.checkpoint.results.get(&binding.key) {
-                            let candidate = if matches!(item.kind, Kind::Translation(_))
-                                && old.get("unavailable").is_none()
-                            {
-                                rebase(old, binding.offset, true)?
-                            } else {
-                                old.clone()
-                            };
-                            if candidate.get("unavailable").is_some()
-                                || item.validate(&candidate, workspace, &self.storage).is_ok()
-                            {
-                                value = Some(candidate);
-                                break;
-                            }
-                        }
-                    }
-                    if value.is_none()
-                        && let Some(key) = &item.cache_key
-                    {
-                        let cache = cache.clone();
-                        let key = key.clone();
-                        let candidate = tokio::task::spawn_blocking(move || cache.get(&key))
-                            .await
-                            .map_err(|e| AppError::new("task", e.to_string()))??;
-                        if let Some(candidate) = candidate
-                            && item.validate(&candidate, workspace, &self.storage).is_ok()
-                        {
-                            value = Some(candidate);
-                        }
-                    }
-                    if let Some(value) = value {
-                        worker
-                            .completed
-                            .send(Completed { unit: item, value })
-                            .map_err(|_| state_error())?;
-                    } else {
-                        pending.push(item);
-                    }
-                }
-                if !pending.is_empty() {
-                    let worker = worker.clone();
-                    tasks.spawn(async move { worker.work(pending).await });
-                }
-            }
-            let mut phases = Vec::new();
-            for phase in [
-                PreparationPhase::Outline,
-                PreparationPhase::Documents,
-                PreparationPhase::Pseudocode,
-            ] {
-                let keys: Vec<_> = registered
-                    .iter()
-                    .filter(|(_, p)| **p == phase)
-                    .map(|(k, _)| k)
-                    .collect();
-                phases.push(PreparationPhaseCount {
-                    phase,
-                    total: keys.len() as u32,
-                    completed: keys
-                        .iter()
-                        .filter(|key| self.checkpoint.results.contains_key(**key))
-                        .count() as u32,
-                });
-            }
-            self.update(|state| {
-                state.phase = phases
-                    .iter()
-                    .find(|phase| phase.completed < phase.total)
-                    .map(|phase| phase.phase.clone())
-                    .unwrap_or(PreparationPhase::Checking);
-                state.total_batches = registered.len() as u32;
-                state.completed_batches = phases.iter().map(|p| p.completed).sum();
-                state.phases = phases;
-            });
-            if tasks.is_empty() && queue.is_empty() && rx.is_empty() && expanded {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        self.persist().await?;
-        if let Some(error) = fatal {
-            return Err(error);
-        }
+        let baseline = self
+            .checkpoint
+            .state
+            .adaptation
+            .as_ref()
+            .map(|u| reviews::load(&self.storage, &u.source_review_id))
+            .transpose()?;
+        let signature = adaptation::generation_signature(self)?;
+        let reused_steps =
+            scheduler::schedule(self, worker, sources, baseline, &signature, rx).await?;
         self.check_cancel()?;
         let outline: Outline = serde_json::from_value(self.checkpoint.results["outline"].clone())?;
-        let selected = outline.translation_files.clone();
         let mut topics = Vec::new();
         for (ti, topic) in outline.topics.into_iter().enumerate() {
             let mut steps = Vec::new();
             for (si, step) in topic.steps.into_iter().enumerate() {
+                let mut documents: LevelDocuments = serde_json::from_value(
+                    self.checkpoint.results[&format!("step:{}", step.draft_id)].clone(),
+                )?;
+                adaptation::attach_dependencies(
+                    &mut documents,
+                    &step.anchors,
+                    &step.context_source_ids,
+                    &workspace.snapshot,
+                    &signature,
+                )?;
                 steps.push(Step {
-                    id: format!("{}-step-{ti}-{si}", self.checkpoint.state.id),
+                    id: step
+                        .previous_step_id
+                        .unwrap_or_else(|| format!("{}-step-{ti}-{si}", self.checkpoint.state.id)),
                     title: step.title,
                     anchors: step.anchors,
-                    documents: serde_json::from_value(
-                        self.checkpoint.results[&format!("step:{ti}:{si}")].clone(),
-                    )?,
+                    documents,
                 });
             }
             topics.push(Topic {
@@ -931,90 +657,74 @@ impl Run {
                 steps,
             });
         }
-        let mut contents = Vec::new();
-        for file in files {
-            let pseudocode_selected = selected.contains(&file.id);
-            let mut translated = Vec::new();
-            for source in sources.iter().filter(|s| {
-                pseudocode_selected
-                    && file
-                        .change_ids
-                        .iter()
-                        .any(|id| s.source_id.starts_with(&format!("change:{id}:")))
-            }) {
-                let mut blocks = Vec::new();
-                let mut reason = unavailable.get(&source.hash).cloned();
-                for item in translations.get(&source.hash).into_iter().flatten() {
-                    let value = &self.checkpoint.results[&item.key];
-                    if let Some(error) = value["unavailable"].as_str() {
-                        reason = Some(error.into());
-                        break;
-                    }
-                    let result: TranslationResult = serde_json::from_value(value.clone())?;
-                    blocks.extend(result.blocks);
-                }
-                if reason.is_some() {
-                    blocks.clear();
-                }
-                translated.push(PseudoTranslation {
-                    source_id: source.source_id.clone(),
-                    source_hash: source.hash.clone(),
-                    blocks,
-                    unavailable_reason: reason,
-                });
-            }
-            contents.push(ReviewFileContent {
-                pseudocode_skip_reason: None,
-                pseudocode_selected: Some(pseudocode_selected),
+        let contents = files
+            .into_iter()
+            .map(|file| ReviewFileContent {
                 file_id: file.id,
                 documents: None,
-                translations: translated,
-            });
-        }
+            })
+            .collect();
         self.update(|state| state.phase = PreparationPhase::Checking);
         self.persist().await?;
         self.check_cancel()?;
         let storage = self.storage.clone();
         let state = self.checkpoint.state.clone();
-        let revision = self.checkpoint.review_revision;
+        let target_review = workspace.review.id.clone();
+        let revision = workspace.review.revision;
+        let cancel = self.cancel.clone();
         tokio::task::spawn_blocking(move || {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::new(
+                    "cancelled",
+                    "Update stopped before installation.",
+                ));
+            }
             reader::publish_preparation(
                 &storage,
-                &state.review_id,
+                &target_review,
                 &state.snapshot_id,
                 &state.id,
                 revision,
                 topics,
                 contents,
-            )
+            )?;
+            if state.adaptation.is_some() {
+                adaptation::finish(&storage, &state, &reused_steps)?;
+            }
+            Ok::<_, AppError>(())
         })
         .await
         .map_err(|e| AppError::new("task", e.to_string()))??;
         Ok(())
     }
-    async fn record(&mut self, completed: Completed, cache: &TranslationCache) -> AppResult<()> {
-        let value = completed.value;
-        if let Some(key) = &completed.unit.cache_key
-            && value.get("unavailable").is_none()
+    async fn record(&mut self, completed: Completed) -> AppResult<()> {
+        let key = completed.unit.key;
+        self.checkpoint.results.insert(key.clone(), completed.value);
+        if let Some(operation) = self
+            .manager
+            .active
+            .lock()
+            .map_err(|_| state_error())?
+            .get(&self.key)
         {
-            let cache = cache.clone();
-            let key = key.clone();
-            let value = value.clone();
-            tokio::task::spawn_blocking(move || cache.put(&key, &value))
-                .await
-                .map_err(|e| AppError::new("task", e.to_string()))??;
+            self.checkpoint.state = operation.state.clone();
         }
-        for binding in completed.unit.bindings {
-            let result = if matches!(completed.unit.kind, Kind::Translation(_))
-                && value.get("unavailable").is_none()
-            {
-                rebase(&value, binding.offset, false)?
-            } else {
-                value.clone()
-            };
-            self.checkpoint.results.insert(binding.key, result);
+        if let Some(step) = self
+            .checkpoint
+            .state
+            .steps
+            .iter_mut()
+            .find(|step| step.id == key)
+        {
+            step.status = PreparationStepStatus::Ready;
         }
-        self.persist().await
+        self.save_checkpoint().await?;
+        self.update(|state| {
+            if let Some(step) = state.steps.iter_mut().find(|step| step.id == key) {
+                step.status = PreparationStepStatus::Ready;
+            }
+        });
+        Ok(())
     }
 }
 

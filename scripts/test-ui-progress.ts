@@ -48,7 +48,7 @@ async function waitReady() {
       assert(!error, error)
       return (await ui.text()).includes("Your review is ready")
     },
-    "complete three-level review and selected file pseudo-code",
+    "complete three-level review",
     live ? 900000 : 60000
   )
 }
@@ -163,10 +163,8 @@ try {
     JSON.stringify(
       {
         elapsedMs: Number(runState.updatedAt) - Number(runState.startedAt),
-        steps: runState.stepTitles.length,
+        steps: runState.steps.length,
         completedResults: runState.completedBatches,
-        translationSelection: runState.translationSelection,
-        translationDecisions: checkpoint.results?.outline?.translationFiles,
         providerCalls: checkpoint.measurements?.length ?? null,
         measurements: checkpoint.measurements ?? [],
         reportedUsageInRetainedHistory: [...usage.values()],
@@ -185,19 +183,6 @@ try {
   await ui.named("Details", "button", false)
   await ui.named("Show activity")
   assert(await ui.execute(`return !!document.querySelector('${history}')`))
-  if (selection) {
-    assert(
-      runState.translationSelection.skippedFiles >= 3,
-      "Rev skips documentation, declarative configuration and types"
-    )
-    assert(
-      runState.translationSelection.selectedFiles > 0,
-      "Rev selects executable behavior"
-    )
-    await ui.has(
-      `${runState.translationSelection.selectedFiles} ${runState.translationSelection.selectedFiles === 1 ? "file" : "files"} selected by Rev`
-    )
-  }
   assert(
     !(await ui.text()).includes("topics drafted"),
     "grouped Codex results do not display the obsolete topic-draft counter"
@@ -213,7 +198,7 @@ try {
   await ui.resize(1440, 900)
   await ui.named("Start review")
   await ui.until('!document.querySelector("[data-testid=preparing-review]")')
-  await ui.named("Contents")
+  await ui.element('[aria-label="Review steps"]')
   if (!live) {
     assert.equal(
       await ui.execute(
@@ -235,8 +220,8 @@ try {
     )
     assert.equal(
       runCalls.filter((kind) => kind === "pseudo").length,
-      6,
-      "shared staged/unstaged bytes are translated once"
+      0,
+      "no translation calls are scheduled"
     )
   }
   await ui.keys("\uE00C")
@@ -252,22 +237,22 @@ try {
       "skip-types.ts",
     ]) {
       await ui.named(path, '[aria-label="Review files"] button', false)
-      await ui.has("No pseudo-code for this file")
+      await ui.has("Read-only")
       await ui.until(
         '[...document.querySelectorAll("button")].some(button => button.textContent.trim() === "Validate file and continue" && !button.disabled)'
       )
       await ui.named("Validate file and continue")
     }
     await ui.named("skip-types.ts", '[aria-label="Review files"] button', false)
-    await ui.has("No pseudo-code for this file")
+    await ui.has("Read-only")
     await ui.screenshot("selection-omitted-file")
   }
   assert.equal(f.git("write-tree"), f.index)
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
     live
-      ? "Native preparation (real Codex): generated and opened a review with three-level documents and pseudo-code"
-      : "Native preparation (fixture): native ownership, cancellation, checkpoint resume, bounded progress, three-level documents and complete pseudo-code passed"
+      ? "Native preparation (real Codex): generated and opened a review with three-level documents"
+      : "Native preparation (fixture): native ownership, cancellation, checkpoint resume, bounded progress, three-level documents without translation passed"
   )
 } catch (error) {
   await ui.screenshot("progress-failure").catch(() => {})

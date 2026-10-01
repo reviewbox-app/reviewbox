@@ -125,6 +125,31 @@ pub(super) fn materialize(
             })
         })
         .collect();
+    let sources = if request.action == "preparation" {
+        crate::reader::sources(&workspace.snapshot)
+            .into_iter()
+            .map(|source| {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(AppError::new("cancelled", "Preparation stopped."));
+                }
+                let mut value = serde_json::to_value(&source)?;
+                if excluded(&source.path) {
+                    value["unavailable"] = json!("Sensitive content is excluded.");
+                } else {
+                    match storage.read_blob(&source.hash) {
+                        Ok(_) => {
+                            value["contentPath"] =
+                                json!(storage.root().join("blobs").join(&source.hash))
+                        }
+                        Err(error) => value["unavailable"] = json!(error.message),
+                    }
+                }
+                Ok(value)
+            })
+            .collect::<AppResult<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
     write(
         &exploration.directory.join("manifest.json"),
         &json!({
@@ -134,6 +159,7 @@ pub(super) fn materialize(
             "reviewState": exploration.directory.join("review.json"),
             "changes": changes,
             "focus": focus,
+            "sources": sources,
         }),
     )?;
     Ok(exploration)

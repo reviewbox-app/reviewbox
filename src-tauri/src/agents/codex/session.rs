@@ -32,6 +32,9 @@ fn failure(value: &Value) -> AppError {
     )
 }
 impl Session {
+    pub(in crate::agents) fn set_cancel(&mut self, cancel: Arc<AtomicBool>) {
+        self.transport.cancel = cancel;
+    }
     pub(in crate::agents) async fn start(
         root: &std::path::Path,
         config: &ProviderConfig,

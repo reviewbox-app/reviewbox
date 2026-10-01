@@ -5,25 +5,9 @@ use std::collections::BTreeSet;
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Outline {
+    #[serde(default)]
+    pub removed_steps: Vec<String>,
     pub topics: Vec<OutlineTopic>,
-    pub translation_files: Vec<String>,
-}
-impl Outline {
-    pub(super) fn translation_selection(&self, snapshot: &Snapshot) -> TranslationSelection {
-        TranslationSelection {
-            selected_files: self.translation_files.len() as u32,
-            skipped_files: crate::reader::files(snapshot)
-                .len()
-                .saturating_sub(self.translation_files.len()) as u32,
-        }
-    }
-    pub(super) fn translation_sources(&self, snapshot: &Snapshot) -> BTreeSet<String> {
-        crate::reader::files(snapshot)
-            .into_iter()
-            .filter(|file| self.translation_files.contains(&file.id))
-            .flat_map(|file| file.translations.into_iter().map(|source| source.source_id))
-            .collect()
-    }
 }
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -35,23 +19,23 @@ pub(super) struct OutlineTopic {
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct OutlineStep {
+    pub draft_id: String,
+    #[serde(default)]
+    pub previous_step_id: Option<String>,
+    #[serde(default)]
+    pub reuse: bool,
     pub title: String,
+    pub writing_brief: String,
+    pub context_source_ids: Vec<String>,
     pub anchors: Vec<CodeAnchor>,
 }
 
 pub(super) fn validate_outline(outline: &Outline, snapshot: &Snapshot) -> AppResult<()> {
-    let expected: BTreeSet<_> = crate::reader::files(snapshot)
+    let sources: BTreeSet<_> = reader::sources(snapshot)
         .into_iter()
-        .map(|file| file.id)
+        .map(|source| source.source_id)
         .collect();
-    let mut seen = BTreeSet::new();
-    for file in &outline.translation_files {
-        if !expected.contains(file) || !seen.insert(file.clone()) {
-            return Err(invalid(
-                "Selected translation files must be unique captured file IDs.",
-            ));
-        }
-    }
+    let mut identities = BTreeSet::new();
     for topic in &outline.topics {
         short_text(&topic.title, usize::MAX)?;
         short_text(&topic.brief, 4000)?;
@@ -59,7 +43,28 @@ pub(super) fn validate_outline(outline: &Outline, snapshot: &Snapshot) -> AppRes
             return Err(invalid("Every topic needs a step."));
         }
         for step in &topic.steps {
+            if step.draft_id.is_empty()
+                || step.draft_id.len() > 100
+                || !step
+                    .draft_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_:.".contains(&b))
+                || !identities.insert(&step.draft_id)
+            {
+                return Err(invalid(
+                    "Each step needs a unique, stable draftId (ASCII, at most 100 characters).",
+                ));
+            }
             short_text(&step.title, usize::MAX)?;
+            short_text(&step.writing_brief, usize::MAX)?;
+            let mut context = BTreeSet::new();
+            for source in &step.context_source_ids {
+                if !sources.contains(source) || !context.insert(source) {
+                    return Err(invalid(
+                        "Step context sources must be unique IDs from the frozen capture.",
+                    ));
+                }
+            }
             if step.anchors.is_empty() || step.anchors.len() > 2000 {
                 return Err(invalid("Every step needs 1–2000 captured anchors."));
             }
@@ -101,10 +106,13 @@ pub(super) fn validate_documents(
     storage: &Storage,
 ) -> AppResult<()> {
     crate::reader::validate_documents(storage, snapshot, documents)?;
+    for source in &documents.context_sources {
+        crate::reader::source(storage, snapshot, source)?;
+    }
     for (level, document) in [
-        ("beginner", &documents.beginner),
-        ("intermediate", &documents.intermediate),
-        ("developer", &documents.developer),
+        ("essential", &documents.essential),
+        ("explained", &documents.explained),
+        ("technical", &documents.technical),
     ] {
         short_text(&document.body, usize::MAX)?;
         if document.reading_seconds == 0 || document.reading_seconds > 7200 {
@@ -150,20 +158,8 @@ pub(super) fn validate_documents(
             short_text(&term.term, 200)?;
             short_text(&term.definition, 4000)?;
             short_text(&term.context, 4000)?;
-            if ![
-                &documents.beginner,
-                &documents.intermediate,
-                &documents.developer,
-            ]
-            .iter()
-            .any(|doc| {
-                doc.body.contains(&format!("(reviewbox:term/{})", term.id))
-                    || doc.body.to_lowercase().contains(&term.term.to_lowercase())
-            }) {
-                return Err(invalid(
-                    "Every glossary term must appear in its document as a reviewbox:term link.",
-                ));
-            }
+            // Definitions can be shared without being used in this step. Validate
+            // their metadata here; only links actually present must resolve below.
         }
         for (kind, marker) in [("ref", "reviewbox:ref/"), ("term", "reviewbox:term/")] {
             for tail in document.body.split(marker).skip(1) {
@@ -180,9 +176,9 @@ pub(super) fn validate_documents(
         }
         validate_fences(&document.body, level)?;
     }
-    if documents.beginner.body.trim() == documents.intermediate.body.trim()
-        || documents.intermediate.body.trim() == documents.developer.body.trim()
-        || documents.beginner.body.trim() == documents.developer.body.trim()
+    if documents.essential.body.trim() == documents.explained.body.trim()
+        || documents.explained.body.trim() == documents.technical.body.trim()
+        || documents.essential.body.trim() == documents.technical.body.trim()
     {
         return Err(invalid(
             "Write three genuinely distinct reading-level documents.",
@@ -205,7 +201,7 @@ fn validate_id(id: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_fences(body: &str, level: &str) -> AppResult<()> {
+pub(super) fn validate_fences(body: &str, level: &str) -> AppResult<()> {
     let mut fence: Option<(String, char, usize, String)> = None;
     for line in body.lines() {
         let trimmed = line.trim_start();
@@ -243,19 +239,19 @@ fn validate_fences(body: &str, level: &str) -> AppResult<()> {
             } else {
                 let language = trimmed[count..].trim().to_owned();
                 let allowed = match level {
-                    "beginner" => {
+                    "essential" => {
                         matches!(
                             language.as_str(),
-                            "summary" | "before-after" | "mermaid" | "pseudocode" | "html"
+                            "summary" | "before-after" | "mermaid" | "html"
                         )
                     }
-                    "intermediate" => matches!(
+                    "explained" => matches!(
                         language.as_str(),
-                        "summary" | "before-after" | "mermaid" | "pseudocode" | "html"
+                        "summary" | "before-after" | "mermaid" | "html"
                     ),
                     _ => matches!(
                         language.as_str(),
-                        "summary" | "before-after" | "mermaid" | "pseudocode" | "source" | "html"
+                        "summary" | "before-after" | "mermaid" | "source" | "html"
                     ),
                 };
                 if !allowed {
@@ -278,43 +274,4 @@ fn validate_fences(body: &str, level: &str) -> AppResult<()> {
 
 pub(super) fn line_count(text: &str) -> usize {
     text.lines().count()
-}
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct Segment {
-    pub start_line: u32,
-    pub end_line: u32,
-    pub text: String,
-}
-pub(super) fn segments(text: &str) -> AppResult<Vec<Segment>> {
-    if text.is_empty() {
-        return Ok(vec![]);
-    }
-    Ok(vec![Segment {
-        start_line: 1,
-        end_line: line_count(text) as u32,
-        text: text.into(),
-    }])
-}
-#[derive(Clone, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct TranslationResult {
-    pub blocks: Vec<PseudoBlock>,
-}
-pub(super) fn validate_translation(result: &TranslationResult, segment: &Segment) -> AppResult<()> {
-    let mut previous = 0;
-    for block in &result.blocks {
-        if block.start_line < segment.start_line
-            || block.start_line <= previous
-            || block.end_line < block.start_line
-            || block.end_line > segment.end_line
-        {
-            return Err(invalid(
-                "Pseudo-code ranges must be ordered, non-overlapping and inside the captured source. Gaps are allowed.",
-            ));
-        }
-        short_text(&block.text, usize::MAX)?;
-        previous = block.end_line;
-    }
-    Ok(())
 }

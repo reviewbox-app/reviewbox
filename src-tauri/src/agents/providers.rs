@@ -352,6 +352,7 @@ mod tests {
                     sequence: 0,
                     channel: tauri::ipc::Channel::new(|_| Ok(())),
                     text: String::new(),
+                    preview: None,
                 };
                 let error = runtime
                     .block_on(crate::agents::codex::run(
@@ -377,6 +378,7 @@ mod tests {
             sequence: 0,
             channel: tauri::ipc::Channel::new(|_| Ok(())),
             text: String::new(),
+            preview: None,
         };
         let error = runtime
             .block_on(crate::agents::codex::run(

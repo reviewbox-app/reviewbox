@@ -284,6 +284,7 @@ for line in sys.stdin:
             sequence: 0,
             channel: Channel::new(|_| Ok(())),
             text: String::new(),
+            preview: None,
         };
         let error = runtime
             .block_on(codex::run(
@@ -409,7 +410,7 @@ for line in sys.stdin:
         assert params['sandbox'] == 'danger-full-access'
         assert params['ephemeral'] is True
         model = params['model']
-        assert model in ['gpt-6-sol', None]
+        assert model in ['gpt-6.1-sol', None]
         assert 'config' not in params and 'permissions' not in params
         assert (pathlib.Path.cwd() / 'code.ts').read_text().endswith('3;\n')
         send({'id':2,'result':{'thread':{'id':'review-thread','ephemeral':True}}})

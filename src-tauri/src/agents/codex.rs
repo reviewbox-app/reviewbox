@@ -173,6 +173,11 @@ impl Messages {
                 {
                     stream.progress(event)?;
                 }
+                if self.drafts.contains_key(&id)
+                    && let Some(preview) = &mut stream.preview
+                {
+                    preview.update(&id, partial);
+                }
                 self.last_id = id;
             }
         }
@@ -193,6 +198,9 @@ impl Messages {
                 };
                 if let Some(event) = draft.update(text, true) {
                     stream.progress(event)?;
+                }
+                if let Some(preview) = &mut stream.preview {
+                    preview.update(id, text);
                 }
                 self.final_text = Some(text.into());
             } else if item["phase"] != "commentary" {
@@ -235,7 +243,6 @@ pub(super) use session::Session;
 #[derive(Clone)]
 pub(super) struct Prepared {
     pub effort: Option<String>,
-    pub translation_effort: Option<String>,
     pub helper: Option<String>,
 }
 pub(super) async fn prepare(
@@ -298,20 +305,8 @@ pub(super) async fn prepare(
         ));
     }
 
-    let mut translation_effort = None;
     let effort = if let Some(helper) = &helper {
         let catalog = models::discover(config, cancel.clone()).await?;
-        let translator = catalog.iter().find(|model| model.id == "gpt-6-luna")
-            .ok_or_else(|| AppError::new("translation_model", "The translation model gpt-6-luna is unavailable. No alternative model was selected."))?;
-        translation_effort = ["medium", "high"]
-            .into_iter()
-            .find(|effort| {
-                translator
-                    .supported_efforts
-                    .iter()
-                    .any(|value| value == effort)
-            })
-            .map(str::to_owned);
         let child = catalog.iter().find(|model| &model.id == helper).ok_or_else(|| AppError::new("helper_model", "The selected helper model is unavailable. Choose another helper in Settings > Rev."))?;
         if !child
             .supported_efforts
@@ -337,11 +332,7 @@ pub(super) async fn prepare(
     } else {
         models::effort(config, cancel).await?.map(str::to_owned)
     };
-    Ok(Prepared {
-        effort,
-        translation_effort,
-        helper,
-    })
+    Ok(Prepared { effort, helper })
 }
 pub(super) async fn run(
     root: &std::path::Path,
@@ -429,6 +420,7 @@ mod progress_tests {
             sequence: 0,
             channel,
             text: String::new(),
+            preview: None,
         };
         let mut messages = Messages::default();
         for id in ["one", "two"] {

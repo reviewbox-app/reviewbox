@@ -2,7 +2,7 @@ use super::*;
 
 fn state() -> PreparationState {
     PreparationState {
-        translation_selection: None,
+        adaptation: None,
         active_batches: vec![],
         phases: vec![],
         id: "operation".into(),
@@ -13,7 +13,7 @@ fn state() -> PreparationState {
         phase: PreparationPhase::Context,
         completed_batches: 0,
         total_batches: 1,
-        step_titles: vec![],
+        steps: vec![],
         events: vec![],
         error: None,
         started_at: now(),
@@ -31,6 +31,7 @@ fn progress_is_bounded_sequenced_and_independent_of_subscribers() {
             cancel: Arc::new(AtomicBool::new(false)),
             sequence: 0,
             measurements: vec![],
+            finished: Arc::new(AtomicBool::new(false)),
         },
     );
     for index in 0..350 {
@@ -64,23 +65,6 @@ fn progress_is_bounded_sequenced_and_independent_of_subscribers() {
     );
     assert!(!operation.cancel.load(Ordering::Relaxed));
 }
-#[test]
-fn source_segments_preserve_crlf_unicode_and_final_line_with_strict_bounds() {
-    let text = format!("{}last", "é\r\n".repeat(405));
-    let parts = segments(&text).unwrap();
-    assert_eq!(
-        parts
-            .iter()
-            .map(|part| part.text.as_str())
-            .collect::<String>(),
-        text
-    );
-    assert_eq!(parts.len(), 1);
-    assert_eq!((parts[0].start_line, parts[0].end_line), (1, 406));
-    assert_eq!(segments(&"a".repeat(100_000)).unwrap().len(), 1);
-    assert!(segments("").unwrap().is_empty());
-    assert_eq!(segments("a\n").unwrap()[0].end_line, 1);
-}
 
 #[test]
 fn streaming_counters_preserve_meaningful_events_and_ignore_superseded_runs() {
@@ -92,6 +76,7 @@ fn streaming_counters_preserve_meaningful_events_and_ignore_superseded_runs() {
             cancel: Arc::new(AtomicBool::new(false)),
             sequence: 0,
             measurements: vec![],
+            finished: Arc::new(AtomicBool::new(false)),
         },
     );
     let event = |progress| AgentEvent {
@@ -151,35 +136,6 @@ fn streaming_counters_preserve_meaningful_events_and_ignore_superseded_runs() {
     assert_eq!(events[2].sequence, 1001);
 }
 #[test]
-fn translations_reject_missing_overlapping_or_reordered_lines() {
-    let segment = Segment {
-        start_line: 5,
-        end_line: 8,
-        text: "a\nb\nc\nd".into(),
-    };
-    for ranges in [vec![(5, 6), (6, 8)], vec![(7, 8), (5, 6)], vec![(5, 9)]] {
-        let result = TranslationResult {
-            blocks: ranges
-                .into_iter()
-                .map(|(start_line, end_line)| PseudoBlock {
-                    start_line,
-                    end_line,
-                    text: "Read a value".into(),
-                })
-                .collect(),
-        };
-        assert!(validate_translation(&result, &segment).is_err());
-    }
-    let result = TranslationResult {
-        blocks: vec![PseudoBlock {
-            start_line: 5,
-            end_line: 8,
-            text: "Read the four values".into(),
-        }],
-    };
-    validate_translation(&result, &segment).unwrap();
-}
-#[test]
 fn checkpoint_resume_requires_identical_sources_prompts_and_provider() {
     let checkpoint = Checkpoint {
         revision: 0,
@@ -190,6 +146,7 @@ fn checkpoint_resume_requires_identical_sources_prompts_and_provider() {
         prompt_hash: "prompt".into(),
         provider_hash: "provider".into(),
         helper_model: None,
+        definitions: BTreeMap::new(),
         results: BTreeMap::new(),
         measurements: vec![],
     };
@@ -222,6 +179,7 @@ fn restart_marks_checkpoints_interrupted_without_starting_provider_work() {
         prompt_hash: "prompt".into(),
         provider_hash: "provider".into(),
         helper_model: None,
+        definitions: BTreeMap::new(),
         results: BTreeMap::from([("outline".into(), json!({"topics":[]}))]),
         measurements: vec![],
     };
@@ -304,22 +262,26 @@ value=json.loads(prompt.split('Batch input:\n',1)[1].split('\n\nContract:',1)[0]
 batch=value;results=[]
 for item in batch['items']:
  value=item['input']
- kind='pseudo' if 'segment' in value else value.get('scope','outline')
+ kind=value.get('scope','outline')
  with (base/'calls').open('a') as output: output.write(kind+'\n')
  if kind=='readingStep' and (base/'pause').exists():
      while (base/'pause').exists(): time.sleep(.03)
  if kind=='outline':
      manifest=json.loads(pathlib.Path(context['reviewManifest']).read_text())
      change=json.loads(pathlib.Path(manifest['changes'][0]['metadata']).read_text())
-     result={'translationFiles':[f['id'] for f in value['files'] if not (base/'skip-all').exists()],'topics':[{'title':'Adjust the amount','brief':'The amount is updated.','steps':[{'title':'Understand the new amount','anchors':[change['anchors'][0]]}]}]}
- elif kind=='pseudo':
-     segment=value['segment']; result={'blocks':[{'startLine':segment['startLine'],'endLine':segment['endLine'],'text':'Remember the requested amount'}]}
-     if (base/'invalid-pseudo').exists(): result={'blocks':[{'startLine':0,'endLine':1,'text':'Invalid range'}]}
+     result={'topics':[{'title':'Adjust the amount','brief':'The amount is updated.','steps':[{'draftId':'0:0','title':'Understand the new amount','writingBrief':'Explain the changed amount, its previous and current value and its public effect.','contextSourceIds':[],'anchors':[change['anchors'][0]]}]}]}
  else:
-     result={level:{'body':body,'readingSeconds':30,'references':[],'terms':[]} for level,body in [('beginner','The remembered amount changes.'),('intermediate','The stored amount is updated to the requested value.'),('developer','The assignment now uses the new amount while preserving its structure.')]}
+     result={level:{'body':body,'readingSeconds':30,'references':[],'terms':[]} for level,body in [('essential','The remembered amount changes.'),('explained','The stored amount is updated to the requested value.'),('technical','The assignment now uses the new amount while preserving its structure.')]}
      if (base/'invalid').exists(): result={'bad':'shape'}
  results.append({'id':item['id'],'result':result})
 result={'items':results}
+if (base/'outline-pause').exists() and kind=='outline':
+ def event(e,child=None):print(json.dumps({'type':'stream_event','parent_tool_use_id':child,'event':e}),flush=True)
+ event({'type':'message_start'})
+ event({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}})
+ text=json.dumps(result)
+ for offset in range(0,len(text),11):event({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':text[offset:offset+11]}})
+ while (base/'outline-pause').exists():time.sleep(.03)
 print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)}),flush=True)
 "#).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
@@ -333,6 +295,87 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
         config.model = None;
         agents::configure(&storage, settings).unwrap();
         (dir, storage, workspace)
+    }
+    #[test]
+    fn claude_previews_complete_steps_without_finishing_analysis() {
+        let (dir, storage, workspace) = fixture();
+        fs::write(dir.path().join("outline-pause"), "").unwrap();
+        let manager = PreparationManager::default();
+        manager
+            .start(
+                storage.clone(),
+                resources(),
+                PreparationRequest {
+                    review_id: workspace.review.id.clone(),
+                    provider: "claude".into(),
+                },
+            )
+            .unwrap();
+        let started = std::time::Instant::now();
+        loop {
+            let state = manager
+                .get(&storage, &workspace.review.id, None)
+                .unwrap()
+                .unwrap();
+            if state
+                .steps
+                .first()
+                .is_some_and(|s| s.status == PreparationStepStatus::Ready)
+            {
+                assert_eq!(state.phase, PreparationPhase::Outline);
+                assert_eq!(state.steps[0].status, PreparationStepStatus::Ready);
+                assert!(
+                    !serde_json::to_string(&state)
+                        .unwrap()
+                        .contains("writingBrief")
+                );
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "{:?}",
+                state.error
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        manager.cancel(&storage, &workspace.review.id).unwrap();
+        loop {
+            let state = manager
+                .get(&storage, &workspace.review.id, None)
+                .unwrap()
+                .unwrap();
+            if state.status != PreparationStatus::Running {
+                assert_eq!(state.status, PreparationStatus::Cancelled);
+                assert_eq!(state.steps[0].status, PreparationStepStatus::Ready);
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(25));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        fs::remove_file(dir.path().join("outline-pause")).unwrap();
+        manager
+            .resume(storage.clone(), resources(), &workspace.review.id)
+            .unwrap();
+        loop {
+            let state = manager
+                .get(&storage, &workspace.review.id, None)
+                .unwrap()
+                .unwrap();
+            if state.status != PreparationStatus::Running {
+                assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(35));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            fs::read_to_string(dir.path().join("calls"))
+                .unwrap()
+                .lines()
+                .filter(|line| *line == "readingStep")
+                .count(),
+            1
+        );
     }
     pub(in crate::preparation) fn resources() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/agents")
@@ -376,6 +419,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
             prompt_hash: String::new(),
             provider_hash: String::new(),
             helper_model: None,
+            definitions: BTreeMap::new(),
             results: BTreeMap::new(),
             measurements: vec![],
         };
@@ -391,6 +435,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
                 cancel: cancel.clone(),
                 sequence: 0,
                 measurements: vec![],
+                finished: Arc::new(AtomicBool::new(false)),
             },
         );
         assert!(
@@ -431,6 +476,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
             prompt_hash: String::new(),
             provider_hash: String::new(),
             helper_model: None,
+            definitions: BTreeMap::new(),
             results: BTreeMap::new(),
             measurements: vec![],
         };
@@ -452,8 +498,77 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
                 .resume(storage, resources(), &workspace.review.id)
                 .unwrap_err()
                 .code,
-            "preparation_changed"
+            "not_found"
         );
+    }
+    #[test]
+    fn refresh_quiescence_waits_for_owned_work_and_blocks_restarts() {
+        tauri::async_runtime::block_on(async {
+            let (dir, storage, workspace) = fixture();
+            fs::write(dir.path().join("pause"), "").unwrap();
+            let manager = PreparationManager::default();
+            let request = PreparationRequest {
+                review_id: workspace.review.id.clone(),
+                provider: "claude".into(),
+            };
+            manager
+                .start(storage.clone(), resources(), request.clone())
+                .unwrap();
+            until(&manager, &storage, &workspace.review.id, |state| {
+                state.completed_batches >= 1
+            })
+            .await;
+            let pause = manager
+                .quiesce(&storage, &workspace.review.id)
+                .await
+                .unwrap();
+            let old = manager
+                .get(&storage, &workspace.review.id, None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(old.status, PreparationStatus::Cancelled);
+            assert_eq!(
+                manager
+                    .start(storage.clone(), resources(), request)
+                    .unwrap_err()
+                    .code,
+                "review_busy"
+            );
+            assert_eq!(
+                manager
+                    .resume(storage.clone(), resources(), &workspace.review.id)
+                    .unwrap_err()
+                    .code,
+                "review_busy"
+            );
+            let refreshed =
+                reviews::refresh(&storage, &workspace.review.id, workspace.review.revision)
+                    .unwrap();
+            assert_ne!(refreshed.snapshot.id, workspace.snapshot.id);
+            drop(pause);
+            assert!(
+                manager
+                    .get(&storage, &workspace.review.id, None)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                optional_checkpoint(
+                    &storage,
+                    &format!("{}:{}", workspace.review.repository_id, workspace.review.id)
+                )
+                .unwrap()
+                .is_none()
+            );
+            fs::remove_file(dir.path().join("pause")).unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(
+                manager
+                    .get(&storage, &workspace.review.id, None)
+                    .unwrap()
+                    .is_none()
+            );
+        });
     }
     async fn until(
         manager: &PreparationManager,
@@ -584,46 +699,33 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
             );
         });
     }
+}
 
-    #[test]
-    fn invalid_pseudocode_does_not_block_the_verified_documents_or_publish_partial_blocks() {
-        tauri::async_runtime::block_on(async {
-            let (dir, storage, workspace) = fixture();
-            fs::write(dir.path().join("invalid-pseudo"), "").unwrap();
-            let manager = PreparationManager::default();
-            manager
-                .start(
-                    storage.clone(),
-                    resources(),
-                    PreparationRequest {
-                        review_id: workspace.review.id.clone(),
-                        provider: "claude".into(),
-                    },
-                )
-                .unwrap();
-            let ready = until(&manager, &storage, &workspace.review.id, |state| {
-                state.status != PreparationStatus::Running
-            })
-            .await;
-            assert_eq!(ready.status, PreparationStatus::Ready, "{:?}", ready.error);
-            let review = reviews::load(&storage, &workspace.review.id)
-                .unwrap()
-                .review;
-            assert_eq!(review.topics[0].steps.len(), 1);
-            let file = reader::read_file(&storage, &review.id, &review.files[0].id).unwrap();
-            assert!(file.documents.is_none());
-            assert!(
-                file.translations
-                    .iter()
-                    .all(|translation| translation.blocks.is_empty()
-                        && translation.unavailable_reason.is_some())
-            );
-            let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
-            assert_eq!(
-                calls.lines().filter(|kind| *kind == "pseudo").count(),
-                8,
-                "each frozen side gets an initial attempt and three repairs"
-            );
-        });
+#[test]
+fn legacy_pseudocode_checkpoints_remain_readable_but_require_compatible_prompts() {
+    let mut old = serde_json::to_value(state()).unwrap();
+    old["phase"] = json!("pseudocode");
+    old["translationSelection"] = json!({"selectedFiles":1,"skippedFiles":0});
+    let checkpoint: Checkpoint = serde_json::from_value(json!({
+        "revision":1,"reviewRevision":0,"repositoryId":"repo","state":old,
+        "sourceHash":"source","promptHash":"old-translation-prompts","providerHash":"provider",
+        "results":{"pseudo:hash":{"blocks":[]}}
+    }))
+    .unwrap();
+    assert_eq!(checkpoint.state.phase, PreparationPhase::Documents);
+    assert_eq!(
+        compatible(&checkpoint, "source", "document-only-prompts", "provider")
+            .unwrap_err()
+            .code,
+        "preparation_changed"
+    );
+    let serialized = serde_json::to_value(checkpoint.state).unwrap();
+    assert!(serialized.get("translationSelection").is_none());
+}
+
+#[test]
+fn new_documents_reject_pseudocode_while_stored_documents_keep_their_renderer() {
+    for level in ["essential", "explained", "technical"] {
+        assert!(batches::validate_fences("```pseudocode\nRETURN value\n```", level).is_err());
     }
 }
