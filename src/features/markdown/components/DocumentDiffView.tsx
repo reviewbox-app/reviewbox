@@ -69,12 +69,14 @@ function Block({
   changed,
   detail,
   prefix,
+  label = true,
 }: {
   block?: DocumentBlock
   side: "before" | "after"
   changed: boolean
   detail?: string
   prefix: string
+  label?: boolean
 }) {
   if (!block) return <div aria-hidden="true" className="document-diff-empty" />
   return (
@@ -88,20 +90,22 @@ function Block({
       data-source-side={side}
       data-unchanged={!changed}
     >
-      <div className="document-diff-label">
-        <span
-          aria-label={
-            changed ? (side === "before" ? "Removed" : "Added") : "Unchanged"
-          }
-        >
-          {changed ? (side === "before" ? "−" : "+") : "·"}
-        </span>
-        <span>
-          {side === "before" ? "Before" : "After"} L{block.lines.start}
-          {block.lines.end !== block.lines.start ? `–${block.lines.end}` : ""}
-        </span>
-        {detail && <span className="document-diff-detail">{detail}</span>}
-      </div>
+      {label && (
+        <div className="document-diff-label">
+          <span
+            aria-label={
+              changed ? (side === "before" ? "Removed" : "Added") : "Unchanged"
+            }
+          >
+            {changed ? (side === "before" ? "−" : "+") : "·"}
+          </span>
+          <span>
+            {side === "before" ? "Before" : "After"} L{block.lines.start}
+            {block.lines.end !== block.lines.start ? `–${block.lines.end}` : ""}
+          </span>
+          {detail && <span className="document-diff-detail">{detail}</span>}
+        </div>
+      )}
       <MarkdownTreeRenderer tree={block.tree} prefix={prefix} />
     </section>
   )
@@ -151,6 +155,7 @@ export function DocumentDiffView({
   onCounts,
   onCode,
   handle,
+  diff = true,
 }: {
   before: string | null
   after: string | null
@@ -162,6 +167,7 @@ export function DocumentDiffView({
   onCounts: (counts: { added: number; removed: number }) => void
   onCode: () => void
   handle: Ref<DocumentViewHandle>
+  diff?: boolean
 }) {
   const state = useDocumentDiff(before, after)
   const root = useRef<HTMLDivElement>(null)
@@ -292,7 +298,7 @@ export function DocumentDiffView({
         ref={root}
         tabIndex={0}
         role="region"
-        aria-label="Markdown file diff"
+        aria-label={diff ? "Markdown file diff" : "Markdown file"}
         data-layout={split ? "split" : "unified"}
         className="document-diff h-full overflow-y-auto outline-none"
         style={{ paddingTop: padding.top, paddingBottom: padding.bottom }}
@@ -306,9 +312,21 @@ export function DocumentDiffView({
         ) : state?.result ? (
           <RenderBoundary onCode={onCode}>
             {state.result.rows.length ? (
-              state.result.rows.map((row, index) => (
-                <Row key={index} row={row} split={split} prefix={prefix} />
-              ))
+              state.result.rows.map((row, index) =>
+                diff ? (
+                  <Row key={index} row={row} split={split} prefix={prefix} />
+                ) : (
+                  <div className="document-diff-row" key={index}>
+                    <Block
+                      block={after !== null ? row.after : row.before}
+                      side={after !== null ? "after" : "before"}
+                      changed={false}
+                      label={false}
+                      prefix={`${prefix}${after !== null ? "after" : "before"}-`}
+                    />
+                  </div>
+                )
+              )
             ) : (
               <p className="p-6 text-sm text-muted-foreground">
                 Empty document

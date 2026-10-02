@@ -21,6 +21,8 @@ export function editorSurfaceColors(dark: boolean) {
     "editor.inactiveSelectionBackground": selection,
     "editorWidget.background": background,
     "editorWidget.border": faint,
+    "editorStickyScroll.shadow": dark ? "#00000026" : "#00000014",
+    "scrollbar.shadow": dark ? "#00000026" : "#00000014",
     "editorIndentGuide.background1": "#00000000",
     "scrollbarSlider.background": faint,
     "diffEditor.insertedLineBackground": dark ? "#4ade8012" : "#16a34a12",

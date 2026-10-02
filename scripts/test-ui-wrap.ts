@@ -18,20 +18,20 @@ try {
   await ui.fill('[role="combobox"]', "wrapped.ts")
   await ui.named("wrapped.ts", '[role="option"]', false)
   await ui.resize(800, 600)
-  for (const mode of ["Split", "Unified"]) {
-    await ui.named(mode, '[role="tab"]')
+  for (const mode of ["Show previous code", "Hide previous code"]) {
+    await ui.named(mode)
     await ui.until(
-      'document.querySelectorAll(".monaco-diff-editor .modified .view-line").length > 5',
+      'document.querySelectorAll(".block-diff-main .view-line").length > 5',
       "long source line wraps into multiple screen lines"
     )
     const horizontal = await ui.execute<number>(
-      `return [...document.querySelectorAll('.monaco-diff-editor .scrollbar.horizontal')].filter(e=>e.classList.contains('visible') && e.getBoundingClientRect().height > 0 && getComputedStyle(e).opacity !== '0').length`
+      `return [...document.querySelectorAll('.block-diff-main .scrollbar.horizontal')].filter(e=>e.classList.contains('visible') && e.getBoundingClientRect().height > 0 && getComputedStyle(e).opacity !== '0').length`
     )
     assert.equal(horizontal, 0, "no horizontal scrollbar for overflowing code")
     await ui.screenshot(`wrapped-${mode.toLowerCase()}`)
   }
   console.log(
-    "Native code wrap: long lines wrap in Split and Unified at 800 px without horizontal scrolling"
+    "Native code wrap: long lines wrap in current and block comparison views at 800 px without horizontal scrolling"
   )
 } finally {
   await ui.stop()

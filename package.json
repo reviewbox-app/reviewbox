@@ -54,7 +54,8 @@
     "icons:build": "bun scripts/build-file-icons.ts",
     "test:ui:languages": "bun scripts/test-ui-languages.ts",
     "test:ui:code-colors": "bun scripts/test-ui-code-colors.ts",
-    "app-icons:build": "bun scripts/build-app-icons.ts"
+    "app-icons:build": "bun scripts/build-app-icons.ts",
+    "test:ui:block-diff": "bun scripts/test-ui-block-diff.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

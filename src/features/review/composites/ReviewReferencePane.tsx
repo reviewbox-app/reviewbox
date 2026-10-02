@@ -116,13 +116,10 @@ export function ReviewReferencePane({
       },
     ])
     revealPassage(mounted.current, reference.startLine, reference.endLine, {
-      top:
-        overlay.top +
-        reviewReaderLayout.codeHeaderHeight +
-        reviewReaderLayout.contentInset,
+      top: reviewReaderLayout.contentInset,
       bottom: overlay.bottom + reviewReaderLayout.contentInset,
     })
-  }, [reference, overlay.top, overlay.bottom])
+  }, [reference, overlay.bottom])
   useEffect(() => {
     highlight()
   }, [highlight, content])

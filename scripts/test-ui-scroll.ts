@@ -74,9 +74,9 @@ try {
     )
     return scrolled
   }
-  const diff = ".monaco-diff-editor .modified"
-  for (const mode of ["Split", "Unified"]) {
-    await ui.named(mode, "[role=tab]")
+  const diff = ".block-diff-main"
+  for (const mode of ["Show previous code", "Hide previous code"]) {
+    await ui.named(mode)
     await ui.has("+400")
     await Bun.sleep(700)
     const scrolled = await scrollAndWait(diff)

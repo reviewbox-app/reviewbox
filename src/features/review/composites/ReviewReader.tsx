@@ -459,6 +459,7 @@ export function ReviewReader({
             selectedId={displayedFile?.id ?? null}
             visible={showFiles}
             onSelect={selectFile}
+            onError={(message) => setFileFailure({ key: contentKey, message })}
           />
         )}
       </aside>

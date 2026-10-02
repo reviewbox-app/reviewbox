@@ -38,7 +38,7 @@ async function theme(name: "Dark" | "Light" | "System") {
       `document.documentElement.classList.contains(${JSON.stringify(name.toLowerCase())})`
     )
 }
-const editorSelector = ".monaco-diff-editor .modified > .monaco-editor"
+const editorSelector = ".block-diff-main > .monaco-editor"
 async function colors() {
   return ui.execute<string[]>(
     `return [...new Set([...document.querySelectorAll('${editorSelector} .view-line span')].filter(e=>e.textContent.trim()).map(e=>getComputedStyle(e).color))]`
@@ -115,7 +115,7 @@ try {
       )
       assert.equal(
         await ui.execute(
-          `return [...document.querySelectorAll('.monaco-diff-editor .scrollbar.horizontal')].filter(e=>e.classList.contains('visible') && e.getBoundingClientRect().height>0 && getComputedStyle(e).opacity!=='0').length`
+          `return [...document.querySelectorAll('.block-diff-main .scrollbar.horizontal')].filter(e=>e.classList.contains('visible') && e.getBoundingClientRect().height>0 && getComputedStyle(e).opacity!=='0').length`
         ),
         0
       )

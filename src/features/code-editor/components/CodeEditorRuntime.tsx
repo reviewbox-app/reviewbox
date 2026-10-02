@@ -1,11 +1,11 @@
 "use client"
 
 import Editor from "@monaco-editor/react"
-import { useEffect, type CSSProperties } from "react"
+import { useEffect } from "react"
+import styles from "./editor-surface.module.css"
 import { useCodeTheme } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
-import styles from "./editor-overlays.module.css"
 
 import type { CodeEditorProps } from "../contracts/codeEditor.types"
 
@@ -19,14 +19,13 @@ export function CodeEditorRuntime(props: CodeEditorProps) {
   return (
     <>
       <div
-        className={overlayTop > 0 ? styles.overlaid : undefined}
-        style={
-          {
-            height: props.height ?? 320,
-            width: props.width ?? "100%",
-            "--code-overlay-top": `${overlayTop}px`,
-          } as CSSProperties
-        }
+        className={styles.surface}
+        style={{
+          height: props.height ?? 320,
+          width: props.width ?? "100%",
+          paddingTop: overlayTop,
+          boxSizing: "border-box",
+        }}
       >
         <Editor
           {...editorProps}
@@ -35,6 +34,12 @@ export function CodeEditorRuntime(props: CodeEditorProps) {
           theme={theme}
           options={{
             ...props.options,
+            // The viewport starts below the glass bars, so sticky-scroll and
+            // reveal/find calculations share the same visible upper boundary.
+            padding: {
+              ...props.options?.padding,
+              top: Math.max(0, (props.options?.padding?.top ?? 0) - overlayTop),
+            },
             "semanticHighlighting.enabled": true,
             wordWrap: "on",
             scrollbar: { ...props.options?.scrollbar, horizontal: "hidden" },

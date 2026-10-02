@@ -13,12 +13,23 @@ import type {
 } from "@/lib/desktop/contracts.generated"
 import { documentBefore, documentAfter } from "../fixtures/documentDiff.fixture"
 
+import {
+  blockBefore,
+  blockAfter,
+  largeBlockBefore,
+  largeBlockAfter,
+} from "../fixtures/blockDiff.fixture"
+
 const changes: Change[] = [
   "README.md",
   "LICENSE",
   "notes.TXT",
   "CMakeLists.txt",
   "README.mdx",
+  "NEW.md",
+  "DELETED.md",
+  "blocks.ts",
+  "large-block.ts",
 ].map((path) => ({
   id: path,
   path,
@@ -26,8 +37,14 @@ const changes: Change[] = [
   untracked: false,
   layer: "unstaged",
   binary: false,
-  before: { hash: "before", size: documentBefore.length, mode: "100644" },
-  after: { hash: "after", size: documentAfter.length, mode: "100644" },
+  before:
+    path === "NEW.md"
+      ? null
+      : { hash: "before", size: documentBefore.length, mode: "100644" },
+  after:
+    path === "DELETED.md"
+      ? null
+      : { hash: "after", size: documentAfter.length, mode: "100644" },
   passages: [
     {
       id: "passage",
@@ -81,9 +98,25 @@ export function DocumentDiffWorkbench() {
     const read = reviewCommands.content
     reviewCommands.content = async (_snapshotId, changeId) => ({
       before:
-        changeId === "notes.TXT" ? "Notes before\nSecond line" : documentBefore,
+        changeId === "large-block.ts"
+          ? largeBlockBefore
+          : changeId === "blocks.ts"
+            ? blockBefore
+            : changeId === "NEW.md"
+              ? null
+              : changeId === "notes.TXT"
+                ? "Notes before\nSecond line"
+                : documentBefore,
       after:
-        changeId === "notes.TXT" ? "Notes after\nSecond line" : documentAfter,
+        changeId === "large-block.ts"
+          ? largeBlockAfter
+          : changeId === "blocks.ts"
+            ? blockAfter
+            : changeId === "DELETED.md"
+              ? null
+              : changeId === "notes.TXT"
+                ? "Notes after\nSecond line"
+                : documentAfter,
       unavailableReason: null,
     })
     let active = true
@@ -122,6 +155,20 @@ export function DocumentDiffWorkbench() {
         <Button size="sm" onClick={openReference}>
           Open in code
         </Button>
+        {change.id === "blocks.ts" && (
+          <Button
+            size="sm"
+            onClick={() =>
+              setReference({
+                snapshotId: snapshot.id,
+                changeId: change.id,
+                passageId: "old-block",
+              })
+            }
+          >
+            Open old block
+          </Button>
+        )}
         {reference && (
           <Button size="sm" onClick={() => setReference(null)}>
             Close reference
@@ -146,8 +193,10 @@ export function DocumentDiffWorkbench() {
                 ? {
                     ...change.passages[0],
                     id: "reference",
-                    newStart: 219,
-                    newLines: 3,
+                    oldStart: reference.passageId === "old-block" ? 19 : 219,
+                    oldLines: reference.passageId === "old-block" ? 2 : 3,
+                    newStart: reference.passageId === "old-block" ? 18 : 219,
+                    newLines: reference.passageId === "old-block" ? 0 : 3,
                   }
                 : change.passages[0]
             }

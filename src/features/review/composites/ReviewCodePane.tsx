@@ -11,16 +11,17 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { MarkdownPreviewToggle } from "@/features/markdown/components/MarkdownPreviewToggle"
 import { DocumentDiffView } from "@/features/markdown/components/DocumentDiffView"
 import { isDocumentFile } from "@/features/markdown/helpers/documentFiles.helpers"
 import { ReviewSourceCode } from "../components/ReviewSourceCode"
+import { ReviewSourceFile } from "../components/ReviewSourceFile"
 import {
   sourcePreviewSession,
   updateSourcePreviewSession,
@@ -40,7 +41,7 @@ import type {
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
 import {
-  LicenseIcon,
+  SquareSplitHorizontalIcon,
   MoreHorizontalIcon,
   Search01Icon,
   Target02Icon,
@@ -84,6 +85,8 @@ export function ReviewCodePane({
   const [trimWhitespace, setTrimWhitespace] = useState(false)
   const [loadedContent, setContent] = useState<FileContent | null>(null)
   const content = source ?? loadedContent
+  const singleFile = !change.before || !change.after
+  const SourceCode = singleFile ? ReviewSourceFile : ReviewSourceCode
   const [error, setError] = useState("")
   const [counts, setCounts] = useState<{
     added: number
@@ -92,7 +95,8 @@ export function ReviewCodePane({
   const [cursor, setCursor] = useState<{ line: number; column: number } | null>(
     null
   )
-  const { split, setSplit } = useReviewWorkspaceStore()
+  const { split, setSplit, compareCode, setCompareCode } =
+    useReviewWorkspaceStore()
   const sessionKey = `${snapshot.id}/${change.id}/${modelScope}`
   const session = sourcePreviewSession(sessionKey)
   const compatible = isDocumentFile(
@@ -220,33 +224,11 @@ export function ReviewCodePane({
         )}
         <span className="flex-1" />
         {compatible && (
-          <>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Markdown preview"
-                    aria-pressed={markdown}
-                    data-active={markdown}
-                    className="data-[active=true]:bg-accent data-[active=true]:text-accent-foreground"
-                    disabled={!content}
-                    onClick={() => switchMode(markdown ? "code" : "markdown")}
-                  />
-                }
-              >
-                <HugeiconsIcon icon={LicenseIcon} size={16} />
-              </TooltipTrigger>
-              <TooltipContent>
-                {markdown ? "Show source code" : "Show Markdown preview"}
-              </TooltipContent>
-            </Tooltip>
-            <Separator
-              orientation="vertical"
-              className="h-6 data-vertical:self-auto"
-            />
-          </>
+          <MarkdownPreviewToggle
+            active={markdown}
+            disabled={!content}
+            onToggle={() => switchMode(markdown ? "code" : "markdown")}
+          />
         )}
         <Button
           variant="ghost"
@@ -257,13 +239,41 @@ export function ReviewCodePane({
         >
           <HugeiconsIcon icon={Search01Icon} size={16} />
         </Button>
-        <Tabs value={split ? "split" : "unified"} onValueChange={changeLayout}>
-          <TabsList>
-            <TabsTrigger value="unified">Unified</TabsTrigger>
-            <TabsTrigger value="split">Split</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        {!markdown && (
+        {!singleFile && markdown && (
+          <Tabs
+            value={split ? "split" : "unified"}
+            onValueChange={changeLayout}
+          >
+            <TabsList>
+              <TabsTrigger value="unified">Unified</TabsTrigger>
+              <TabsTrigger value="split">Split</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
+        {!markdown && !singleFile && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={
+                    compareCode ? "Hide previous code" : "Show previous code"
+                  }
+                  aria-pressed={compareCode}
+                  className={compareCode ? "bg-accent" : undefined}
+                  onClick={() => setCompareCode(!compareCode)}
+                />
+              }
+            >
+              <HugeiconsIcon icon={SquareSplitHorizontalIcon} size={16} />
+            </TooltipTrigger>
+            <TooltipContent>
+              {compareCode ? "Hide previous code" : "Show previous code"}
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {!markdown && !singleFile && (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -307,10 +317,11 @@ export function ReviewCodePane({
         <div className={overlay ? "absolute inset-0" : "min-h-0 flex-1"}>
           {markdown ? (
             <DocumentDiffView
-              key={`markdown-${split}`}
+              key={`markdown-${!singleFile && split}`}
               before={content.before}
               after={content.after}
-              split={split}
+              split={!singleFile && split}
+              diff={!singleFile}
               padding={padding}
               point={session.point}
               saved={session.markdown}
@@ -320,7 +331,7 @@ export function ReviewCodePane({
               handle={view}
             />
           ) : (
-            <ReviewSourceCode
+            <SourceCode
               snapshot={snapshot}
               change={change}
               content={content}
@@ -328,7 +339,8 @@ export function ReviewCodePane({
               selection={selection}
               position={position}
               onPosition={onPosition}
-              split={split}
+              split={compareCode}
+              onCompare={setCompareCode}
               trimWhitespace={trimWhitespace}
               padding={padding}
               modelScope={modelScope}
@@ -368,7 +380,9 @@ export function ReviewCodePane({
           {modelScope === "local"
             ? "local changes"
             : `review files ${snapshot.id.slice(0, 6)}`}
-          {!markdown && trimWhitespace ? " · filtered display" : ""}
+          {!markdown && !singleFile && trimWhitespace
+            ? " · filtered display"
+            : ""}
         </span>
         <span>{markdown ? "Markdown" : languageName(change.path)}</span>
         <span>UTF-8</span>

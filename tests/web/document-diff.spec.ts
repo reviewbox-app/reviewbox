@@ -34,7 +34,7 @@ test("a failed preview explains the error and still opens the source", async ({
     .getByRole("alert")
   await expect(error).toContainText("Markdown preview could not be loaded")
   await error.getByRole("button", { name: "Open in code" }).click()
-  await expect(page.locator(".monaco-diff-editor .modified")).toBeVisible()
+  await expect(page.locator(".block-diff-main > .monaco-editor")).toBeVisible()
 })
 
 test("switching files cancels an obsolete preview and keeps text line breaks", async ({
@@ -182,12 +182,14 @@ test("keyboard toggles preserve source passage, session preferences and passive 
   await toggle.focus()
   await page.keyboard.press("Enter")
   await expect(toggle).toHaveAttribute("aria-pressed", "false")
-  await expect(page.locator(".monaco-diff-editor .modified")).toBeVisible()
+  await expect(page.locator(".block-diff-main > .monaco-editor")).toBeVisible()
   await expect
     .poll(async () =>
       (
         await page
-          .locator(".modified .view-lines:not(.line-delete)")
+          .locator(
+            ".block-diff-main > .monaco-editor > .overflow-guard > .monaco-scrollable-element > .lines-content > .view-lines"
+          )
           .innerText()
       ).replaceAll("\u00a0", " ")
     )
@@ -231,7 +233,9 @@ test("explicit references open raw source and repeatedly center the captured ran
     await expect
       .poll(async () =>
         page
-          .locator(".modified .view-overlays .review-passage")
+          .locator(
+            ".block-diff-main > .monaco-editor .view-overlays .review-passage"
+          )
           .first()
           .evaluate((element) => {
             const pane = element
@@ -251,3 +255,101 @@ test("explicit references open raw source and repeatedly center the captured ran
     ).toBeVisible()
   }
 })
+
+for (const file of ["NEW.md", "DELETED.md"]) {
+  test(`${file}: regular views retain position and center explicit source references`, async ({
+    page,
+  }) => {
+    const errors: string[] = []
+    page.on("pageerror", (error) => errors.push(error.message))
+    await page.goto("/dev/document-diff/")
+    await page.getByRole("tab", { name: "Split", exact: true }).click()
+    await page.getByRole("button", { name: file, exact: true }).click()
+    const pane = page.getByRole("region", {
+      name: "Markdown file",
+      exact: true,
+    })
+    await expect(
+      pane.getByRole("heading", { name: "Captured guide" })
+    ).toBeVisible()
+    await expect(
+      page.getByRole("tab", { name: "Split", exact: true })
+    ).toHaveCount(0)
+    await expect(
+      pane.locator(
+        '.document-diff-label, [data-change="added"], [data-change="removed"], mark'
+      )
+    ).toHaveCount(0)
+    await pane.evaluate((root) => {
+      const target = Array.from(root.querySelectorAll("h2")).find(
+        (node) => node.textContent === "Section 40"
+      )!
+      root.scrollTop +=
+        target.getBoundingClientRect().top -
+        root.getBoundingClientRect().top -
+        80
+    })
+    const scroll = await pane.evaluate((root) => root.scrollTop)
+    const toggle = page.getByRole("button", { name: "Markdown preview" })
+    await toggle.click()
+    await expect(page.locator(".monaco-editor")).toHaveCount(1)
+    await expect(page.locator(".monaco-diff-editor")).toHaveCount(0)
+    await expect
+      .poll(async () =>
+        (await page.locator(".view-lines").innerText()).replaceAll(
+          "\u00a0",
+          " "
+        )
+      )
+      .toContain("Section 40")
+    const tick = Number(await page.getByTestId("refresh-count").textContent())
+    const offset = await page
+      .locator(".view-lines")
+      .evaluate((e) => e.getBoundingClientRect().top)
+    await expect
+      .poll(async () =>
+        Number(await page.getByTestId("refresh-count").textContent())
+      )
+      .toBeGreaterThan(tick + 2)
+    expect(
+      await page
+        .locator(".view-lines")
+        .evaluate((e) => e.getBoundingClientRect().top)
+    ).toBe(offset)
+    await toggle.click()
+    await expect
+      .poll(async () =>
+        Math.abs((await pane.evaluate((root) => root.scrollTop)) - scroll)
+      )
+      .toBeLessThan(100)
+    for (let i = 0; i < 2; i++) {
+      await page
+        .getByRole("button", { name: "Open in code", exact: true })
+        .click()
+      await expect(toggle).toHaveAttribute("aria-pressed", "false")
+      const mark = page.locator(".view-overlays .review-passage").first()
+      await expect(mark).toBeVisible()
+      await expect
+        .poll(async () =>
+          mark.evaluate((element) => {
+            const pane = element
+                .closest('[aria-label="Code diff"]')!
+                .getBoundingClientRect(),
+              box = element.getBoundingClientRect()
+            return Math.abs(
+              (box.top + box.bottom) / 2 -
+                (pane.top + 56 + pane.bottom - 36) / 2
+            )
+          })
+        )
+        .toBeLessThan(60)
+      await toggle.click()
+      await expect(pane).toBeVisible()
+    }
+    await page.getByRole("button", { name: "README.md", exact: true }).click()
+    await expect(
+      page.getByRole("tab", { name: "Split", exact: true })
+    ).toHaveAttribute("aria-selected", "true")
+    expect(errors).toEqual([])
+  })
+}

@@ -1,0 +1,158 @@
+.block-diff {
+  --block-added: #26332b;
+  --block-removed: #38292b;
+  position: relative;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+.block-diff[data-theme="light"] {
+  --block-added: #edf7ef;
+  --block-removed: #fceeef;
+}
+.block-diff-main {
+  height: 100%;
+  width: 100%;
+}
+.block-diff-engine {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+  top: 0;
+  left: 0;
+}
+.block-diff .block-added,
+.block-diff .block-added-margin {
+  background: var(--block-added);
+}
+.block-diff .block-added.block-first {
+  border-top-right-radius: 8px;
+}
+.block-diff .block-added.block-last {
+  border-bottom-right-radius: 8px;
+}
+.block-diff .block-added-margin.block-first {
+  border-top-left-radius: 8px;
+}
+.block-diff .block-added-margin.block-last {
+  border-bottom-left-radius: 8px;
+}
+.block-comparison {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.block-column {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--block-added);
+}
+.block-before {
+  background: var(--block-removed);
+}
+.block-column .monaco-editor,
+.block-column .monaco-editor .margin,
+.block-column .monaco-editor .monaco-editor-background {
+  background: transparent !important;
+}
+.block-label {
+  height: 28px;
+  padding: 5px 10px;
+  box-sizing: border-box;
+  font: 11px var(--font-sans);
+  color: var(--muted-foreground);
+}
+.block-empty {
+  padding: 8px 12px;
+  font: 12px var(--font-sans);
+  color: var(--muted-foreground);
+}
+.block-cell {
+  width: 100%;
+}
+.block-cell .scroll-decoration {
+  display: none;
+}
+.block-deletion {
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+}
+.block-deletion button {
+  font: 12px var(--font-sans);
+  color: var(--muted-foreground);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.block-deletion button:hover {
+  background: var(--accent);
+}
+.block-deletion button:focus-visible {
+  outline: 2px solid var(--ring);
+}
+.block-search-position {
+  position: absolute;
+  right: 8px;
+  z-index: 6;
+  max-width: calc(100% - 16px);
+}
+.block-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 18px -6px #0003;
+}
+.block-search input {
+  min-width: 40px;
+  width: 180px;
+}
+
+.block-empty-side {
+  background: var(--vscode-editor-background, var(--card));
+}
+.block-zone-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+}
+.block-zone-layer > div {
+  position: absolute;
+  left: 0;
+  pointer-events: auto;
+}
+.block-column {
+  position: relative;
+}
+.block-diff-main
+  > .monaco-editor[data-all-replaced="true"]
+  > .overflow-guard
+  > .monaco-scrollable-element
+  > .lines-content
+  > .view-lines,
+.block-diff-main
+  > .monaco-editor[data-all-replaced="true"]
+  > .overflow-guard
+  > .margin
+  .line-numbers {
+  opacity: 0;
+}
+
+.block-diff .block-word-after {
+  background: var(--vscode-diffEditor-insertedTextBackground);
+  border-radius: 2px;
+}
+.block-diff .block-word-before {
+  background: var(--vscode-diffEditor-removedTextBackground);
+  border-radius: 2px;
+}

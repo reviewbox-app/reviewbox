@@ -77,7 +77,7 @@ async function verifyReferences() {
     await ui.named("Open in code", "[data-slot=hover-card-content] button")
     if (["previous value", "changed before", "deleted before"].includes(name))
       await ui.until(
-        `document.querySelector('[aria-label="Code diff"]:not([aria-hidden=true] *) [aria-selected="true"]')?.textContent === "Split"`
+        `!!document.querySelector('[aria-label="Code diff"]:not([aria-hidden=true] *) [aria-label="Hide previous code"]')`
       )
   }
   const centered = async (name: string) => {
@@ -110,18 +110,20 @@ async function verifyReferences() {
     await open(name)
     await centered(name)
     if (name !== "context value" && name !== "long range") {
-      for (const layout of ["Split", "Unified"]) {
-        await ui.named(
-          layout,
-          '[aria-label="Code diff"]:not([aria-hidden=true] *) [role="tab"]'
+      for (const layout of ["Show previous code", "Hide previous code"]) {
+        if (
+          await ui.execute(
+            `return !!document.querySelector('[aria-label="${layout}"]')`
+          )
         )
+          await ui.named(layout)
         // Explicit navigation, not layout changes, owns centering.
         await open(name)
         await centered(name)
       }
     }
     const viewport =
-      '[aria-label="Referenced source"] .monaco-scrollable-element, [aria-label="Code diff"] .modified .monaco-scrollable-element'
+      '[aria-label="Referenced source"] .monaco-scrollable-element, [aria-label="Code diff"] .block-diff-main .monaco-scrollable-element'
     await ui.execute(
       `const nodes=[...document.querySelectorAll(arguments[0])];nodes.at(-1).dispatchEvent(new WheelEvent('wheel',{deltaY:400,bubbles:true,cancelable:true}));return true`,
       [viewport]
@@ -405,8 +407,8 @@ try {
     await ui.until(
       'document.querySelector("[aria-label=\\"Code diff\\"] .view-lines")?.textContent.includes("export")'
     )
-    for (const layout of ["Split", "Unified"]) {
-      await ui.named(layout, '[aria-label="Code diff"] [role="tab"]')
+    for (const layout of ["Show previous code", "Hide previous code"]) {
+      await ui.named(layout)
       assert.equal(
         await ui.execute(
           'return document.querySelectorAll(".diff-hidden-lines").length'
@@ -421,7 +423,7 @@ try {
       for (const width of [1440, 800]) {
         await ui.resize(width, 900)
         await ui.execute(
-          'document.querySelector(".monaco-diff-editor .modified .monaco-scrollable-element").dispatchEvent(new WheelEvent("wheel",{deltaY:220,bubbles:true,cancelable:true}));return true'
+          'document.querySelector(".block-diff-main .monaco-scrollable-element").dispatchEvent(new WheelEvent("wheel",{deltaY:220,bubbles:true,cancelable:true}));return true'
         )
         assert.deepEqual((await ui.layout()).overflow, [])
         await ui.screenshot(`reader-code-${name.toLowerCase()}-${width}`)

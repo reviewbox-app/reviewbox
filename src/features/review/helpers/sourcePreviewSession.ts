@@ -7,6 +7,7 @@ export type SourceViewPosition = {
   split: boolean
   scrollTop?: number
   code?: editor.IDiffEditorViewState | null
+  singleCode?: editor.ICodeEditorViewState | null
 }
 export type SourceViewHandle = {
   find: () => void

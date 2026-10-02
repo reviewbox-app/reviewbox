@@ -11,6 +11,8 @@ interface WorkspaceState {
   setStepsOpen: (stepsOpen: boolean) => void
   filesOpen: boolean
   explanationRequested: boolean
+  compareCode: boolean
+  setCompareCode: (value: boolean) => void
   split: boolean
   settings: boolean
   palette: boolean
@@ -31,6 +33,8 @@ export const useReviewWorkspaceStore = create<WorkspaceState>((set) => ({
   setStepsOpen: (stepsOpen) => set({ stepsOpen }),
   filesOpen: false,
   explanationRequested: true,
+  compareCode: true,
+  setCompareCode: (compareCode) => set({ compareCode }),
   split: false,
   settings: false,
   palette: false,
