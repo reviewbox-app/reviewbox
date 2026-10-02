@@ -36,13 +36,7 @@ if(prompt.includes('# Plan the user') || prompt.includes('## Exploration entry p
     const context=JSON.parse(prompt.slice(start,end));
     if(!context.stagedDiff.includes('diff --git'))throw Error('Missing frozen staged diff');
     output={commits:context.files.map((file,index)=>({message:'test: staged group '+(index+1),paths:[file.path]}))};
-  } else {
-    const context=JSON.parse(prompt.split('## Exploration entry points (data)\\n\\n')[1].split('\\n\\n## Output contract')[0]);
-    const manifest=JSON.parse(readFileSync(context.reviewManifest,'utf8'));
-    if(context.reviewId!==null)throw Error('Code Explain unexpectedly owns a review');
-    if(!manifest.focus[0].content.hash)throw Error('Missing captured source');
-    output={kind:'explanation',path:context.focusPaths[0],sections:[{id:'one',title:'Independent explanation',body:'This explanation uses the captured source without a review.',startLine:1,endLine:1}]};
-  }
+  } else { throw Error('Unexpected non-commit generation'); }
   const finalText=JSON.stringify(output);
   event('item/completed',{type:'agentMessage',id:'note',phase:'commentary',text:'The staged groups are ready.'});
   event('item/started',{type:'agentMessage',id:'final',phase:'final_answer'});
@@ -89,9 +83,33 @@ try {
   )
   assert.equal(
     await ui.execute(
-      `return getComputedStyle(document.querySelector('[title="src/answer.ts"]')).opacity`
+      `return getComputedStyle(document.querySelector('[title="src/answer.ts"] > span')).opacity`
     ),
     "1"
+  )
+  assert.equal(
+    await ui.execute(
+      `return document.querySelectorAll('[aria-label="Changed files"] [title="src/answer.ts"]').length`
+    ),
+    2,
+    "Partial files appear in both layers"
+  )
+  assert.equal(
+    await ui.execute(
+      `return document.querySelectorAll('[aria-label="Changed files"] button[aria-expanded] [data-git-status]').length`
+    ),
+    0,
+    "No status letters on folders"
+  )
+  await ui.click('[aria-label="Unstaged files"] button[aria-expanded="true"]')
+  await ui.until(
+    `!document.querySelector('[aria-label="Unstaged files"] [title="src/answer.ts"]')`
+  )
+  await ui.click('[aria-label="Unstaged files"] button[aria-expanded="false"]')
+  await ui.click('[aria-label="Unstaged files"] [title="src/answer.ts"]')
+  await ui.until(
+    `document.querySelector('.monaco-diff-editor .modified')?.textContent.includes('43')`,
+    "initial file rendered"
   )
   assert(!(await ui.text()).includes("Validate file"))
   assert(!(await ui.text()).includes("Contents"))
@@ -128,6 +146,51 @@ try {
     async () => (await treeWidth()) > initialWidth,
     "keyboard resizing"
   )
+  // Exercise the context menu on actual native tree rows.
+  const context = async (selector: string) => {
+    await ui.execute(
+      `const e=document.querySelector(${JSON.stringify(selector)});e.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,button:2,clientX:e.getBoundingClientRect().left+20,clientY:e.getBoundingClientRect().top+10}));return true`
+    )
+    await ui.until(`!!document.querySelector('[role="menu"]')`)
+  }
+  const menu = async (name: string) => ui.named(name, '[role="menuitem"]')
+  await mkdir(join(f.repo, "menu-test"))
+  await f.write("menu-test/a.txt", "one")
+  await f.write("menu-test/b.txt", "two")
+  await ui.until(`!!document.querySelector('[title="menu-test/b.txt"]')`)
+  await ui.click('[title="menu-test/a.txt"]')
+  await ui.execute(
+    `document.querySelector('[title="menu-test/b.txt"]').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true}));return true`
+  )
+  await context('[title="menu-test/b.txt"]')
+  await menu("Stage 2 files")
+  await ui.until(
+    `document.querySelectorAll('[aria-label="Staged files"] [title^="menu-test/"]').length===2`
+  )
+  await context('[aria-label="Staged files"] [title="menu-test/b.txt"]')
+  await ui.keys("\uE00C")
+  const folderSelector = '[aria-label="Staged files"] button[aria-expanded]'
+  await context(folderSelector)
+  await menu("Unstage folder")
+  await ui.until(
+    `document.querySelectorAll('[aria-label="Unstaged files"] [title^="menu-test/"]').length===2`
+  )
+  await context('[aria-label="Unstaged files"] button[aria-expanded]')
+  await menu("Revert changes")
+  await ui.has("Revert unstaged changes?")
+  await ui.screenshot("revert-selection")
+  await ui.named("Revert changes", '[role="alertdialog"] button')
+  await ui.until(`!document.querySelector('[title="menu-test/a.txt"]')`)
+  assert(!(await Bun.file(join(f.repo, "menu-test/a.txt")).exists()))
+  assert(!(await Bun.file(join(f.repo, "menu-test/b.txt")).exists()))
+  assert.equal(
+    f.git("show", ":src/answer.ts").trim(),
+    "export const answer = 42;"
+  )
+  await ui.click('[aria-label="Unstaged files"] [title="src/answer.ts"]')
+  await ui.until(
+    `document.querySelector('.monaco-diff-editor .modified')?.textContent.includes('43')`
+  )
   await ui.screenshot("local-changes-dark")
   await ui.named("Staged", '[role="tab"]')
   await action("Unstage file")
@@ -135,7 +198,7 @@ try {
   assert.equal(f.git("diff", "--cached", "--name-only").trim(), "")
   await action("Stage file")
   await ui.until(
-    `getComputedStyle(document.querySelector('[title="src/answer.ts"]')).opacity==='0.5'`
+    `getComputedStyle(document.querySelector('[title="src/answer.ts"] > span')).opacity==='0.5'`
   )
   await ui.named("Commit · 1")
   await ui.named("Commit manually")
@@ -215,32 +278,35 @@ try {
   await ui.request(ui.route("/window"), { handle: "main" })
   await ui.resize(1040, 800)
   await ui.screenshot("overview-light-narrow")
-  // Code Explain remains reachable on a clean repository with zero reviews.
+  // Code Explain stays a full-width reader with independent glossary and tours.
   await ui.named("Code Explain", '[role="tab"]')
-  await ui.has("No explanation yet.")
-  await ui.named("Explain with Rev")
-  await ui.until(
-    `!document.querySelector('[aria-label="Generate explanation"]').disabled`
+  await ui.element('[aria-label="Filter files"]')
+  await ui.fill('[aria-label="Filter files"]', "README.md")
+  await ui.named("README.md", '[aria-label="Snapshot files"] button', false)
+  await ui.until("!!document.querySelector('.monaco-editor')")
+  assert(
+    !/Explain with Rev|In plain language|Add a section|Go to definition|Explanation outdated/.test(
+      await ui.text()
+    )
   )
-  await ui.click('[aria-label="Generate explanation"]')
-  await ui.has("Review the proposed explanation")
-  await ui.keys("\uE00C")
-  await ui.keys("\uE00C")
-  await ui.until(`!document.querySelector('[role="dialog"]')`)
-  await ui.named("Review", '[role="tab"]')
-  await ui.has("Read your changes")
-  await ui.named("Code Explain", '[role="tab"]')
-  await ui.has("No explanation yet.")
-  await action("Explain with Rev")
-  await ui.named("Earlier generations and pending proposals")
-  await ui.named("Proposal · explanation · older snapshot")
-  await ui.has("Review the proposed explanation")
-  await ui.named("Accept", '[role="dialog"] button', false)
-  await ui.has("Independent explanation")
-  await ui.keys("\uE00C")
-  await ui.until(`!document.querySelector('[role="dialog"]')`)
+  const reader = await ui.execute<{ editor: number; main: number }>(
+    `const main=document.querySelector('main');return {editor:main.querySelector('.monaco-editor').getBoundingClientRect().width,main:main.getBoundingClientRect().width}`
+  )
+  assert(reader.editor >= reader.main - 4, "Code uses the full reader width")
   await f.write("README.md", "# Changed project\nNew context.\n")
-  await ui.has("This explanation refers to an older version of the file.")
+  await ui.until(
+    "document.querySelector('.monaco-editor')?.textContent.replace(/\\s/g, ' ').includes('Changed project')",
+    "live source refresh"
+  )
+  await ui.named("Glossary", '[role="tab"]')
+  await ui.fill("#term-name", "Commit")
+  await ui.fill('[aria-label="Definition"]', "A recorded change")
+  await ui.named("Save meaning")
+  await ui.has("A recorded change")
+  await ui.named("Tours", '[role="tab"]')
+  await ui.has("CodeTour")
+  await ui.named("Files", '[role="tab"]')
+  await ui.element('[aria-label="Filter files"]')
   await ui.screenshot("code-explain-without-review")
   const calls = (await readFile(models, "utf8"))
     .trim()
@@ -249,10 +315,6 @@ try {
   assert(
     calls.some((call) => call.model === "gpt-6-luna"),
     "Commit uses the helper model"
-  )
-  assert(
-    calls.some((call) => call.model === "gpt-6.1-sol"),
-    "Code Explain uses the project model"
   )
   const errors = await ui.execute<string[]>("return window.__uiErrors")
   assert.deepEqual(
