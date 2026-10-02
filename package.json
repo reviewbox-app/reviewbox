@@ -53,7 +53,8 @@
     "test:ui:editor-overlays": "bun scripts/test-ui-editor-overlays.ts",
     "icons:build": "bun scripts/build-file-icons.ts",
     "test:ui:languages": "bun scripts/test-ui-languages.ts",
-    "test:ui:code-colors": "bun scripts/test-ui-code-colors.ts"
+    "test:ui:code-colors": "bun scripts/test-ui-code-colors.ts",
+    "app-icons:build": "bun scripts/build-app-icons.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

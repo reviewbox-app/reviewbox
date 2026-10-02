@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "bun run dev:web",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "bun run build:web",
+    "beforeBuildCommand": "bun run app-icons:build && bun run build:web",
     "frontendDist": "../out"
   },
   "app": {
