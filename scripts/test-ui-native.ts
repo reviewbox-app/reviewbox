@@ -58,42 +58,20 @@ try {
       await ui.has("A reply to a question")
     }
   )
-  await scenario("write an explanation and define one occurrence", async () => {
+  await scenario("read files and archive a glossary term", async () => {
     await ui.named("Files", '[role="tab"]')
     await ui.fill('[aria-label="Filter files"]', "answer.ts")
     await ui.named("answer.ts", '[aria-label="Snapshot files"] button', false)
-    await ui.named("Add a section")
-    await ui.fill('[aria-label="Section title"]', "Exported answer")
-    await ui.fill(
-      '[aria-label="Explanation"]',
-      "The answer is a constant response."
+    await ui.until("!!document.querySelector('.monaco-editor')")
+    assert(
+      !/In plain language|Explain with Rev|Add a section/.test(await ui.text())
     )
-    await ui.named("Save section")
-    await ui.has("Exported answer")
-    await ui.named("Explain a word")
-    await ui.fill("#occurrence-word", "constant")
-    await ui.fill(
-      "#occurrence-description",
-      "This binding cannot be reassigned"
-    )
-    await ui.named("Save for this occurrence")
-    await ui.has("Exported answer")
-    await ui.hover('button[title="Multiple meanings — choose in glossary"]')
-    await ui.has("Ambiguous")
-    await ui.has("A reply to a question")
-    await ui.hover('button[title="This binding cannot be reassigned"]')
-    await ui.has("This binding cannot be reassigned")
     await ui.screenshot("03-understand")
     await ui.named("Glossary", '[role="tab"]')
     await ui.named("Archive")
     await ui.until(
       "!document.querySelector('main')?.textContent.includes('The exported response value')"
     )
-    await ui.named("Files", '[role="tab"]')
-    await ui.until(
-      "!document.querySelector('button[title=\"Multiple meanings — choose in glossary\"]')"
-    )
-    await ui.element('button[title="This binding cannot be reassigned"]')
   })
   await scenario("create a current-code tour and edit its anchor", async () => {
     await ui.named("Tours", '[role="tab"]')

@@ -55,59 +55,17 @@ try {
   await ui.select("#languages-project", projectLabel)
   await closeSettings()
 
-  phase = "Rev action and harness selectors"
+  phase = "independent glossary"
   await ui.named("Code Explain", '[role="tab"]')
-  await ui.fill('[aria-label="Filter files"]', "answer.ts")
-  await ui.click('[aria-label="Snapshot files"] button[aria-expanded="false"]')
-  await ui.named("answer.ts", '[aria-label="Snapshot files"] button', false)
-  await ui.named("Explain with Rev")
-  await ui.select(
-    'button[aria-label="What Rev should do"]',
-    "Suggest project definitions"
-  )
-  await ui.select('button[aria-label="Rev\'s harness"]', "Claude Code")
-  await ui.select('button[aria-label="Rev\'s harness"]', "Codex")
-  await ui.click('button[aria-label="What Rev should do"]')
-  await ui.keys("\uE00C")
-  await ui.until(
-    "document.querySelector('button[aria-label=\"What Rev should do\"]')?.getAttribute('aria-expanded') === 'false' && document.querySelector('button[aria-label=\"What Rev should do\"]').textContent.includes('Suggest project definitions')",
-    "Escape closes the popup without changing its selection"
-  )
-  await ui.screenshot("rev-selects")
-  await ui.keys("\uE00C")
-
-  phase = "meaning selector inside its dialog"
   await ui.named("Glossary", '[role="tab"]')
   await ui.fill("#term-name", "answer")
   await ui.fill('[aria-label="Definition"]', "The exported response value")
   await ui.named("Save meaning")
   await ui.has("The exported response value")
-  await ui.named("Files", '[role="tab"]')
-  await ui.named("Add a section")
-  await ui.fill('[aria-label="Section title"]', "Exported answer")
-  await ui.fill(
-    '[aria-label="Explanation"]',
-    "The answer is a constant response."
-  )
-  await ui.named("Save section")
-  await ui.named("Explain a word")
-  await ui.fill("#occurrence-word", "constant")
-  await ui.has("No linked meaning")
-  await ui.select("#occurrence-sense", "answer — The exported response value")
-  await ui.until(
-    "[...document.querySelectorAll('button')].find(el => el.textContent === 'Save for this occurrence')?.disabled === false"
-  )
-  await ui.select("#occurrence-sense", "No linked meaning")
-  await ui.until(
-    "[...document.querySelectorAll('button')].find(el => el.textContent === 'Save for this occurrence')?.disabled === true"
-  )
-  await ui.select("#occurrence-sense", "answer — The exported response value")
-  await ui.named("Save for this occurrence")
-  await ui.until("!document.querySelector('#occurrence-sense')")
-  await ui.screenshot("meaning-selected")
+  await ui.screenshot("glossary-saved")
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
-    "Native Selects: empty states, project labels, Rev action/harness changes, nested dialog selection/reset and save passed"
+    "Native Selects: empty states, project labels and standalone glossary save passed"
   )
 } catch (error) {
   console.error("Select test phase:", phase)

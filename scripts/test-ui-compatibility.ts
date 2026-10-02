@@ -50,8 +50,6 @@ async function settings() {
 async function main() {
   await ui.request(ui.route("/window"), { handle: "main" })
 }
-const sendDisabled =
-  "document.querySelector('button[aria-label=\"Ask Rev\"]')?.disabled"
 const revReady =
   "[...document.querySelectorAll('header [role=status]')].some(e=>/^Rev\\s*ready$/.test(e.textContent.trim()))"
 try {
@@ -98,19 +96,8 @@ try {
     [],
     "main window controls must stay visible"
   )
-  // Manual validation remains available with an unsupported harness.
-  await ui.named("Validate passage")
-  await ui.has("Validated")
-  // Harness readiness is visible where Rev still talks: Code Explain.
   await ui.named("Code Explain", '[role="tab"]')
-  await ui.named("Explain with Rev")
-  await ui.fill('[aria-label="Question for Rev"]', "Explain this change")
-  await ui.has("Codex is too old")
-  await ui.until(sendDisabled)
-  await ui.select('button[aria-label="Rev\'s harness"]', "Claude Code")
-  await ui.until(`!${sendDisabled}`)
-  await ui.select('button[aria-label="Rev\'s harness"]', "Codex")
-  await ui.until(sendDisabled)
+  await ui.element('[aria-label="Filter files"]')
   await version("codex-cli 0.157.0")
   await ui.request(ui.route("/window"), { handle: "settings" })
   await ui.harnessOption("codex", "Redetect")
@@ -119,10 +106,6 @@ try {
   await ui.named("Cancel")
   await ui.until("!document.body.innerText.includes('Codex is too old')")
   await main()
-  await ui.until(`!${sendDisabled}`)
-  await ui.until(
-    "document.querySelector('[aria-label=\"Question for Rev\"]')?.value === 'Explain this change'"
-  )
   for (const authentication of ["signedOut", "unknown"] as const) {
     await version("codex-cli 0.157.0", authentication)
     await ui.request(ui.route("/window"), { handle: "settings" })
@@ -137,14 +120,6 @@ try {
       revReady,
       "Claude fallback stays ready while Codex is unavailable"
     )
-    await ui.until(sendDisabled)
-    assert.equal(
-      await ui.execute(
-        "return document.querySelector('[aria-label=\"Question for Rev\"]')?.value"
-      ),
-      "Explain this change",
-      "readiness changes preserve the question draft"
-    )
   }
   // A version that cannot be parsed must never silently enable the harness.
   await version("codex-cli unknown")
@@ -152,18 +127,14 @@ try {
   await ui.harnessOption("codex", "Redetect")
   await ui.has("Unknown version")
   await main()
-  await ui.has("Cannot read the harness version")
-  await ui.until(sendDisabled)
   await ui.request(ui.route("/window"), { handle: "settings" })
   await ui.setHarnessExecutable("codex", `${f.root}/missing-codex`)
   await ui.has("Not detected")
   await main()
-  await ui.has("Executable unavailable")
-  await ui.until(sendDisabled)
   assert.equal(f.git("write-tree"), f.index, "Git index stays untouched")
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
-    "Native Codex readiness: old, supported, signed out, verification failure, unknown, missing, cross-window refresh, retained draft, manual validation and 800px layout passed"
+    "Native Codex readiness: old, supported, signed out, verification failure, unknown, missing, cross-window refresh, independent reader and 800px layout passed"
   )
 } catch (error) {
   await ui.screenshot("compatibility-failure").catch(() => {})
