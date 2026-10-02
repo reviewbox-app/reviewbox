@@ -254,8 +254,7 @@ pub(super) async fn prepare(
 
     // Protocol inspection never writes generated files into the user's project.
     let protocol = tempfile::tempdir()?;
-    let mut command =
-        tokio::process::Command::new(providers::resolve_executable(&config.executable));
+    let mut command = providers::command(&providers::resolve_executable(&config.executable));
     command
         .args([
             "app-server",

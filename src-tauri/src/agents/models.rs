@@ -173,8 +173,7 @@ async fn discover_with_timeout(
     // A neutral working directory prevents project hooks/configuration from
     // participating in a settings read. Account authentication stays with the CLI.
     let directory = tempfile::tempdir()?;
-    let mut command =
-        tokio::process::Command::new(providers::resolve_executable(&config.executable));
+    let mut command = providers::command(&providers::resolve_executable(&config.executable));
     command.current_dir(directory.path());
     match config.provider.as_str() {
         "codex" => {

@@ -7,8 +7,7 @@ pub(super) async fn run(
     stream: &mut Stream,
 ) -> AppResult<()> {
     let effort = models::effort(config, cancel.clone()).await?;
-    let mut command =
-        tokio::process::Command::new(providers::resolve_executable(&config.executable));
+    let mut command = providers::command(&providers::resolve_executable(&config.executable));
     // The harness owns discovery, context compaction and its configured tools.
     // Full tool execution is the locally chosen ReviewBox runtime policy.
     command

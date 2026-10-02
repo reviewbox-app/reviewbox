@@ -51,6 +51,31 @@ pub(super) fn resolve_executable(executable: &str) -> PathBuf {
     candidates.into_iter().find(|p| p.is_file()).unwrap_or(path)
 }
 
+/// Finder does not inherit the terminal's NVM PATH. Keep the selected CLI's
+/// runtime directory ahead of inherited entries, without running shell profiles.
+pub(super) fn command(path: &Path) -> tokio::process::Command {
+    command_with_path(path, std::env::var_os("PATH").as_deref())
+}
+
+fn command_with_path(path: &Path, inherited: Option<&std::ffi::OsStr>) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(path);
+    let mut paths = Vec::new();
+    if path.is_absolute()
+        && let Some(parent) = path.parent()
+    {
+        paths.push(parent.to_owned());
+    }
+    if let Some(inherited) = inherited {
+        paths.extend(std::env::split_paths(inherited));
+    }
+    if !paths.is_empty()
+        && let Ok(path) = std::env::join_paths(paths)
+    {
+        command.env("PATH", path);
+    }
+    command
+}
+
 pub(super) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -201,7 +226,7 @@ async fn authenticate(path: &Path, codex: bool) -> ProviderAuthentication {
 
 async fn probe(path: &Path, args: &[&str]) -> Option<(bool, Vec<u8>, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
-    let mut command = tokio::process::Command::new(path);
+    let mut command = command(path);
     command
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -243,6 +268,53 @@ async fn probe(path: &Path, args: &[&str]) -> Option<(bool, Vec<u8>, Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn npm_launcher_uses_sibling_runtime_with_desktop_path() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("nvm installation/bin");
+        let package = directory.path().join("package");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&package).unwrap();
+        let runtime = bin.join("reviewbox-test-runtime");
+        std::fs::write(&runtime, "#!/bin/sh\ncase \"$2\" in --version) echo 'codex-cli 0.157.0';; login) echo 'Logged in using ChatGPT';; *) exit 1;; esac\n").unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let script = package.join("codex.js");
+        std::fs::write(&script, "#!/usr/bin/env reviewbox-test-runtime\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let executable = bin.join("codex");
+        symlink(script, &executable).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for args in [vec!["--version"], vec!["login", "status"]] {
+            let output = rt
+                .block_on(async {
+                    command_with_path(&executable, Some(std::ffi::OsStr::new("/usr/bin:/bin")))
+                        .args(args)
+                        .output()
+                        .await
+                })
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let config = ProviderConfig {
+            provider: "codex".into(),
+            executable: executable.to_string_lossy().into_owned(),
+            model: None,
+        };
+        let status = rt.block_on(detect(&config));
+        assert!(status.ready);
+        assert_eq!(status.version.as_deref(), Some("codex-cli 0.157.0"));
+        assert!(rt.block_on(require_codex_version(&config)).is_ok());
+    }
+
     #[test]
     fn numeric_versions_and_prereleases() {
         for version in ["0.99.0", "0.147.0", "0.157.0-alpha.1"] {
