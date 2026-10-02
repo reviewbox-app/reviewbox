@@ -3,6 +3,8 @@ use super::*;
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ScopePreview {
+    #[serde(default)]
+    pub details_ready: bool,
     pub scope: Scope,
     pub files: u32,
     pub additions: u32,
@@ -18,6 +20,8 @@ pub struct ScopePreview {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewPreview {
+    #[serde(default)]
+    pub revision: String,
     pub scopes: Vec<ScopePreview>,
     pub untracked_files: u32,
 }

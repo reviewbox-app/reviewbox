@@ -16,6 +16,12 @@ import type { WizardStep } from "../components/NewReviewStepper"
 import { useReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 import { creationCommands } from "../services/creation.commands"
 
+import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
+import { SessionReadCache } from "@/lib/desktop/sessionReadCache"
+
+const previews = new SessionReadCache<ReviewPreview>(24)
+const previewKey = (request: CaptureRequest) => JSON.stringify(request)
+
 export interface CreatedReview {
   workspace: Workspace
   preparation: PreparationMode
@@ -48,14 +54,18 @@ export function useNewReviewWizard(
   const [skipped, setSkipped] = useState(false)
   const [provider, setProvider] = useState("codex")
   const [mode, setMode] = useState<PreparationMode>("rev")
-  const [preview, setPreview] = useState<ReviewPreview | null>(null)
+  const [preview, setPreview] = useState<ReviewPreview | null>(
+    () => previews.get(previewKey(request)) ?? null
+  )
   const [previewing, setPreviewing] = useState(true)
+  const [verified, setVerified] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [error, setError] = useState("")
   const [progress, setProgress] = useState<CaptureProgress | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [advancing, setAdvancing] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const reading = useRef(false)
   const operation = useRef<string | null>(null)
   const disposed = useRef(false)
   const cancelRequested = useRef(false)
@@ -107,43 +117,78 @@ export function useNewReviewWizard(
 
   useEffect(() => {
     let alive = true
-    const timer = setTimeout(() => {
+    let operationId: string | null = null
+    const key = previewKey(request)
+    const timer = setTimeout(async () => {
+      reading.current = true
       setPreviewing(true)
-      creationCommands
-        .preview(request)
-        .then((value) => {
-          if (alive) {
-            setPreview(value)
-            setPreviewing(false)
-          }
-        })
-        .catch((e) => {
-          if (alive) {
-            setPreview(null)
-            setPreviewing(false)
-            setError(errorMessage(e))
-          }
-        })
+      setVerified(false)
+      const cached = previews.get(key)
+      if (cached) setPreview(cached)
+      try {
+        operationId = crypto.randomUUID()
+        const inventory = await creationCommands.preview(
+          request,
+          false,
+          operationId
+        )
+        if (!alive) return
+        setVerified(true)
+        setPreview(inventory)
+        previews.set(key, inventory)
+        setPreviewing(false)
+        if (
+          inventory.scopes.find((scope) => scope.scope === request.scope)
+            ?.detailsReady
+        )
+          return
+        operationId = crypto.randomUUID()
+        const detailed = await creationCommands.preview(
+          request,
+          true,
+          operationId
+        )
+        if (!alive) return
+        setPreview(detailed)
+        previews.set(key, detailed)
+      } catch (e) {
+        if (alive) {
+          setPreviewing(false)
+          setError(errorMessage(e))
+        }
+      } finally {
+        if (alive) reading.current = false
+      }
     }, 150)
     return () => {
       alive = false
+      reading.current = false
       clearTimeout(timer)
+      if (operationId)
+        void creationCommands.cancelRead(operationId).catch(() => {})
     }
   }, [request, refresh])
   useEffect(() => {
     const focus = () => {
-      if (!operation.current) {
+      if (!operation.current && !reading.current) {
         setPreviewing(true)
         setRefresh((n) => n + 1)
       }
     }
+    const unsubscribe = subscribeRepositoryReads(repositoryId, focus)
+    const interval = window.setInterval(focus, 5000)
     window.addEventListener("focus", focus)
-    return () => window.removeEventListener("focus", focus)
-  }, [])
+    return () => {
+      unsubscribe()
+      window.clearInterval(interval)
+      window.removeEventListener("focus", focus)
+    }
+  }, [repositoryId])
 
   const change = (patch: Partial<CaptureRequest>) => {
     setError("")
     setPreviewing(true)
+    setVerified(false)
     setRequest((r) => ({ ...r, ...patch }))
   }
   const start = async () => {
@@ -152,7 +197,8 @@ export function useNewReviewWizard(
       transition.current ||
       !selected?.files ||
       selected.error ||
-      previewing
+      previewing ||
+      !verified
     )
       return
     const id = crypto.randomUUID()
@@ -254,7 +300,8 @@ export function useNewReviewWizard(
       step === "scope" &&
       selected?.files &&
       !selected.error &&
-      !previewing
+      !previewing &&
+      verified
     )
       setStep("preparation")
     else if (step === "preparation") await start()
@@ -320,6 +367,7 @@ export function useNewReviewWizard(
         ? selectedProvider?.ready === true
         : step !== "loading" &&
           !previewing &&
+          verified &&
           !!selected?.files &&
           !selected.error),
   }

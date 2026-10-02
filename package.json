@@ -31,12 +31,14 @@
     "test:ui:native": "bun scripts/test-ui-native.ts && bun scripts/test-ui-scopes.ts && bun scripts/test-ui-layout.ts && bun scripts/test-ui-settings.ts && bun scripts/test-ui-scroll.ts",
     "test:ui:publication": "bun scripts/test-ui-publication.ts",
     "test:ui:source-control": "bun scripts/test-ui-source-control.ts",
+    "test:ui:file-trees": "bun scripts/test-ui-file-trees.ts",
     "test:ui:storage": "bun scripts/test-ui-storage.ts",
     "test:ui:harness-settings": "bun scripts/test-ui-harness-settings.ts",
     "test:ui:models": "bun scripts/test-ui-models.ts",
     "test:ui:selects": "bun scripts/test-ui-selects.ts",
     "test:ui:compatibility": "bun scripts/test-ui-compatibility.ts",
     "test:ui:wizard": "bun scripts/test-ui-wizard.ts",
+    "test:ui:read-cache": "bun scripts/test-ui-read-cache.ts",
     "test:ui:preparation": "bun scripts/test-ui-preparation.ts",
     "test:ui:reader": "bun scripts/test-ui-reader.ts",
     "test:ui:references": "bun scripts/test-ui-reader.ts --references-only",
@@ -53,9 +55,8 @@
     "icons:build": "bun scripts/build-file-icons.ts",
     "test:ui:languages": "bun scripts/test-ui-languages.ts",
     "test:ui:code-colors": "bun scripts/test-ui-code-colors.ts",
-    "app-icons:build": "bun scripts/build-app-icons.ts",
     "test:ui:block-diff": "bun scripts/test-ui-block-diff.ts",
-    "test:ui:file-trees": "bun scripts/test-ui-file-trees.ts"
+    "app-icons:build": "bun scripts/build-app-icons.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

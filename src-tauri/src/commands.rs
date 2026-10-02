@@ -14,9 +14,28 @@ async fn blocking<T: Send + 'static>(
 pub async fn preview_review(
     storage: State<'_, Storage>,
     request: CaptureRequest,
+    details: Option<bool>,
+    operation_id: Option<String>,
 ) -> AppResult<ReviewPreview> {
     let s = storage.scoped(Some(&request.repository_id));
-    blocking(move || crate::review_creation::preview(&s, &request)).await
+    let cache = s.repository_cache.clone();
+    let task = cache.begin(&operation_id.unwrap_or_else(id))?;
+    blocking(move || {
+        let result = crate::review_creation::cached_preview::read(
+            &s,
+            request,
+            details.unwrap_or(true),
+            &task,
+        );
+        cache.finish(&task);
+        result
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn cancel_repository_read(storage: State<'_, Storage>, operation_id: String) {
+    storage.repository_cache.cancel(&operation_id);
 }
 
 #[tauri::command]

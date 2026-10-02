@@ -18,6 +18,7 @@ mod prompts;
 mod proposals;
 mod reader;
 mod repositories;
+mod repository_cache;
 mod review_creation;
 mod review_menu;
 mod reviews;
@@ -56,6 +57,11 @@ pub fn run() {
                 integrations::LocalBridge::start(storage.clone(), &data_dir)
                     .map_err(|e| std::io::Error::other(e.message))?,
             );
+            let cache_app = app.handle().clone();
+            storage.repository_cache.set_notifier(move |repository_id| {
+                use tauri::Emitter;
+                let _ = cache_app.emit("reviewbox:repository-read-invalidated", repository_id);
+            });
             app.manage(storage);
             app.manage(source_control::SourceControl::default());
             app.manage(preparation::PreparationManager::default());
@@ -137,6 +143,7 @@ pub fn run() {
             commands::list_reviews,
             commands::create_review,
             commands::preview_review,
+            commands::cancel_repository_read,
             commands::review_references,
             commands::create_review_operation,
             commands::cancel_review_creation,
@@ -210,6 +217,8 @@ pub fn run() {
                 app.state::<language_servers::LanguageServers>().stop_all();
                 app.state::<language_servers::install::LanguageServerInstaller>()
                     .shutdown();
+                let storage = app.state::<storage::Storage>();
+                storage.repository_cache.shutdown(&storage);
                 processes::shutdown();
             }
         });

@@ -13,6 +13,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { useEffect, useState } from "react"
 import { FileMenu } from "@/features/file-tree/components/FileMenu"
 import { FileTree } from "@/features/file-tree/components/FileTree"
+import { reading, contents } from "../services/context.commands"
 import { KnowledgeFile } from "./KnowledgeFile"
 
 export function UnderstandWorkspace({
@@ -22,23 +23,34 @@ export function UnderstandWorkspace({
   snapshot: Snapshot
   onError: (error: string) => void
 }) {
-  const [path, setPath] = useState(snapshot.files[0]?.path ?? "")
+  const [path, setPath] = useState(
+    () =>
+      reading.get(snapshot.repositoryId)?.path ?? snapshot.files[0]?.path ?? ""
+  )
   const [loaded, setLoaded] = useState<{
     path: string
     hash: string
     code: string
   } | null>(null)
-  const [filter, setFilter] = useState("")
+  const [filter, setFilter] = useState(
+    () => reading.get(snapshot.repositoryId)?.filter ?? ""
+  )
+  useEffect(() => {
+    reading.set(snapshot.repositoryId, { path, filter })
+  }, [snapshot.repositoryId, path, filter])
   const file = snapshot.files.find((f) => f.path === path)
   const hash = file?.content.hash
   const code =
-    loaded?.path === path && loaded.hash === hash ? loaded.code : null
+    loaded?.path === path && loaded.hash === hash
+      ? loaded.code
+      : (contents.get(`${snapshot.repositoryId}/${path}/${hash}`) ?? null)
   useEffect(() => {
     let alive = true
-    if (!path || !hash) return
+    if (!path || !hash || code !== null) return
     void reviewCommands
       .file(snapshot.id, path)
       .then((value) => {
+        contents.set(`${snapshot.repositoryId}/${path}/${hash}`, value)
         if (alive) setLoaded({ path, hash, code: value })
       })
       .catch((error) => {
@@ -48,10 +60,6 @@ export function UnderstandWorkspace({
         }
       })
     return () => {
-      alive = false
-    }
-  }, [snapshot.id, path, hash, onError])
-  return () => {
       alive = false
     }
   }, [snapshot.id, snapshot.repositoryId, path, hash, code, onError])

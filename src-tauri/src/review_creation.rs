@@ -1,9 +1,14 @@
+pub(crate) mod cached_preview;
+mod objects;
 mod preview;
 #[cfg(test)]
 mod tests;
 
 use crate::{contracts::*, reviews, snapshots, storage::Storage};
-pub use preview::{preview, references};
+pub(crate) use preview::Stats;
+#[cfg(test)]
+pub use preview::preview;
+pub use preview::{preview_selected, references};
 use std::{
     collections::HashMap,
     sync::{

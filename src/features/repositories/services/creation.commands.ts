@@ -9,8 +9,10 @@ import type {
 } from "@/lib/desktop/contracts.generated"
 
 export const creationCommands = {
-  preview: (request: CaptureRequest) =>
-    call<ReviewPreview>("preview_review", { request }),
+  preview: (request: CaptureRequest, details: boolean, operationId: string) =>
+    call<ReviewPreview>("preview_review", { request, details, operationId }),
+  cancelRead: (operationId: string) =>
+    call<void>("cancel_repository_read", { operationId }),
   references: (repositoryId: string, query: string) =>
     call<RepositoryRef[]>("review_references", { repositoryId, query }),
   capture(

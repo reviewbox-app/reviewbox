@@ -1,7 +1,10 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
 import type { Snapshot } from "@/lib/desktop/contracts.generated"
-import { call, errorMessage } from "@/lib/desktop/review.commands"
+import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
+import { errorMessage } from "@/lib/desktop/review.commands"
+import { Button } from "@/components/ui/button"
+import { contexts, contextCommands } from "../services/context.commands"
 import { UnderstandWorkspace } from "./UnderstandWorkspace"
 
 /** Current repository sources, independent of the selected review. */
@@ -12,50 +15,87 @@ export function CodeExplainWorkspace({
   repositoryId: string
   onError: (error: string) => void
 }) {
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
-  const current = useRef<string | null>(null)
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(
+    () => contexts.get(repositoryId) ?? null
+  )
+  const displayed = useRef(snapshot?.id)
+  useEffect(() => {
+    const previous = displayed.current
+    displayed.current = snapshot?.id
+    if (previous && snapshot && previous !== snapshot.id) {
+      void contextCommands.release(repositoryId, previous).catch(() => {})
+    }
+  }, [repositoryId, snapshot])
+  const [refreshing, setRefreshing] = useState(true)
+  const [error, setError] = useState("")
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
     let alive = true
+    let running = false
     let timer: ReturnType<typeof setTimeout>
-    const release = (contextId: string) =>
-      call<void>("release_code_context", { repositoryId, contextId }).catch(
-        () => {}
-      )
     const refresh = async () => {
+      if (running) return
+      clearTimeout(timer)
+      running = true
+      if (alive) setRefreshing(true)
       try {
-        const value = await call<Snapshot>("code_explain_context", {
-          repositoryId,
-          current: current.current,
-        })
-        if (!alive) {
-          if (value.id !== current.current) await release(value.id)
-          return
-        }
-        if (value.id !== current.current) {
-          const previous = current.current
-          current.current = value.id
-          setSnapshot(value)
-          if (previous) await release(previous)
+        const value = await contextCommands.refresh(repositoryId)
+        if (alive) {
+          setSnapshot((previous) =>
+            previous?.id === value.id ? previous : value
+          )
+          setError("")
         }
       } catch (cause) {
-        if (alive) onError(errorMessage(cause))
+        if (alive) setError(errorMessage(cause))
       } finally {
-        if (alive) timer = setTimeout(refresh, 5000)
+        running = false
+        if (alive) {
+          setRefreshing(false)
+          timer = setTimeout(refresh, 5000)
+        }
       }
     }
+    const focus = () => {
+      clearTimeout(timer)
+      timer = setTimeout(refresh, 150)
+    }
     void refresh()
+    const unsubscribe = subscribeRepositoryReads(repositoryId, refresh)
+    window.addEventListener("focus", focus)
     return () => {
       alive = false
       clearTimeout(timer)
-      if (current.current) void release(current.current)
-      current.current = null
+      unsubscribe()
+      window.removeEventListener("focus", focus)
+      // The native session cache owns this context, not the mounted view.
     }
-  }, [repositoryId, onError])
-  if (!snapshot)
-    return (
-      <p role="status" className="m-auto text-sm text-muted-foreground">
-        Reading project files…
-      </p>
-    )
-  return <UnderstandWorkspace snapshot={snapshot} onError={onError} />
+  }, [repositoryId, retry])
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div
+        role="status"
+        className="flex min-h-6 shrink-0 items-center gap-2 px-4 py-1 text-xs text-muted-foreground"
+      >
+        {error ||
+          (refreshing
+            ? snapshot
+              ? "Updating project files…"
+              : "Reading project files…"
+            : "")}
+        {error && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setRetry((n) => n + 1)}
+          >
+            Retry
+          </Button>
+        )}
+      </div>
+      {snapshot && (
+        <UnderstandWorkspace snapshot={snapshot} onError={onError} />
+      )}
+    </div>
+  )
 }

@@ -627,3 +627,57 @@ fn oversized_untracked_file_only_blocks_scopes_that_include_its_layer() {
     assert_eq!(scope(&without, Scope::Local).files, 1);
     assert!(scope(&without, Scope::Unstaged).error.is_none());
 }
+
+#[test]
+fn progressive_preview_counts_before_reading_large_contents_and_cancels() {
+    let (_dir, storage, repo, mut request) = fixture();
+    let root = Path::new(&repo.path);
+    fs::write(root.join("a.txt"), "one\nchanged\n").unwrap();
+    let file = fs::File::create(root.join("large.txt")).unwrap();
+    file.set_len(65 * 1024 * 1024).unwrap();
+    request.include_untracked = true;
+    let mut memo = std::collections::BTreeMap::new();
+    let value = preview_selected(&storage, &request, false, &|| Ok(()), &mut memo).unwrap();
+    assert_eq!(scope(&value, Scope::Local).files, 2);
+    assert!(!scope(&value, Scope::Local).details_ready);
+    assert!(scope(&value, Scope::Local).error.is_none());
+    request.scope = Scope::Staged;
+    let value = preview_selected(&storage, &request, true, &|| Ok(()), &mut memo).unwrap();
+    assert!(scope(&value, Scope::Staged).details_ready);
+    assert!(scope(&value, Scope::Staged).error.is_none());
+    let error = preview_selected(
+        &storage,
+        &request,
+        true,
+        &|| Err(AppError::new("cancelled", "Stopped")),
+        &mut memo,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "cancelled");
+}
+
+#[test]
+fn preview_shares_identical_committed_statistics() {
+    let (_dir, storage, repo, mut request) = fixture();
+    let root = Path::new(&repo.path);
+    fs::write(root.join("a.txt"), "one\nchanged\nmore\n").unwrap();
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["-c", "commit.gpgsign=false", "commit", "-qm", "second"],
+    );
+    request.scope = Scope::Commit;
+    request.base = Some("HEAD~1".into());
+    request.target = Some("HEAD".into());
+    let mut memo = std::collections::BTreeMap::new();
+    let commit = preview_selected(&storage, &request, true, &|| Ok(()), &mut memo).unwrap();
+    let entries = memo.len();
+    request.scope = Scope::Range;
+    let range = preview_selected(&storage, &request, true, &|| Ok(()), &mut memo).unwrap();
+    assert_eq!(entries, memo.len());
+    assert_eq!(
+        scope(&commit, Scope::Commit).additions,
+        scope(&range, Scope::Range).additions
+    );
+    assert_eq!(scope(&commit, Scope::Commit).deletions, 1);
+}

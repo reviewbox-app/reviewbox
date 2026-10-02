@@ -58,6 +58,23 @@ fn git_tree_observed(
     phase: &str,
     observer: &mut CaptureObserver<'_>,
 ) -> AppResult<Tree> {
+    git_tree_cached(
+        storage,
+        root,
+        reference,
+        phase,
+        observer,
+        &mut crate::repository_cache::Sources::default(),
+    )
+}
+fn git_tree_cached(
+    storage: &Storage,
+    root: &Path,
+    reference: &str,
+    phase: &str,
+    observer: &mut CaptureObserver<'_>,
+    cache: &mut crate::repository_cache::Sources,
+) -> AppResult<Tree> {
     observer(phase, 0, None, None)?;
     let data = if reference == "INDEX" {
         git(root, &["ls-files", "--stage", "-z"])?
@@ -115,9 +132,20 @@ fn git_tree_observed(
             } else {
                 fields[2]
             };
-            let blob = if fields[0] == "160000" {
+            let key = format!("{}:{object}", fields[0]);
+            let blob = if let Some(blob) = cache
+                .objects
+                .get(&key)
+                .filter(|blob| storage.cached_blob_exists(&blob.hash))
+            {
+                blob.clone()
+            } else if fields[0] == "160000" {
                 storage.blob(object.as_bytes(), fields[0].into())?
             } else {
+                #[cfg(test)]
+                {
+                    cache.object_reads += 1;
+                }
                 writeln!(input, "{object}")?;
                 input.flush()?;
                 let mut header = String::new();
@@ -139,6 +167,7 @@ fn git_tree_observed(
                 output.read_exact(&mut newline)?;
                 storage.blob(&bytes, fields[0].into())?
             };
+            cache.objects.insert(key, blob.clone());
             if reference != "INDEX" && fields[0] != "160000" {
                 sources.push((blob.hash.clone(), object.to_string()));
             }
@@ -172,6 +201,25 @@ fn working_tree_observed(
     observer: &mut CaptureObserver<'_>,
 ) -> AppResult<Tree> {
     observer(phase, 0, None, None)?;
+    working_tree_cached(
+        storage,
+        root,
+        index,
+        untracked,
+        phase,
+        observer,
+        &mut crate::repository_cache::Sources::default(),
+    )
+}
+fn working_tree_cached(
+    storage: &Storage,
+    root: &Path,
+    index: &Tree,
+    untracked: bool,
+    phase: &str,
+    observer: &mut CaptureObserver<'_>,
+    cache: &mut crate::repository_cache::Sources,
+) -> AppResult<Tree> {
     let mut paths: Vec<String> = index.keys().cloned().collect();
     if untracked {
         for path in git(root, &["ls-files", "--others", "--exclude-standard", "-z"])?
@@ -204,6 +252,18 @@ fn working_tree_observed(
                 format!("{path} points outside the repository."),
             ));
         }
+        let stamp = crate::repository_cache::stamp(&file);
+        if let Some((previous, blob)) = cache.working.get(&file)
+            && previous == &stamp
+            && storage.cached_blob_exists(&blob.hash)
+        {
+            tree.insert(path, blob.clone());
+            continue;
+        }
+        #[cfg(test)]
+        {
+            cache.working_reads += 1;
+        }
         let (bytes, mode) = if metadata.is_symlink() {
             (
                 fs::read_link(&file)?.to_string_lossy().as_bytes().to_vec(),
@@ -232,9 +292,17 @@ fn working_tree_observed(
             };
             #[cfg(not(unix))]
             let mode = "100644";
-            (fs::read(file)?, mode.into())
+            (fs::read(&file)?, mode.into())
         };
-        tree.insert(path, storage.blob(&bytes, mode)?);
+        let blob = storage.blob(&bytes, mode)?;
+        if stamp != crate::repository_cache::stamp(&file) {
+            return Err(AppError::new(
+                "capture_changed",
+                "A file changed while being read. Please retry.",
+            ));
+        }
+        cache.working.insert(file, (stamp, blob.clone()));
+        tree.insert(path, blob);
     }
     observer(phase, total, Some(total), None)?;
     Ok(tree)
@@ -385,19 +453,35 @@ pub(crate) fn prepare_capture(
     request: CaptureRequest,
     observer: &mut CaptureObserver<'_>,
 ) -> AppResult<Snapshot> {
+    prepare_capture_cached(
+        storage,
+        request,
+        observer,
+        &mut crate::repository_cache::Sources::default(),
+        false,
+    )
+}
+pub(crate) fn prepare_capture_cached(
+    storage: &Storage,
+    request: CaptureRequest,
+    observer: &mut CaptureObserver<'_>,
+    cache: &mut crate::repository_cache::Sources,
+    incremental: bool,
+) -> AppResult<Snapshot> {
     observer("preparing", 0, None, None)?;
     let root = root(storage, &request.repository_id)?;
     let head =
         text(&root, &["rev-parse", "--verify", "HEAD"]).unwrap_or_else(|_| EMPTY_TREE.into());
-    let head_tree = git_tree_observed(storage, &root, &head, "copying_head", observer)?;
-    let index = git_tree_observed(storage, &root, "INDEX", "copying_index", observer)?;
-    let working = working_tree_observed(
+    let head_tree = git_tree_cached(storage, &root, &head, "copying_head", observer, cache)?;
+    let index = git_tree_cached(storage, &root, "INDEX", "copying_index", observer, cache)?;
+    let working = working_tree_cached(
         storage,
         &root,
         &index,
         request.include_untracked,
         "copying_worktree",
         observer,
+        cache,
     )?;
     observer("comparing", 0, None, None)?;
     let before_hash = tree_hash(&working)?;
@@ -416,11 +500,12 @@ pub(crate) fn prepare_capture(
         Scope::Commit | Scope::Range => {
             let (base, target) = comparison_refs(&root, &request)?;
             git_refs.extend([base.clone(), target.clone()]);
-            let after = git_tree_observed(storage, &root, &target, "copying_target", observer)?;
+            let after =
+                git_tree_cached(storage, &root, &target, "copying_target", observer, cache)?;
             (
                 changed(
                     storage,
-                    &git_tree_observed(storage, &root, &base, "copying_base", observer)?,
+                    &git_tree_cached(storage, &root, &base, "copying_base", observer, cache)?,
                     &after,
                     "committed",
                 )?,
@@ -429,21 +514,26 @@ pub(crate) fn prepare_capture(
         }
     };
     observer("verifying", 0, None, None)?;
+    if !incremental {
+        cache.working.clear();
+    }
     if text(&root, &["rev-parse", "--verify", "HEAD"]).unwrap_or_else(|_| EMPTY_TREE.into()) != head
-        || tree_hash(&git_tree_observed(
+        || tree_hash(&git_tree_cached(
             storage,
             &root,
             "INDEX",
             "verifying",
             observer,
+            cache,
         )?)? != tree_hash(&index)?
-        || tree_hash(&working_tree_observed(
+        || tree_hash(&working_tree_cached(
             storage,
             &root,
             &index,
             request.include_untracked,
             "verifying",
             observer,
+            cache,
         )?)? != before_hash
     {
         return Err(AppError::new(

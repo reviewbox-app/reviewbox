@@ -11,12 +11,12 @@ use std::{
 };
 
 #[derive(Clone, Default)]
-struct FileStat {
+pub(crate) struct FileStat {
     additions: u32,
     deletions: u32,
     binary: bool,
 }
-type Stats = BTreeMap<String, FileStat>;
+pub(crate) type Stats = BTreeMap<String, FileStat>;
 
 fn string(bytes: &[u8]) -> AppResult<String> {
     String::from_utf8(bytes.to_vec())
@@ -55,25 +55,6 @@ fn read_working(root: &Path, path: &str) -> AppResult<Vec<u8>> {
     }
 }
 
-fn read_object(root: &Path, mode: &str, oid: &str) -> AppResult<Vec<u8>> {
-    if mode == "000000" {
-        return Ok(Vec::new());
-    }
-    if mode == "160000" {
-        return Ok(oid.as_bytes().to_vec());
-    }
-    let size: u64 = text(root, &["cat-file", "-s", oid])?
-        .parse()
-        .map_err(|_| AppError::new("git", "Invalid Git object size."))?;
-    if size > MAX_FILE {
-        return Err(AppError::new(
-            "large_file",
-            "A changed file exceeds the 64 MiB capture limit.",
-        ));
-    }
-    git(root, &["cat-file", "blob", oid])
-}
-
 fn content_stat(before: &[u8], after: &[u8], before_mode: &str, after_mode: &str) -> FileStat {
     let binary = content_is_binary(before, after, Some(before_mode), Some(after_mode));
     if binary {
@@ -95,7 +76,14 @@ fn content_stat(before: &[u8], after: &[u8], before_mode: &str, after_mode: &str
     stat
 }
 
-fn diff(root: &Path, references: &[&str], cached: bool) -> AppResult<Stats> {
+fn diff(
+    root: &Path,
+    references: &[&str],
+    cached: bool,
+    details: bool,
+    check: &dyn Fn() -> AppResult<()>,
+    memo: &mut BTreeMap<String, Stats>,
+) -> AppResult<Stats> {
     let mut args = vec![
         "diff",
         "--raw",
@@ -111,10 +99,25 @@ fn diff(root: &Path, references: &[&str], cached: bool) -> AppResult<Stats> {
     }
     args.extend_from_slice(references);
     args.extend(["--", ".", ":(exclude).reviewbox", ":(exclude).reviewbox/**"]);
+    check()?;
     let data = git(root, &args)?;
+    let key = format!(
+        "{details}:{cached}:{}:{}",
+        references.join(":"),
+        fingerprint(&data)
+    );
+    if details && let Some(stats) = memo.get(&key) {
+        return Ok(stats.clone());
+    }
     let mut entries = data.split(|b| *b == 0).filter(|p| !p.is_empty());
     let mut stats = Stats::new();
+    let mut objects = if details {
+        Some(super::objects::Objects::open(root)?)
+    } else {
+        None
+    };
     while let Some(raw) = entries.next() {
+        check()?;
         let metadata = string(raw)?;
         let fields: Vec<_> = metadata
             .trim_start_matches(':')
@@ -149,13 +152,23 @@ fn diff(root: &Path, references: &[&str], cached: bool) -> AppResult<Stats> {
         {
             continue;
         }
-        let before = read_object(root, fields[0], fields[2])?;
+        let Some(objects) = objects.as_mut() else {
+            stats.insert(path, FileStat::default());
+            continue;
+        };
+        let before = objects.read(fields[0], fields[2])?;
         let after = if !cached && references.is_empty() {
             read_working(root, &path)?
         } else {
-            read_object(root, fields[1], fields[3])?
+            objects.read(fields[1], fields[3])?
         };
         stats.insert(path, content_stat(&before, &after, fields[0], fields[1]));
+    }
+    if details {
+        if memo.len() >= 64 {
+            memo.clear();
+        }
+        memo.insert(key, stats.clone());
     }
     Ok(stats)
 }
@@ -169,15 +182,33 @@ fn untracked(root: &Path) -> AppResult<Vec<String>> {
         .collect()
 }
 
-fn untracked_stats(root: &Path, paths: &[String]) -> AppResult<Stats> {
+fn untracked_stats(
+    root: &Path,
+    paths: &[String],
+    details: bool,
+    check: &dyn Fn() -> AppResult<()>,
+    memo: &mut BTreeMap<String, Stats>,
+) -> AppResult<Stats> {
+    let key = format!("untracked:{details}:{}", paths.join("\0"));
+    if details && let Some(stats) = memo.get(&key) {
+        return Ok(stats.clone());
+    }
     let mut stats = Stats::new();
     for path in paths {
+        check()?;
         safe_path(path)?;
         if fs::symlink_metadata(root.join(path))?.is_dir() {
             continue;
         }
+        if !details {
+            stats.insert(path.clone(), FileStat::default());
+            continue;
+        }
         let bytes = read_working(root, path)?;
         stats.insert(path.clone(), content_stat(&[], &bytes, "000000", "100644"));
+    }
+    if details {
+        memo.insert(key, stats.clone());
     }
     Ok(stats)
 }
@@ -190,6 +221,7 @@ fn summarize(scope: Scope, layers: &[&Stats], partially_staged_files: u32) -> Sc
         .collect();
     ScopePreview {
         scope,
+        details_ready: true,
         files: files.len() as u32,
         additions: layers
             .iter()
@@ -210,14 +242,21 @@ fn summarize(scope: Scope, layers: &[&Stats], partially_staged_files: u32) -> Sc
     }
 }
 
-fn committed(root: &Path, request: &CaptureRequest, scope: Scope) -> ScopePreview {
+fn committed(
+    root: &Path,
+    request: &CaptureRequest,
+    scope: Scope,
+    details: bool,
+    check: &dyn Fn() -> AppResult<()>,
+    memo: &mut BTreeMap<String, Stats>,
+) -> ScopePreview {
     let result = (|| -> AppResult<ScopePreview> {
         let comparison = CaptureRequest {
             scope: scope.clone(),
             ..request.clone()
         };
         let (base, target) = comparison_refs(root, &comparison)?;
-        let stats = diff(root, &[&base, &target], false)?;
+        let stats = diff(root, &[&base, &target], false, details, check, memo)?;
         let mut preview = summarize(scope.clone(), &[&stats], 0);
         preview.commit_count = Some(if scope == Scope::Commit {
             1
@@ -226,6 +265,7 @@ fn committed(root: &Path, request: &CaptureRequest, scope: Scope) -> ScopePrevie
                 .parse()
                 .map_err(|_| AppError::new("git", "Invalid commit count."))?
         });
+        preview.details_ready = details;
         preview.base = Some(base);
         preview.target = Some(target);
         Ok(preview)
@@ -239,10 +279,42 @@ fn committed(root: &Path, request: &CaptureRequest, scope: Scope) -> ScopePrevie
 
 /// Read-only Git inspection. No snapshots, blob cache, project settings or index
 /// entries are created by previewing the creation wizard.
+#[cfg(test)]
 pub fn preview(storage: &Storage, request: &CaptureRequest) -> AppResult<ReviewPreview> {
+    preview_impl(
+        storage,
+        request,
+        true,
+        true,
+        &|| Ok(()),
+        &mut BTreeMap::new(),
+    )
+}
+
+pub fn preview_selected(
+    storage: &Storage,
+    request: &CaptureRequest,
+    details: bool,
+    check: &dyn Fn() -> AppResult<()>,
+    memo: &mut BTreeMap<String, Stats>,
+) -> AppResult<ReviewPreview> {
+    preview_impl(storage, request, details, false, check, memo)
+}
+fn preview_impl(
+    storage: &Storage,
+    request: &CaptureRequest,
+    details: bool,
+    all: bool,
+    check: &dyn Fn() -> AppResult<()>,
+    memo: &mut BTreeMap<String, Stats>,
+) -> AppResult<ReviewPreview> {
     let root = root(storage, &request.repository_id)?;
     let head = resolve(&root, "HEAD").unwrap_or_else(|_| EMPTY_TREE.into());
-    let staged = diff(&root, &[&head], true);
+    check()?;
+    let staged_details = details && (all || matches!(request.scope, Scope::Local | Scope::Staged));
+    let unstaged_details =
+        details && (all || matches!(request.scope, Scope::Local | Scope::Unstaged));
+    let staged = diff(&root, &[&head], true, staged_details, check, memo);
     let paths = untracked(&root).map(|paths| {
         paths
             .into_iter()
@@ -253,10 +325,16 @@ pub fn preview(storage: &Storage, request: &CaptureRequest) -> AppResult<ReviewP
             .collect::<Vec<_>>()
     });
     let untracked_files = paths.as_ref().map_or(0, |paths| paths.len() as u32);
-    let unstaged = diff(&root, &[], false).and_then(|mut stats| {
+    let unstaged = diff(&root, &[], false, unstaged_details, check, memo).and_then(|mut stats| {
         if request.include_untracked {
             let paths = paths.as_ref().map_err(Clone::clone)?;
-            stats.extend(untracked_stats(&root, paths)?);
+            stats.extend(untracked_stats(
+                &root,
+                paths,
+                unstaged_details,
+                check,
+                memo,
+            )?);
         }
         Ok(stats)
     });
@@ -288,15 +366,21 @@ pub fn preview(storage: &Storage, request: &CaptureRequest) -> AppResult<ReviewP
         Ok(stats) => summarize(Scope::Staged, &[stats], partially_staged),
         Err(error) => unavailable(Scope::Staged, error),
     };
+    check()?;
+    let mut scopes = vec![local, unstaged, staged];
+    scopes[0].details_ready = staged_details && unstaged_details;
+    scopes[1].details_ready = unstaged_details;
+    scopes[2].details_ready = staged_details;
+    for scope in [Scope::Commit, Scope::Range] {
+        if all || request.scope == scope {
+            scopes.push(committed(&root, request, scope, details, check, memo));
+        }
+    }
+    check()?;
     Ok(ReviewPreview {
+        revision: String::new(),
         untracked_files,
-        scopes: vec![
-            local,
-            unstaged,
-            staged,
-            committed(&root, request, Scope::Commit),
-            committed(&root, request, Scope::Range),
-        ],
+        scopes,
     })
 }
 

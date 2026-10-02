@@ -37,6 +37,7 @@ fn main() {
         "list_reviews",
         "create_review",
         "preview_review",
+        "cancel_repository_read",
         "review_references",
         "create_review_operation",
         "cancel_review_creation",

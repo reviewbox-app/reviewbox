@@ -67,7 +67,9 @@ export function ReviewStats({ stats }: { stats: ScopePreview | null }) {
         <>
           {fileCount(stats.files)} ·{" "}
           <span className="text-foreground">
-            +{stats.additions} −{stats.deletions}
+            {stats.detailsReady
+              ? `+${stats.additions} −${stats.deletions}`
+              : "Counting lines…"}
           </span>
           {stats.binaryFiles > 0 && <> · {stats.binaryFiles} binary</>}
         </>

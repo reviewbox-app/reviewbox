@@ -34,6 +34,7 @@ type ArchivedDocuments = BTreeMap<(String, String, String), Value>;
 
 #[derive(Clone)]
 pub struct Storage {
+    pub(crate) repository_cache: Arc<crate::repository_cache::RepositoryCache>,
     updating: Arc<Mutex<BTreeMap<(String, String), String>>>,
     update_owner: Option<String>,
     root: PathBuf,
@@ -47,6 +48,9 @@ pub struct Storage {
     _owner: std::sync::Arc<project_storage::FileLock>,
 }
 impl Storage {
+    pub(crate) fn cached_blob_exists(&self, hash: &str) -> bool {
+        self.root.join("blobs").join(hash).is_file()
+    }
     pub fn scoped(&self, repository_id: Option<&str>) -> Self {
         let mut scoped = self.clone();
         scoped.scope = repository_id
@@ -78,6 +82,7 @@ impl Storage {
             source_cache::SOURCE_CACHE_LIMIT,
         )?);
         let storage = Self {
+            repository_cache: Arc::default(),
             updating: Arc::default(),
             update_owner: None,
             source_cache,

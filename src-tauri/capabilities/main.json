@@ -33,6 +33,7 @@
     "allow-list-reviews",
     "allow-create-review",
     "allow-preview-review",
+    "allow-cancel-repository-read",
     "allow-review-references",
     "allow-create-review-operation",
     "allow-cancel-review-creation",

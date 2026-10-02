@@ -102,10 +102,12 @@ export type ProjectSettings = {
 }
 export type PreparationMode = "rev" | "manual"
 export type ReviewPreview = {
+  revision: string
   scopes: Array<ScopePreview>
   untrackedFiles: number
 }
 export type ScopePreview = {
+  detailsReady: boolean
   scope: Scope
   files: number
   additions: number
