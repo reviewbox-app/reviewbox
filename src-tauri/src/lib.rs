@@ -57,7 +57,6 @@ pub fn run() {
                     .map_err(|e| std::io::Error::other(e.message))?,
             );
             app.manage(storage);
-            app.manage(agents::AgentManager::default());
             app.manage(source_control::SourceControl::default());
             app.manage(preparation::PreparationManager::default());
             app.manage(agents::models::CatalogManager::default());
@@ -93,7 +92,6 @@ pub fn run() {
                     .stop_all();
             }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
-                window.state::<agents::AgentManager>().stop_all();
                 window.state::<source_control::SourceControl>().stop_all();
                 window.state::<preparation::PreparationManager>().stop_all();
                 window
@@ -115,6 +113,9 @@ pub fn run() {
             source_control::commands::local_git_state,
             source_control::commands::local_file_diff,
             source_control::commands::stage_local_file,
+            source_control::commands::stage_local_files,
+            source_control::commands::reveal_local_path,
+            source_control::commands::discard_local_files,
             source_control::commands::git_commit_detail,
             source_control::commands::fetch_git_remote,
             source_control::commands::push_git_branch,
@@ -164,14 +165,11 @@ pub fn run() {
             commands::check_repository_changed,
             commands::check_review_freshness,
             commands::read_snapshot_file,
-            commands::preview_prompt,
             commands::load_knowledge,
             commands::save_knowledge,
             commands::provider_status,
             commands::provider_models,
             commands::cancel_provider_models,
-            commands::start_agent,
-            commands::cancel_agent,
             commands::language_server_settings,
             commands::configure_language_servers,
             commands::find_definition,
@@ -185,22 +183,18 @@ pub fn run() {
             language_servers::catalog::cancel_language_server_install,
             language_servers::catalog::set_language_server_enabled,
             language_servers::catalog::uninstall_language_server,
-            commands::proposal_from_run,
             commands::answer_proposal,
-            commands::list_proposals,
             commands::list_onboarding_tours,
             commands::save_onboarding_tour,
             commands::read_onboarding_step,
             commands::import_onboarding_tour,
             commands::export_onboarding_tour,
             commands::open_settings,
-            commands::preview_agent_request,
             commands::reveal_storage,
             commands::provider_settings,
             commands::configure_providers,
             commands::project_settings,
             commands::configure_project,
-            commands::list_agent_runs
         ])
         .build(tauri::generate_context!())
         .expect("failed to build ReviewBox")
@@ -209,7 +203,6 @@ pub fn run() {
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
-                app.state::<agents::AgentManager>().stop_all();
                 app.state::<preparation::PreparationManager>().stop_all();
                 app.state::<agents::models::CatalogManager>().0.stop_all();
                 app.state::<review_creation::CaptureManager>().cancel_all();

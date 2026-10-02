@@ -333,6 +333,7 @@ pub(super) async fn prepare(
     };
     Ok(Prepared { effort, helper })
 }
+#[cfg(test)]
 pub(super) async fn run(
     root: &std::path::Path,
     prompt: &str,

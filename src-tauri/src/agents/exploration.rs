@@ -2,6 +2,12 @@ use super::*;
 use serde_json::json;
 use std::{fs, path::Path};
 
+#[derive(Clone)]
+pub(super) struct ExplorationRequest {
+    pub id: String,
+    pub paths: Vec<String>,
+}
+
 /// Only discovery metadata is temporary. Frozen bytes stay in the existing
 /// content-addressed cache; the harness runs in the real repository.
 pub(super) struct Exploration {
@@ -14,7 +20,7 @@ impl Drop for Exploration {
     }
 }
 
-fn directory(storage: &Storage, request: &AgentRequest) -> PathBuf {
+fn directory(storage: &Storage, request: &ExplorationRequest) -> PathBuf {
     storage
         .root()
         .join("agent-context")
@@ -24,7 +30,7 @@ fn directory(storage: &Storage, request: &AgentRequest) -> PathBuf {
 pub(super) fn descriptor(
     storage: &Storage,
     workspace: &Workspace,
-    request: &AgentRequest,
+    request: &ExplorationRequest,
 ) -> AppResult<String> {
     descriptor_for(
         storage,
@@ -37,7 +43,7 @@ pub(super) fn descriptor_for(
     storage: &Storage,
     snapshot: &Snapshot,
     review: Option<&Review>,
-    request: &AgentRequest,
+    request: &ExplorationRequest,
 ) -> AppResult<String> {
     let repository: Repository = storage.get("repository", &snapshot.repository_id)?;
     Ok(serde_json::to_string_pretty(&json!({
@@ -46,7 +52,6 @@ pub(super) fn descriptor_for(
         "snapshotId": snapshot.id,
         "reviewManifest": directory(storage, request).join("manifest.json"),
         "focusPaths": request.paths,
-        "conversationContext": continuity::descriptor(storage, request, &directory(storage, request))?,
     }))?)
 }
 
@@ -74,7 +79,7 @@ fn write(path: &Path, value: &Value) -> AppResult<()> {
 pub(super) fn materialize(
     storage: &Storage,
     workspace: &Workspace,
-    request: &AgentRequest,
+    request: &ExplorationRequest,
     cancel: &AtomicBool,
 ) -> AppResult<Exploration> {
     materialize_for(
@@ -89,7 +94,7 @@ pub(super) fn materialize_for(
     storage: &Storage,
     snapshot: &Snapshot,
     review: Option<&Review>,
-    request: &AgentRequest,
+    request: &ExplorationRequest,
     cancel: &AtomicBool,
 ) -> AppResult<Exploration> {
     let repository: Repository = storage.get("repository", &snapshot.repository_id)?;
@@ -102,7 +107,6 @@ pub(super) fn materialize_for(
         project: PathBuf::from(repository.path),
         directory,
     };
-    continuity::materialize(storage, request, &exploration.directory, cancel)?;
     write(
         &exploration.directory.join("review.json"),
         &serde_json::to_value(review)?,
@@ -152,7 +156,7 @@ pub(super) fn materialize_for(
             })
         })
         .collect();
-    let sources = if request.action == "preparation" {
+    let sources = {
         crate::reader::sources(snapshot)
             .into_iter()
             .map(|source| {
@@ -174,8 +178,6 @@ pub(super) fn materialize_for(
                 Ok(value)
             })
             .collect::<AppResult<Vec<_>>>()?
-    } else {
-        Vec::new()
     };
     write(
         &exploration.directory.join("manifest.json"),

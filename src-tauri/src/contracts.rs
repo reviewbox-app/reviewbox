@@ -493,6 +493,7 @@ pub fn typescript() -> String {
         ReviewMenuEntry::decl(&cfg),
         ReviewMenuState::decl(&cfg),
         LocalFile::decl(&cfg),
+        LocalFileSelection::decl(&cfg),
         GitCommitSummary::decl(&cfg),
         GitCommitFile::decl(&cfg),
         GitCommitDetail::decl(&cfg),
@@ -575,7 +576,6 @@ pub fn typescript() -> String {
         ProviderCompatibility::decl(&cfg),
         ProviderStatus::decl(&cfg),
         PromptPreview::decl(&cfg),
-        AgentRequest::decl(&cfg),
         AgentEvent::decl(&cfg),
         AgentProgress::decl(&cfg),
         AgentPlanStep::decl(&cfg),
@@ -625,20 +625,6 @@ pub fn typescript() -> String {
     )
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentRequest {
-    /// Code Explain source context; no review is required when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub context_id: Option<String>,
-    pub id: String,
-    pub review_id: String,
-    pub provider: String,
-    pub action: String,
-    pub request: String,
-    pub paths: Vec<String>,
-}
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEvent {

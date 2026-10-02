@@ -3,7 +3,6 @@ import type {
   CaptureRequest,
   Coverage,
   FileContent,
-  ProjectKnowledge,
   ProjectSettings,
   ProviderStatus,
   Repository,
@@ -73,9 +72,5 @@ export const reviewCommands = {
     call<boolean>("check_repository_changed", { snapshotId }),
   file: (snapshotId: string, path: string) =>
     call<string>("read_snapshot_file", { snapshotId, path }),
-  knowledge: (repositoryId: string) =>
-    call<ProjectKnowledge>("load_knowledge", { repositoryId }),
-  saveKnowledge: (knowledge: ProjectKnowledge) =>
-    call<ProjectKnowledge>("save_knowledge", { knowledge }),
   providers: () => call<ProviderStatus[]>("provider_status"),
 }

@@ -18,13 +18,8 @@ impl PreparationRuntime {
         cancel: Arc<AtomicBool>,
         baseline: Option<Workspace>,
     ) -> AppResult<Self> {
-        let request = AgentRequest {
-            context_id: None,
+        let request = exploration::ExplorationRequest {
             id: id(),
-            review_id: workspace.review.id.clone(),
-            provider: config.provider.clone(),
-            action: "preparation".into(),
-            request: String::new(),
             paths: vec![],
         };
         let flag = cancel.clone();
@@ -32,9 +27,8 @@ impl PreparationRuntime {
             let mut context: Value =
                 serde_json::from_str(&exploration::descriptor(&storage, &workspace, &request)?)?;
             let baseline = if let Some(old) = baseline {
-                let old_request = AgentRequest {
+                let old_request = exploration::ExplorationRequest {
                     id: id(),
-                    review_id: old.review.id.clone(),
                     ..request.clone()
                 };
                 let descriptor: Value =

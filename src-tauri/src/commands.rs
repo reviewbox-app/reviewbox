@@ -1,5 +1,5 @@
-use crate::{contracts::*, prompts, repositories, reviews, snapshots, storage::Storage};
-use std::{collections::BTreeMap, path::PathBuf};
+use crate::{contracts::*, repositories, reviews, snapshots, storage::Storage};
+use std::path::PathBuf;
 use tauri::{Manager, State};
 
 async fn blocking<T: Send + 'static>(
@@ -293,15 +293,6 @@ pub async fn read_snapshot_file(
     })
     .await
 }
-#[tauri::command]
-pub async fn preview_prompt(
-    app: tauri::AppHandle,
-    action: String,
-    variables: BTreeMap<String, String>,
-) -> AppResult<PromptPreview> {
-    let root = resource_root(&app)?;
-    blocking(move || prompts::load(&root, &action, &variables)).await
-}
 pub(crate) fn resource_root(app: &tauri::AppHandle) -> AppResult<PathBuf> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/agents"))
@@ -366,55 +357,6 @@ pub async fn provider_status(storage: State<'_, Storage>) -> AppResult<Vec<Provi
     Ok(statuses)
 }
 
-#[tauri::command]
-pub async fn start_agent(
-    app: tauri::AppHandle,
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    manager: State<'_, crate::agents::AgentManager>,
-    request: AgentRequest,
-    channel: tauri::ipc::Channel<AgentEvent>,
-) -> AppResult<AgentRun> {
-    let root = resource_root(&app)?;
-    let cancel = manager.register(&request.id)?;
-    let id = request.id.clone();
-    let result = crate::agents::run(
-        storage.scoped(repository_id.as_deref()),
-        root,
-        request,
-        cancel,
-        channel,
-    )
-    .await;
-    manager.remove(&id);
-    result
-}
-#[tauri::command]
-pub async fn cancel_agent(
-    manager: State<'_, crate::agents::AgentManager>,
-    id: String,
-) -> AppResult<()> {
-    manager.cancel(&id)
-}
-#[tauri::command]
-pub async fn list_agent_runs(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    review_id: String,
-    context_id: Option<String>,
-) -> AppResult<Vec<AgentRun>> {
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || {
-        if let Some(context) = context_id {
-            return crate::knowledge::context::history(&s, &context);
-        }
-        Ok(s.list::<AgentRun>("agent_run")?
-            .into_iter()
-            .filter(|r| r.review_id == review_id && r.context_id.is_none())
-            .collect())
-    })
-    .await
-}
 #[tauri::command]
 pub async fn language_server_settings(
     storage: State<'_, Storage>,
@@ -534,35 +476,6 @@ pub async fn language_repository_paths(
 }
 
 #[tauri::command]
-pub async fn proposal_from_run(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    run_id: String,
-) -> AppResult<Proposal> {
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || {
-        if let Some(proposal) = s
-            .list::<Proposal>("proposal")?
-            .into_iter()
-            .find(|p| p.run_id.as_ref() == Some(&run_id))
-        {
-            if proposal.status != "pending" {
-                return Err(AppError::new(
-                    "answered_proposal",
-                    "This response has already been accepted or rejected.",
-                ));
-            }
-            return Ok(proposal);
-        }
-        let run: AgentRun = s.get("agent_run", &run_id)?;
-        if run.context_id.is_some() {
-            return crate::proposals::code_explain::parse(&s, &run);
-        }
-        crate::proposals::parse(&s, &run.review_id, &run.output, Some(run.id.clone()))
-    })
-    .await
-}
-#[tauri::command]
 pub async fn answer_proposal(
     storage: State<'_, Storage>,
     repository_id: Option<String>,
@@ -574,26 +487,6 @@ pub async fn answer_proposal(
     let s = storage.scoped(repository_id.as_deref());
     blocking(move || crate::proposals::answer(&s, &id, revision, content, accepted)).await
 }
-#[tauri::command]
-pub async fn list_proposals(
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    review_id: String,
-    context_id: Option<String>,
-) -> AppResult<Vec<Proposal>> {
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || {
-        if let Some(context) = context_id {
-            return crate::knowledge::context::proposals(&s, &context);
-        }
-        Ok(s.list::<Proposal>("proposal")?
-            .into_iter()
-            .filter(|p| p.review_id == review_id && p.context_id.is_none())
-            .collect())
-    })
-    .await
-}
-
 #[tauri::command]
 pub async fn list_onboarding_tours(
     storage: State<'_, Storage>,
@@ -694,17 +587,6 @@ pub async fn open_settings(app: tauri::AppHandle) -> AppResult<()> {
             .map_err(|e| AppError::new("window", e.to_string()))?;
     }
     Ok(())
-}
-#[tauri::command]
-pub async fn preview_agent_request(
-    app: tauri::AppHandle,
-    storage: State<'_, Storage>,
-    repository_id: Option<String>,
-    request: AgentRequest,
-) -> AppResult<PromptPreview> {
-    let root = resource_root(&app)?;
-    let s = storage.scoped(repository_id.as_deref());
-    blocking(move || Ok(crate::agents::prepare(&s, &root, &request)?.prompt)).await
 }
 #[tauri::command]
 pub async fn reveal_storage(app: tauri::AppHandle) -> AppResult<()> {

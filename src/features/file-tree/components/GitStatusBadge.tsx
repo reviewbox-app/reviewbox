@@ -9,7 +9,22 @@ const labels: Record<GitFileStatus, string> = {
   U: "Untracked",
 }
 
-export function GitStatusBadge({ status }: { status?: GitFileStatus }) {
+export function gitStatusColor(status?: GitFileStatus) {
+  if (!status) return undefined
+  return status === "D"
+    ? "text-diff-removed"
+    : status === "M"
+      ? "text-git-modified"
+      : "text-diff-added"
+}
+
+export function GitStatusBadge({
+  status,
+  className,
+}: {
+  status?: GitFileStatus
+  className?: string
+}) {
   if (!status) return null
   return (
     <span
@@ -18,11 +33,8 @@ export function GitStatusBadge({ status }: { status?: GitFileStatus }) {
       data-git-status={status}
       className={cn(
         "w-3 shrink-0 text-center font-mono text-xs font-semibold",
-        status === "D"
-          ? "text-diff-removed"
-          : status === "M"
-            ? "text-git-modified"
-            : "text-diff-added"
+        gitStatusColor(status),
+        className
       )}
     >
       {status}

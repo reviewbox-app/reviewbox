@@ -55,17 +55,9 @@ try {
   await ui.select("#languages-project", projectLabel)
   await closeSettings()
 
-  phase = "independent glossary"
-  await ui.named("Code Explain", '[role="tab"]')
-  await ui.named("Glossary", '[role="tab"]')
-  await ui.fill("#term-name", "answer")
-  await ui.fill('[aria-label="Definition"]', "The exported response value")
-  await ui.named("Save meaning")
-  await ui.has("The exported response value")
-  await ui.screenshot("glossary-saved")
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
-    "Native Selects: empty states, project labels and standalone glossary save passed"
+    "Native Selects: empty states, project and language selectors passed"
   )
 } catch (error) {
   console.error("Select test phase:", phase)

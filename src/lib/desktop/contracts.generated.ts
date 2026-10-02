@@ -30,6 +30,7 @@ export type LocalFile = {
    */
   version: string
 }
+export type LocalFileSelection = { path: string; version: string }
 export type GitCommitSummary = {
   oid: string
   subject: string
@@ -536,18 +537,6 @@ export type PromptPreview = {
   text: string
   fingerprint: string
   sources: Array<string>
-}
-export type AgentRequest = {
-  /**
-   * Code Explain source context; no review is required when present.
-   */
-  contextId?: string
-  id: string
-  reviewId: string
-  provider: string
-  action: string
-  request: string
-  paths: Array<string>
 }
 export type AgentEvent = {
   batchId?: string

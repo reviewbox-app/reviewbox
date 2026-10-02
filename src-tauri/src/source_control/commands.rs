@@ -179,3 +179,85 @@ pub async fn last_git_operation(
     let s = storage.inner().clone();
     blocking(move || commits::last(&s, &repository_id)).await
 }
+
+#[tauri::command]
+pub async fn stage_local_files(
+    storage: State<'_, Storage>,
+    manager: State<'_, SourceControl>,
+    repository_id: String,
+    files: Vec<LocalFileSelection>,
+    staged: bool,
+) -> AppResult<LocalGitState> {
+    let root = repositories::root(&storage, &repository_id)?;
+    let manager = manager.inner().clone();
+    blocking(move || {
+        let operation = manager.begin(&root, &id())?;
+        working::stage_files(&root, &files, staged, &operation.cancel)?;
+        history::state(&manager, &root, &repository_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reveal_local_path(
+    storage: State<'_, Storage>,
+    repository_id: String,
+    path: String,
+) -> AppResult<()> {
+    let root = repositories::root(&storage, &repository_id)?;
+    blocking(move || {
+        crate::snapshots::safe_path(&path)?;
+        let mut location = root.join(path);
+        // Deleted paths reveal their nearest existing parent.
+        while !location.exists() {
+            if !location.pop() {
+                return Err(AppError::new("path", "No existing parent."));
+            }
+        }
+        if !location.canonicalize()?.starts_with(root.canonicalize()?) {
+            return Err(AppError::new("unsafe_path", "Path leaves this repository."));
+        }
+        #[cfg(target_os = "macos")]
+        let result = std::process::Command::new("open")
+            .arg("-R")
+            .arg(&location)
+            .status()?;
+        #[cfg(target_os = "windows")]
+        let result = std::process::Command::new("explorer")
+            .arg(format!("/select,{}", location.display()))
+            .status()?;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let result = std::process::Command::new("xdg-open")
+            .arg(if location.is_dir() {
+                location.as_path()
+            } else {
+                location.parent().unwrap_or(&root)
+            })
+            .status()?;
+        if !result.success() {
+            return Err(AppError::new(
+                "reveal_failed",
+                "The file manager could not reveal this path.",
+            ));
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn discard_local_files(
+    storage: State<'_, Storage>,
+    manager: State<'_, SourceControl>,
+    repository_id: String,
+    files: Vec<LocalFileSelection>,
+) -> AppResult<LocalGitState> {
+    let root = repositories::root(&storage, &repository_id)?;
+    let manager = manager.inner().clone();
+    blocking(move || {
+        let operation = manager.begin(&root, &id())?;
+        working::discard_files(&root, &files, &operation.cancel)?;
+        history::state(&manager, &root, &repository_id)
+    })
+    .await
+}

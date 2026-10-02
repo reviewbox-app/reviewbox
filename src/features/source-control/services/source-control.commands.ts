@@ -7,6 +7,7 @@ import type {
   GitOperation,
   LocalFileDiff,
   LocalGitState,
+  LocalFileSelection,
 } from "@/lib/desktop/contracts.generated"
 
 export const sourceControlCommands = {
@@ -31,6 +32,14 @@ export const sourceControlCommands = {
       version,
       staged,
     }),
+  stageFiles: (
+    repositoryId: string,
+    files: LocalFileSelection[],
+    staged: boolean
+  ) =>
+    call<LocalGitState>("stage_local_files", { repositoryId, files, staged }),
+  discard: (repositoryId: string, files: LocalFileSelection[]) =>
+    call<LocalGitState>("discard_local_files", { repositoryId, files }),
   detail: (repositoryId: string, oid: string) =>
     call<GitCommitDetail>("git_commit_detail", { repositoryId, oid }),
   fetch: (repositoryId: string, force: boolean) =>

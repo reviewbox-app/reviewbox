@@ -341,7 +341,7 @@ try {
     await ui.has(`Step ${step + 1} of 11`)
   }
   await ui.until(
-    `getComputedStyle(document.querySelector('${otherFile}')).opacity === '0.5'`
+    `getComputedStyle(document.querySelector('${otherFile} > span')).opacity === '0.5'`
   )
   assert.equal(
     await ui.execute(
@@ -364,7 +364,7 @@ try {
   await ui.named("Behavior 3", '[data-slot="popover-content"] button', false)
   await ui.named("Reopen step")
   await ui.until(
-    `getComputedStyle(document.querySelector('${otherFile}')).opacity === '1'`
+    `getComputedStyle(document.querySelector('${otherFile} > span')).opacity === '1'`
   )
 
   for (const activation of ["tab", "shortcut", "palette"]) {

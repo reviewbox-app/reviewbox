@@ -4,8 +4,7 @@ import type { Snapshot } from "@/lib/desktop/contracts.generated"
 import { call, errorMessage } from "@/lib/desktop/review.commands"
 import { UnderstandWorkspace } from "./UnderstandWorkspace"
 
-/** Current repository sources, independent of the selected review. A generation
- * retains this frozen context until its proposal has been inspected. */
+/** Current repository sources, independent of the selected review. */
 export function CodeExplainWorkspace({
   repositoryId,
   onError,
@@ -15,7 +14,6 @@ export function CodeExplainWorkspace({
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const current = useRef<string | null>(null)
-  const frozen = useRef(false)
   useEffect(() => {
     let alive = true
     let timer: ReturnType<typeof setTimeout>
@@ -25,21 +23,19 @@ export function CodeExplainWorkspace({
       )
     const refresh = async () => {
       try {
-        if (!frozen.current) {
-          const value = await call<Snapshot>("code_explain_context", {
-            repositoryId,
-            current: current.current,
-          })
-          if (!alive || frozen.current) {
-            if (value.id !== current.current) await release(value.id)
-            return
-          }
-          if (value.id !== current.current) {
-            const previous = current.current
-            current.current = value.id
-            setSnapshot(value)
-            if (previous) await release(previous)
-          }
+        const value = await call<Snapshot>("code_explain_context", {
+          repositoryId,
+          current: current.current,
+        })
+        if (!alive) {
+          if (value.id !== current.current) await release(value.id)
+          return
+        }
+        if (value.id !== current.current) {
+          const previous = current.current
+          current.current = value.id
+          setSnapshot(value)
+          if (previous) await release(previous)
         }
       } catch (cause) {
         if (alive) onError(errorMessage(cause))
@@ -61,15 +57,5 @@ export function CodeExplainWorkspace({
         Reading project files…
       </p>
     )
-  return (
-    <UnderstandWorkspace
-      snapshot={snapshot}
-      contextId={snapshot.id}
-      onApplied={() => {}}
-      onFreezeChange={(value) => {
-        frozen.current = value
-      }}
-      onError={onError}
-    />
-  )
+  return <UnderstandWorkspace snapshot={snapshot} onError={onError} />
 }

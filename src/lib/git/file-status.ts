@@ -31,15 +31,22 @@ export function capturedFileStatuses(changes: Snapshot["changes"]) {
   return Object.fromEntries(statuses)
 }
 
-/** A folder uses the shared status of its descendants, or M for mixed changes. */
+/** Aggregate all descendants, including files hidden by filtering or collapsed folders.
+ * Prioritize added/untracked, then edited/renamed, then deleted. */
 export function folderGitStatuses(files: Record<string, GitFileStatus>) {
   const folders = new Map<string, GitFileStatus>()
-  for (const [path, status] of Object.entries(files)) {
+  const priority = { A: 3, U: 3, M: 2, R: 2, D: 1 }
+  for (const [path, fileStatus] of Object.entries(files)) {
+    const status =
+      fileStatus === "U" ? "A" : fileStatus === "R" ? "M" : fileStatus
     const parts = path.split("/").slice(0, -1)
     for (let length = 1; length <= parts.length; length++) {
       const folder = parts.slice(0, length).join("/")
       const previous = folders.get(folder)
-      folders.set(folder, previous && previous !== status ? "M" : status)
+      folders.set(
+        folder,
+        previous && priority[previous] >= priority[status] ? previous : status
+      )
     }
   }
   return Object.fromEntries(folders)

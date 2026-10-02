@@ -1,3 +1,4 @@
+import { FileMenu } from "@/features/file-tree/components/FileMenu"
 import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import { useScrollEdgeMask } from "@/hooks/use-scroll-edge-mask"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -10,7 +11,7 @@ import {
 import {
   FileTree,
   type FileMark,
-} from "@/features/knowledge/components/FileTree"
+} from "@/features/file-tree/components/FileTree"
 import type { Workspace } from "@/lib/desktop/contracts.generated"
 import { capturedFileStatuses } from "@/lib/git/file-status"
 import { fileDecision, reviewedTreePaths } from "../helpers/review.helpers"
@@ -21,10 +22,12 @@ export function ReviewFiles({
   selectedId,
   visible,
   onSelect,
+  onError,
 }: {
   workspace: Workspace
   selectedId: string | null
   visible: boolean
+  onError: (message: string) => void
   onSelect: (fileId: string) => void
 }) {
   const [filter, setFilter] = useState("")
@@ -88,6 +91,14 @@ export function ReviewFiles({
           marks={marks}
           reviewedPaths={reviewedTreePaths(workspace)}
           statuses={capturedFileStatuses(snapshot.changes)}
+          renderRow={(row, target) => (
+            <FileMenu
+              row={row}
+              repositoryId={snapshot.repositoryId}
+              path={target.path}
+              onError={onError}
+            />
+          )}
           alwaysExpanded
           onSelect={(path) => {
             const file = review.files.find((item) => item.path === path)

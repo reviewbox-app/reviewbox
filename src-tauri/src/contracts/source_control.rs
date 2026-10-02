@@ -91,3 +91,11 @@ pub struct GitOperation {
     pub commits: Vec<GitCommitSummary>,
     pub error: Option<String>,
 }
+
+/// Exact file state selected by the user before a batch Git operation.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalFileSelection {
+    pub path: String,
+    pub version: String,
+}

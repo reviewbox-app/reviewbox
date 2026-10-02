@@ -79,7 +79,7 @@ try {
   await ui.until(`!!document.querySelector('[title="src/answer.ts"]')`)
   await ui.click('[title="src/answer.ts"]')
   await ui.until(
-    `!!document.querySelector('[aria-label="Code diff"] .monaco-diff-editor')`
+    `!!document.querySelector('[aria-label="Code diff"] .block-diff-main')`
   )
   assert.equal(
     await ui.execute(
@@ -108,13 +108,13 @@ try {
   await ui.click('[aria-label="Unstaged files"] button[aria-expanded="false"]')
   await ui.click('[aria-label="Unstaged files"] [title="src/answer.ts"]')
   await ui.until(
-    `document.querySelector('.monaco-diff-editor .modified')?.textContent.includes('43')`,
+    `document.querySelector('.block-diff-main')?.textContent.includes('43')`,
     "initial file rendered"
   )
   assert(!(await ui.text()).includes("Validate file"))
   assert(!(await ui.text()).includes("Contents"))
   await ui.execute(
-    `window.__localEditor=document.querySelector('.monaco-diff-editor .modified > .monaco-editor');return true`
+    `window.__localEditor=document.querySelector('.block-diff-main > .monaco-editor');return true`
   )
   await f.write("src/answer.ts", "export const answer = 43;\n// live update\n")
   await ui.until(
@@ -122,12 +122,12 @@ try {
   )
   assert(
     await ui.execute(
-      `return window.__localEditor===document.querySelector('.monaco-diff-editor .modified > .monaco-editor')`
+      `return window.__localEditor===document.querySelector('.block-diff-main > .monaco-editor')`
     ),
     "An external edit keeps the mounted editor"
   )
   await ui.execute(
-    `document.querySelector('.monaco-diff-editor .modified textarea').focus();return true`
+    `document.querySelector('.block-diff-main textarea').focus();return true`
   )
   await ui.keys("\uE015")
   await ui.has("Ln 2,")
@@ -189,7 +189,7 @@ try {
   )
   await ui.click('[aria-label="Unstaged files"] [title="src/answer.ts"]')
   await ui.until(
-    `document.querySelector('.monaco-diff-editor .modified')?.textContent.includes('43')`
+    `document.querySelector('.block-diff-main')?.textContent.includes('43')`
   )
   await ui.screenshot("local-changes-dark")
   await ui.named("Staged", '[role="tab"]')
@@ -278,11 +278,15 @@ try {
   await ui.request(ui.route("/window"), { handle: "main" })
   await ui.resize(1040, 800)
   await ui.screenshot("overview-light-narrow")
-  // Code Explain stays a full-width reader with independent glossary and tours.
+  // Code Explain is a file browser with Markdown/source previews.
   await ui.named("Code Explain", '[role="tab"]')
   await ui.element('[aria-label="Filter files"]')
   await ui.fill('[aria-label="Filter files"]', "README.md")
   await ui.named("README.md", '[aria-label="Snapshot files"] button', false)
+  await ui.until(
+    "!!document.querySelector('[aria-label=\"Markdown file\"] h1')"
+  )
+  await ui.named("Markdown preview")
   await ui.until("!!document.querySelector('.monaco-editor')")
   assert(
     !/Explain with Rev|In plain language|Add a section|Go to definition|Explanation outdated/.test(
@@ -295,17 +299,9 @@ try {
   assert(reader.editor >= reader.main - 4, "Code uses the full reader width")
   await f.write("README.md", "# Changed project\nNew context.\n")
   await ui.until(
-    "document.querySelector('.monaco-editor')?.textContent.replace(/\\s/g, ' ').includes('Changed project')",
+    "document.querySelector('[aria-label=\"Markdown file\"] h1')?.textContent === 'Changed project'",
     "live source refresh"
   )
-  await ui.named("Glossary", '[role="tab"]')
-  await ui.fill("#term-name", "Commit")
-  await ui.fill('[aria-label="Definition"]', "A recorded change")
-  await ui.named("Save meaning")
-  await ui.has("A recorded change")
-  await ui.named("Tours", '[role="tab"]')
-  await ui.has("CodeTour")
-  await ui.named("Files", '[role="tab"]')
   await ui.element('[aria-label="Filter files"]')
   await ui.screenshot("code-explain-without-review")
   const calls = (await readFile(models, "utf8"))

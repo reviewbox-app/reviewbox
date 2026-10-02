@@ -3,6 +3,7 @@ import {
   availableLayer,
   fullyStagedPaths,
   localFileStatuses,
+  localFileGroups,
 } from "./local-files"
 import type { LocalFile } from "@/lib/desktop/contracts.generated"
 const file = (
@@ -54,4 +55,26 @@ describe("live Git file presentation", () => {
       ])
     ).toEqual({ a: "A", b: "R", c: "U" })
   })
+})
+
+test("a partially staged file appears in both groups with each layer's status", () => {
+  const partial = file("src/partial.ts", "A", "D")
+  const conflict = file("conflict.ts", "U", "U", true)
+  const groups = localFileGroups([
+    partial,
+    file("new.ts", null, "U"),
+    file("ready.ts", "M", null),
+    conflict,
+  ])
+  expect(groups.unstaged.map((file) => file.path)).toEqual([
+    "src/partial.ts",
+    "new.ts",
+    "conflict.ts",
+  ])
+  expect(groups.staged.map((file) => file.path)).toEqual([
+    "src/partial.ts",
+    "ready.ts",
+  ])
+  expect(localFileStatuses(groups.unstaged, "unstaged")[partial.path]).toBe("D")
+  expect(localFileStatuses(groups.staged, "staged")[partial.path]).toBe("A")
 })

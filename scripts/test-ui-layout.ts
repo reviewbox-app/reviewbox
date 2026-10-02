@@ -44,16 +44,6 @@ try {
   await ui.named("Code", '[role="tab"]')
   await ui.named("Code Explain", '[role="tab"]')
   await check("understand")
-  await ui.named("Glossary", '[role="tab"]')
-  await check("glossary")
-  await ui.named("Tours", '[role="tab"]')
-  await ui.fill(
-    '[aria-label="New tour title"]',
-    "ExtremelyLongUnbrokenTourTitleThatMustWrapWithinTheInspectorWithoutScrolling"
-  )
-  await ui.named("Create tour")
-  await ui.has("0 steps · 0 read")
-  await check("tours")
   await ui.keys("\uE03D", "k")
   await ui.fill('[role="combobox"]', "Settings")
   await ui.named("Settings", '[role="option"]', false)

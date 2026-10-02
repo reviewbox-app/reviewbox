@@ -364,7 +364,7 @@ fn reading_local_git_includes_shared_metadata_but_never_creates_a_review() {
 }
 
 #[test]
-fn code_explain_generates_and_saves_from_private_sources_without_a_review() {
+fn code_explain_reads_private_sources_and_glossary_save_preserves_documents() {
     let (dir, root, storage, repo) = fixture(true);
     let storage = storage.scoped(Some(&repo.id));
     let mut snapshot = crate::snapshots::prepare_capture(
@@ -382,78 +382,60 @@ fn code_explain_generates_and_saves_from_private_sources_without_a_review() {
     snapshot.id = format!("source-{}", id());
     storage.store_context(&snapshot).unwrap();
     assert!(storage.list::<Review>("review").unwrap().is_empty());
-    assert!(!storage.shared_snapshot_exists(&snapshot.id).unwrap());
-    let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/agents");
-    let request = AgentRequest {
+    let mut knowledge = crate::knowledge::load(&storage, &repo.id).unwrap();
+    knowledge.documents.push(ExplanationDocument {
         id: id(),
-        context_id: Some(snapshot.id.clone()),
-        review_id: String::new(),
-        provider: "codex".into(),
-        action: "file".into(),
-        request: "Explain this file".into(),
-        paths: vec!["a.txt".into()],
-    };
-    let mut run = crate::agents::prepare(&storage, &resources, &request).unwrap();
-    assert!(run.prompt.text.contains(&snapshot.id));
-    assert!(run.review_id.is_empty());
-    run.status = "completed".into();
-    run.output=r#"{"kind":"explanation","path":"a.txt","sections":[{"id":"one","title":"Value","body":"The captured value stays unchanged.","startLine":1,"endLine":2}]}"#.into();
-    storage.insert("agent_run", &run.id, &run).unwrap();
-    let proposal = crate::proposals::code_explain::parse(&storage, &run).unwrap();
-    let mut reopened = snapshot.clone();
-    reopened.id = format!("source-{}", id());
-    storage.store_context(&reopened).unwrap();
-    storage.release_context(&snapshot.id).unwrap();
-    assert!(
-        storage.source_context(&snapshot.id).is_ok(),
-        "A pending proposal keeps its sources"
-    );
-    assert_eq!(
-        crate::knowledge::context::history(&storage, &reopened.id)
+        repository_id: repo.id.clone(),
+        snapshot_id: snapshot.id.clone(),
+        path: "a.txt".into(),
+        fingerprint: snapshot
+            .files
+            .iter()
+            .find(|f| f.path == "a.txt")
             .unwrap()
-            .len(),
-        1
-    );
+            .content
+            .hash
+            .clone(),
+        language: knowledge.language.clone(),
+        sections: vec![ExplanationSection {
+            id: id(),
+            title: "Existing explanation".into(),
+            body: "Saved before removal.".into(),
+            start_line: 1,
+            end_line: 2,
+        }],
+        occurrences: vec![],
+        created_at: now(),
+    });
+    let mut knowledge = crate::knowledge::save(&storage, knowledge).unwrap();
+    let documents = serde_json::to_value(&knowledge.documents).unwrap();
+    knowledge.terms.push(GlossaryTerm {
+        id: id(),
+        term: "Value".into(),
+        aliases: vec![],
+        senses: vec![Sense {
+            id: id(),
+            description: "A stored value.".into(),
+        }],
+        archived: false,
+    });
+    let knowledge = crate::knowledge::save(&storage, knowledge).unwrap();
     assert_eq!(
-        crate::knowledge::context::proposals(&storage, &reopened.id).unwrap()[0].id,
-        proposal.id
+        serde_json::to_value(&knowledge.documents).unwrap(),
+        documents
     );
-    let mut foreign = run.clone();
-    foreign.id = id();
-    foreign.repository_id = Some("another-repository".into());
-    storage.insert("agent_run", &foreign.id, &foreign).unwrap();
-    assert_eq!(
-        crate::knowledge::context::history(&storage, &reopened.id)
-            .unwrap()
-            .len(),
-        1
-    );
-    fs::write(root.join("a.txt"), "new source\n").unwrap();
-    let saved = crate::proposals::answer(
-        &storage,
-        &proposal.id,
-        proposal.revision,
-        proposal.content.clone(),
-        true,
-    )
-    .unwrap();
-    assert_eq!(saved.status, "accepted");
-    let knowledge = crate::knowledge::load(&storage, &repo.id).unwrap();
-    assert_eq!(knowledge.documents.len(), 1);
-    assert_eq!(knowledge.documents[0].snapshot_id, snapshot.id);
-    assert!(storage.shared_snapshot_exists(&snapshot.id).unwrap());
+    assert_eq!(knowledge.terms.len(), 1);
     storage.release_context(&snapshot.id).unwrap();
-    storage.release_context(&reopened.id).unwrap();
     fs::remove_dir_all(dir.path().join("private/blobs")).unwrap();
     fs::create_dir(dir.path().join("private/blobs")).unwrap();
-    let snapshot: Snapshot = storage.get("snapshot", &snapshot.id).unwrap();
-    let source = snapshot.files.iter().find(|f| f.path == "a.txt").unwrap();
+    let saved: Snapshot = storage.get("snapshot", &snapshot.id).unwrap();
+    let source = saved.files.iter().find(|f| f.path == "a.txt").unwrap();
     assert_eq!(
         storage.read_blob(&source.content.hash).unwrap(),
         b"before\r\nlast"
     );
+    fs::write(root.join("a.txt"), "new source\n").unwrap();
     assert!(crate::snapshots::repository_changed(&storage, &snapshot).unwrap());
-    assert!(storage.list::<Review>("review").unwrap().is_empty());
 }
 
 #[test]
@@ -752,4 +734,91 @@ fn index_writing_hooks_cannot_silently_add_unstaged_files_to_a_batch() {
         fs::read_to_string(root.join("extra.txt")).unwrap(),
         "unstaged\n"
     );
+}
+
+fn selections(root: &Path, paths: &[&str]) -> Vec<LocalFileSelection> {
+    working::files(root)
+        .unwrap()
+        .into_iter()
+        .filter(|f| paths.contains(&f.path.as_str()))
+        .map(|f| LocalFileSelection {
+            path: f.path,
+            version: f.version,
+        })
+        .collect()
+}
+
+#[test]
+fn batch_stage_and_unstage_preserve_worktree_and_reject_stale_selection() {
+    let (_dir, root, _, _) = fixture(true);
+    fs::write(root.join("a.txt"), "new a").unwrap();
+    fs::write(root.join("b.txt"), "new b").unwrap();
+    let selected = selections(&root, &["a.txt", "b.txt"]);
+    fs::write(root.join("b.txt"), "newer b").unwrap();
+    let cancel = AtomicBool::new(false);
+    assert!(working::stage_files(&root, &selected, true, &cancel).is_err());
+    assert!(run(&root, &["diff", "--cached", "--name-only"]).is_empty());
+    working::stage_files(
+        &root,
+        &selections(&root, &["a.txt", "b.txt"]),
+        true,
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(
+        run(&root, &["diff", "--cached", "--name-only"]),
+        "a.txt\nb.txt"
+    );
+    working::stage_files(
+        &root,
+        &selections(&root, &["a.txt", "b.txt"]),
+        false,
+        &cancel,
+    )
+    .unwrap();
+    assert!(run(&root, &["diff", "--cached", "--name-only"]).is_empty());
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "newer b");
+}
+
+#[test]
+fn discard_only_unstaged_preserves_index_and_unselected_files() {
+    let (_dir, root, _, _) = fixture(true);
+    fs::write(root.join("a.txt"), b"staged\0binary").unwrap();
+    stage(&root, "a.txt");
+    fs::write(root.join("a.txt"), b"unstaged\0binary").unwrap();
+    fs::write(root.join("b.txt"), "leave me").unwrap();
+    fs::write(root.join("new.txt"), "delete me").unwrap();
+    let index = fs::read(git::git_path(&root, "index").unwrap()).unwrap();
+    working::discard_files(
+        &root,
+        &selections(&root, &["a.txt", "new.txt"]),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"staged\0binary");
+    assert!(!root.join("new.txt").exists());
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "leave me");
+    assert_eq!(
+        fs::read(git::git_path(&root, "index").unwrap()).unwrap(),
+        index
+    );
+}
+
+#[test]
+fn discard_rejects_stale_batch_before_restoring_any_file() {
+    let (_dir, root, _, _) = fixture(true);
+    fs::remove_file(root.join("a.txt")).unwrap();
+    fs::write(root.join("b.txt"), "modified").unwrap();
+    let selected = selections(&root, &["a.txt", "b.txt"]);
+    fs::write(root.join("b.txt"), "newer").unwrap();
+    assert!(working::discard_files(&root, &selected, &AtomicBool::new(false)).is_err());
+    assert!(!root.join("a.txt").exists());
+    working::discard_files(
+        &root,
+        &selections(&root, &["a.txt"]),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"before\r\nlast");
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "newer");
 }

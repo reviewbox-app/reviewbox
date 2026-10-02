@@ -186,14 +186,64 @@ pub(super) fn stage(
     stage: bool,
     cancel: &AtomicBool,
 ) -> AppResult<()> {
-    let mut lock = git::IndexLock::acquire(root)?;
-    let file = current(root, path, expected)?;
-    if file.conflicted {
+    stage_files(
+        root,
+        &[LocalFileSelection {
+            path: path.into(),
+            version: expected.into(),
+        }],
+        stage,
+        cancel,
+    )
+}
+
+pub(super) fn selected_files(
+    root: &Path,
+    selections: &[LocalFileSelection],
+) -> AppResult<Vec<LocalFile>> {
+    if selections.is_empty() {
         return Err(AppError::new(
-            "git_conflict",
-            "Resolve this conflict in another tool first.",
+            "selection",
+            "Select at least one changed file.",
         ));
     }
+    let current = files(root)?;
+    let mut seen = std::collections::BTreeSet::new();
+    selections
+        .iter()
+        .map(|selection| {
+            snapshots::safe_path(&selection.path)?;
+            if !seen.insert(&selection.path) {
+                return Err(AppError::new("selection", "Duplicate selected file."));
+            }
+            let file = current
+                .iter()
+                .find(|file| file.path == selection.path && file.version == selection.version)
+                .ok_or_else(|| {
+                    AppError::new(
+                        "git_changed",
+                        "Selected files changed. Reload and check them before trying again.",
+                    )
+                })?;
+            if file.conflicted {
+                return Err(AppError::new(
+                    "git_conflict",
+                    "Resolve conflicts in another tool first.",
+                ));
+            }
+            Ok(file.clone())
+        })
+        .collect()
+}
+
+pub(super) fn stage_files(
+    root: &Path,
+    selections: &[LocalFileSelection],
+    stage: bool,
+    cancel: &AtomicBool,
+) -> AppResult<()> {
+    let mut lock = git::IndexLock::acquire(root)?;
+    let selected = selected_files(root, selections)?;
     let original = fs::read(git::git_path(root, "index")?).ok();
     let temporary = git::TempIndex::new(root)?;
     if let Some(bytes) = &original {
@@ -207,27 +257,38 @@ pub(super) fn stage(
             .open(&temporary.0)?
             .set_times(fs::FileTimes::new().set_modified(modified))?;
     }
-    // A staged rename has already removed the old index path. Staging further
-    // edits to its destination must not add an unrelated recreation at that path.
-    let previous = file
-        .previous_path
-        .as_ref()
-        .filter(|_| !stage || file.staged_status.is_none());
-    let paths: Vec<_> = previous
-        .into_iter()
-        .chain(std::iter::once(&file.path))
-        .map(String::as_str)
-        .collect();
-    let mut args = if stage {
-        vec!["add", "-A", "--"]
+    // Preserve unrelated recreations of an already staged rename's old path.
+    let mut paths = std::collections::BTreeSet::new();
+    for file in &selected {
+        if let Some(previous) = file
+            .previous_path
+            .as_ref()
+            .filter(|_| !stage || file.staged_status.is_none())
+        {
+            paths.insert(previous.as_str());
+        }
+        paths.insert(file.path.as_str());
+    }
+    let mut input = Vec::new();
+    for path in paths {
+        input.extend_from_slice(path.as_bytes());
+        input.push(0);
+    }
+    let args = if stage {
+        vec!["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]
     } else if git::head(root).is_some() {
-        vec!["reset", "-q", "HEAD", "--"]
+        vec![
+            "reset",
+            "-q",
+            "HEAD",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ]
     } else {
-        vec!["update-index", "--force-remove", "--"]
+        vec!["update-index", "--force-remove", "-z", "--stdin"]
     };
-    args.extend(paths);
-    git::run(root, &args, Some(&temporary.0), &[], cancel)?;
-    current(root, path, expected)?;
+    git::run(root, &args, Some(&temporary.0), &input, cancel)?;
+    selected_files(root, selections)?;
     if fs::read(git::git_path(root, "index")?).ok() != original {
         return Err(AppError::new(
             "git_changed",
@@ -297,4 +358,90 @@ pub(super) fn diff(
         })
     };
     Ok(LocalFileDiff{version:expected.into(),change:Change{id:fingerprint(format!("{path}/{layer}").as_bytes()),path:path.into(),previous_path:(layer=="staged").then_some(file.previous_path).flatten(),layer:layer.into(),before:reference(&before),after:reference(&after),binary,passages:vec![],untracked:file.unstaged_status.as_deref()==Some("U")},content:FileContent{before:before.map(|(_,b)|String::from_utf8_lossy(&b).into_owned()),after:after.map(|(_,b)|String::from_utf8_lossy(&b).into_owned()),unavailable_reason:binary.then(||"Binary, submodule or oversized content cannot be displayed as text. File-level staging remains available.".into())}})
+}
+
+/// Discard only worktree changes. Never reset the index or include sibling paths.
+pub(super) fn discard_files(
+    root: &Path,
+    selections: &[LocalFileSelection],
+    cancel: &AtomicBool,
+) -> AppResult<()> {
+    let _lock = git::IndexLock::acquire(root)?;
+    let selected = selected_files(root, selections)?;
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+    for file in &selected {
+        if file.unstaged_status.is_none() {
+            return Err(AppError::new(
+                "selection",
+                "Only unstaged changes can be reverted.",
+            ));
+        }
+        let location = root.join(&file.path);
+        let mut ancestor = location.parent().unwrap_or(root);
+        while !ancestor.exists() {
+            ancestor = ancestor
+                .parent()
+                .ok_or_else(|| AppError::new("unsafe_path", "Missing repository parent."))?;
+        }
+        if !ancestor.canonicalize()?.starts_with(root.canonicalize()?) {
+            return Err(AppError::new(
+                "unsafe_path",
+                "A parent symlink leaves the repository.",
+            ));
+        }
+        let before = blob(root, "INDEX", &file.path)?;
+        if before.as_ref().is_some_and(|(mode, _)| mode == "160000")
+            || worktree(root, &file.path)?
+                .as_ref()
+                .is_some_and(|(mode, _)| mode == "160000")
+        {
+            return Err(AppError::new(
+                "unsupported_file",
+                "Revert submodule changes in another tool.",
+            ));
+        }
+        if before.is_some() {
+            tracked.push(file.path.as_str());
+        } else {
+            untracked.push(file);
+        }
+    }
+    selected_files(root, selections)?;
+    if !tracked.is_empty() {
+        // Restore may refresh index stat data even for --worktree. Use a private
+        // copy so the user's index remains byte-for-byte unchanged and locked.
+        let temporary = git::TempIndex::new(root)?;
+        fs::copy(git::git_path(root, "index")?, &temporary.0)?;
+        let mut input = Vec::new();
+        for path in tracked {
+            input.extend_from_slice(path.as_bytes());
+            input.push(0);
+        }
+        git::run(
+            root,
+            &[
+                "restore",
+                "--worktree",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ],
+            Some(&temporary.0),
+            &input,
+            cancel,
+        )?;
+    }
+    // Git restore cannot restore an untracked file. Remove only selected leaves,
+    // never a directory tree; ignored and unselected siblings are untouched.
+    for file in untracked {
+        current(root, &file.path, &file.version)?;
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(AppError::new(
+                "cancelled",
+                "Revert stopped; reload to see completed changes.",
+            ));
+        }
+        fs::remove_file(root.join(&file.path))?;
+    }
+    Ok(())
 }

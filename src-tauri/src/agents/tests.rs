@@ -1,4 +1,5 @@
 use super::*;
+use crate::reviews;
 use serde_json::json;
 use std::{fs, path::Path, process::Command};
 
@@ -19,7 +20,7 @@ fn fixture() -> (
     Storage,
     Repository,
     Workspace,
-    AgentRequest,
+    exploration::ExplorationRequest,
 ) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("project");
@@ -54,122 +55,29 @@ fn fixture() -> (
         },
     )
     .unwrap();
-    let request = AgentRequest {
-        context_id: None,
+    let request = exploration::ExplorationRequest {
         id: id(),
-        review_id: workspace.review.id.clone(),
-        provider: "codex".into(),
-        action: "file".into(),
-        request: String::new(),
         paths: vec![],
     };
     (directory, storage, repository, workspace, request)
 }
-fn resources() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/agents")
-}
-fn manifest(run: &AgentRun) -> PathBuf {
-    let line = run
-        .prompt
-        .text
-        .lines()
-        .find(|line| line.trim().starts_with("\"reviewManifest\":"))
-        .unwrap();
-    serde_json::from_str(line.split_once(':').unwrap().1.trim().trim_end_matches(',')).unwrap()
-}
-
-#[test]
-fn removed_actions_cannot_start_through_the_generic_agent_entrypoint() {
-    let (_directory, storage, _repository, _workspace, mut request) = fixture();
-    for action in ["ask", "evidence", "topics", "answer"] {
-        request.action = action.into();
-        assert_eq!(
-            prepare(&storage, &resources(), &request).unwrap_err().code,
-            "unknown_action"
-        );
-    }
-    assert!(storage.list::<AgentRun>("agent_run").unwrap().is_empty());
-}
-
-#[test]
-fn continuity_survives_restart_is_scoped_and_keeps_full_exchanges_off_the_prompt() {
-    let (directory, storage, repository, workspace, request) = fixture();
-    for index in 0..4 {
-        let mut run = prepare(&storage, &resources(), &request).unwrap();
-        run.id = format!("previous-{index}");
-        run.request = Some(format!("Question {index} with {{{{literal}}}}"));
-        run.status = if index == 3 { "cancelled" } else { "completed" }.into();
-        run.created_at = format!("2026-09-27T10:00:0{index}Z");
-        run.output = format!("Answer {index}: {} FULL_ANSWER_END", "é".repeat(5000));
-        run.snapshot_id = "previous-snapshot".into();
-        let mut value = serde_json::to_value(&run).unwrap();
-        if index == 0 {
-            value.as_object_mut().unwrap().remove("request");
-        }
-        storage.insert("agent_run", &run.id, &value).unwrap();
-    }
-    for (run_id, review_id, status) in [
-        ("unrelated", "other-review", "completed"),
-        ("in-progress", request.review_id.as_str(), "running"),
-    ] {
-        let mut run = prepare(&storage, &resources(), &request).unwrap();
-        run.id = run_id.into();
-        run.review_id = review_id.into();
-        run.status = status.into();
-        run.output = "DO_NOT_INJECT".into();
-        storage.insert("agent_run", &run.id, &run).unwrap();
-    }
-    let run = prepare(&storage, &resources(), &request).unwrap();
-    assert!(run.prompt.text.contains("Question 3 with {{literal}}"));
-    assert!(run.prompt.text.contains("previous-snapshot"));
-    assert!(run.prompt.text.contains("cancelled"));
-    assert!(!run.prompt.text.contains("FULL_ANSWER_END"));
-    assert!(!run.prompt.text.contains("DO_NOT_INJECT"));
-    assert!(run.prompt.text.len() < 24_000);
-    let path = manifest(&run);
-    let exploration =
-        exploration::materialize(&storage, &workspace, &request, &AtomicBool::new(false)).unwrap();
-    let context_root = path.parent().unwrap();
-    let index: Value =
-        serde_json::from_slice(&fs::read(context_root.join("conversation.json")).unwrap()).unwrap();
-    let exchanges = index["exchanges"].as_array().unwrap();
-    assert_eq!(exchanges.len(), 4);
-    let legacy: Value =
-        serde_json::from_slice(&fs::read(exchanges[0]["exchangeFile"].as_str().unwrap()).unwrap())
-            .unwrap();
-    assert!(legacy["request"].is_null());
-    assert!(legacy["legacyPrompt"].is_string());
-    let latest: Value =
-        serde_json::from_slice(&fs::read(exchanges[3]["exchangeFile"].as_str().unwrap()).unwrap())
-            .unwrap();
-    assert!(latest.get("legacyPrompt").is_none());
-    assert!(
-        latest["answer"]
-            .as_str()
-            .unwrap()
-            .ends_with("FULL_ANSWER_END")
-    );
-    let review: Review =
-        serde_json::from_slice(&fs::read(context_root.join("review.json")).unwrap()).unwrap();
-    assert_eq!(review.id, workspace.review.id);
-    drop(exploration);
-    assert!(!context_root.exists());
-    drop(storage);
-    let reopened = Storage::open(directory.path().join("data")).unwrap();
-    crate::repositories::open(&reopened, &repository.path).unwrap();
-    let resumed = prepare(&reopened, &resources(), &request).unwrap();
-    assert!(resumed.prompt.text.contains("Question 3 with {{literal}}"));
-    let legacy: AgentRun = reopened.get("agent_run", "previous-0").unwrap();
-    assert_eq!(legacy.request, None);
+fn manifest(
+    storage: &Storage,
+    workspace: &Workspace,
+    request: &exploration::ExplorationRequest,
+) -> PathBuf {
+    let descriptor = exploration::descriptor(storage, workspace, request).unwrap();
+    let value: Value = serde_json::from_str(&descriptor).unwrap();
+    value["reviewManifest"].as_str().unwrap().into()
 }
 
 #[test]
 fn large_review_is_discovered_on_demand_without_inline_source_or_a_repository_copy() {
     let (_directory, storage, repository, workspace, request) = fixture();
-    let run = prepare(&storage, &resources(), &request).unwrap();
-    assert!(run.prompt.text.len() < 16000);
-    assert!(!run.prompt.text.contains("SENTINEL_NOT_IN_PROMPT"));
-    let path = manifest(&run);
+    let descriptor = exploration::descriptor(&storage, &workspace, &request).unwrap();
+    assert!(descriptor.len() < 16000);
+    assert!(!descriptor.contains("SENTINEL_NOT_IN_PROMPT"));
+    let path = manifest(&storage, &workspace, &request);
     assert!(!path.exists(), "preview does not materialize files");
     let index_before = fs::read(Path::new(&repository.path).join(".git/index")).unwrap();
     let exploration =
@@ -222,8 +130,7 @@ fn missing_frozen_evidence_is_explicit_and_cancelled_preparation_cleans_up() {
         "corrupt cached content",
     )
     .unwrap();
-    let run = prepare(&storage, &resources(), &request).unwrap();
-    let path = manifest(&run);
+    let path = manifest(&storage, &workspace, &request);
     let exploration =
         exploration::materialize(&storage, &workspace, &request, &AtomicBool::new(false)).unwrap();
     let manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -305,74 +212,45 @@ for line in sys.stdin:
 
 #[cfg(unix)]
 #[test]
-fn claude_disables_session_persistence_and_receives_reconstructed_context() {
+fn claude_disables_session_persistence() {
     use std::os::unix::fs::PermissionsExt;
-    let (directory, storage, _repository, _workspace, mut request) = fixture();
-    request.provider = "claude".into();
-    request.action = "file".into();
-    request.request = "Initial Claude question".into();
-    let executable = directory.path().join("claude");
+    let dir = tempfile::tempdir().unwrap();
+    let executable = dir.path().join("claude");
     fs::write(
         &executable,
         r#"#!/usr/bin/env python3
-import sys,json,pathlib
-args=sys.argv[1:]
-assert '--no-session-persistence' in args
-assert '-p' in args
-assert '--resume' not in args and '--continue' not in args
-prompt=sys.stdin.read()
-pointer=next(line for line in prompt.splitlines() if line.strip().startswith('"reviewManifest":'))
-root=pathlib.Path(json.loads(pointer.split(':',1)[1].strip().rstrip(','))).parent
-history=json.loads((root/'conversation.json').read_text())
-if 'Follow up Claude' in prompt:
-    assert '--model' not in args and '--effort' not in args
-    assert len(history['exchanges'])==1
-    previous=json.loads(pathlib.Path(history['exchanges'][0]['exchangeFile']).read_text())
-    assert previous['request']=='Initial Claude question'
-    assert previous['answer']=='Remembered answer'
-else:
-    assert history['exchanges']==[]
-    assert args[args.index('--model')+1]=='claude-sonnet-5'
-    assert args[args.index('--effort')+1]=='medium'
-print(json.dumps({'type':'result','is_error':False,'result':'Remembered answer'}),flush=True)
+import sys,json
+assert '--no-session-persistence' in sys.argv
+assert '--resume' not in sys.argv and '--continue' not in sys.argv
+assert sys.stdin.read() == 'Captured source context'
+print(json.dumps({'type':'result','is_error':False,'result':'Complete answer'}),flush=True)
 "#,
     )
     .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-    let mut configuration = settings(&storage).unwrap();
-    configuration
-        .providers
-        .iter_mut()
-        .find(|p| p.provider == "claude")
+    let config = ProviderConfig {
+        provider: "claude".into(),
+        executable: executable.to_string_lossy().into(),
+        model: None,
+    };
+    let mut stream = Stream {
+        id: id(),
+        sequence: 0,
+        channel: Channel::new(|_| Ok(())),
+        text: String::new(),
+        preview: None,
+    };
+    tokio::runtime::Runtime::new()
         .unwrap()
-        .executable = executable.to_string_lossy().into_owned();
-    configure(&storage, configuration).unwrap();
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    for question in ["Initial Claude question", "Follow up Claude"] {
-        if question == "Follow up Claude" {
-            let mut configuration = settings(&storage).unwrap();
-            configuration
-                .providers
-                .iter_mut()
-                .find(|p| p.provider == "claude")
-                .unwrap()
-                .model = None;
-            configure(&storage, configuration).unwrap();
-        }
-        request.id = id();
-        request.request = question.into();
-        let result = runtime
-            .block_on(run(
-                storage.clone(),
-                resources(),
-                request.clone(),
-                Arc::new(AtomicBool::new(false)),
-                Channel::new(|_| Ok(())),
-            ))
-            .unwrap();
-        assert_eq!(result.status, "completed");
-    }
-    assert_eq!(storage.list::<AgentRun>("agent_run").unwrap().len(), 2);
+        .block_on(claude::run(
+            dir.path(),
+            "Captured source context",
+            &config,
+            Arc::new(AtomicBool::new(false)),
+            &mut stream,
+        ))
+        .unwrap();
+    assert_eq!(stream.text, "Complete answer");
 }
 
 #[cfg(unix)]
@@ -380,8 +258,7 @@ print(json.dumps({'type':'result','is_error':False,'result':'Remembered answer'}
 fn codex_runs_in_project_with_tools_and_keeps_only_the_final_answer() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
     use std::os::unix::fs::PermissionsExt;
-    let (directory, storage, repository, _workspace, mut request) = fixture();
-    request.request = "Initial question".into();
+    let (directory, storage, repository, workspace, request) = fixture();
     let executable = directory.path().join("codex-fixture");
     fs::write(&executable, r##"#!/usr/bin/env python3
 import sys, json, pathlib
@@ -421,14 +298,6 @@ for line in sys.stdin:
         text = value['params']['input'][0]['text']
         pointer = next(line for line in text.splitlines() if line.strip().startswith('"reviewManifest":'))
         manifest = json.loads(pathlib.Path(json.loads(pointer.split(':',1)[1].strip().rstrip(','))).read_text())
-        history = json.loads((pathlib.Path(json.loads(pointer.split(':',1)[1].strip().rstrip(','))).parent / 'conversation.json').read_text())
-        if 'Follow up on our earlier answer' in text:
-            assert len(history['exchanges']) == 1
-            previous = json.loads(pathlib.Path(history['exchanges'][0]['exchangeFile']).read_text())
-            assert previous['request'] == 'Initial question'
-            assert json.loads(previous['answer']) == {'kind':'topics','topics':[]}
-        else:
-            assert history['exchanges'] == []
         change = next(item for item in manifest['changes'] if item['layer'] == 'staged')
         metadata = json.loads(pathlib.Path(change['metadata']).read_text())
         assert pathlib.Path(metadata['after']['path']).read_text().endswith('2;\n')
@@ -464,21 +333,17 @@ for line in sys.stdin:
             .push(serde_json::from_str(&text).unwrap());
         Ok(())
     });
-    let path = manifest(&prepare(&storage, &resources(), &request).unwrap());
-    let result = run(
-        storage.clone(),
-        resources(),
-        request.clone(),
-        Arc::new(AtomicBool::new(false)),
-        channel,
-    )
-    .await
-    .unwrap();
+    let path = manifest(&storage, &workspace, &request);
+    let exploration = exploration::materialize(&storage, &workspace, &request, &AtomicBool::new(false)).unwrap();
+    let mut stream = Stream {id:id(),sequence:0,channel,text:String::new(),preview:None};
+    let config = settings(&storage).unwrap().providers.into_iter().find(|p| p.provider == "codex").unwrap();
+    codex::run(&exploration.project, &exploration::descriptor(&storage, &workspace, &request).unwrap(), &config, Arc::new(AtomicBool::new(false)), &mut stream).await.unwrap();
+    drop(exploration);
     assert_eq!(
-        serde_json::from_str::<Value>(&result.output).unwrap(),
+        serde_json::from_str::<Value>(&stream.text).unwrap(),
         json!({"kind":"topics","topics":[]})
     );
-    assert!(!result.output.contains("inspect"));
+    assert!(!stream.text.contains("inspect"));
     assert!(
         events
             .lock()
@@ -486,18 +351,7 @@ for line in sys.stdin:
             .iter()
             .any(|e| e.text.contains("compacting"))
     );
-    assert!(events.lock().unwrap().iter().any(|e| e.kind == "completed"));
     assert!(!path.exists());
     assert!(!Path::new(&repository.path).join("protocol").exists());
-    request.id = id();
-    request.action = "file".into();
-    request.request = "Follow up on our earlier answer".into();
-    let mut configuration = settings(&storage).unwrap();
-    configuration.providers.iter_mut().find(|p| p.provider == "codex").unwrap().model = None;
-    configure(&storage, configuration).unwrap();
-    let second = run(storage.clone(), resources(), request, Arc::new(AtomicBool::new(false)), Channel::new(|_| Ok(()))).await.unwrap();
-    assert_eq!(second.status, "completed");
-    assert_eq!(storage.list::<AgentRun>("agent_run").unwrap().len(), 2);
-    assert!(second.prompt.text.contains("Initial question"));
     });
 }

@@ -43,71 +43,20 @@ try {
     await ui.until("!!document.querySelector('[aria-label=\"Code diff\"]')")
   })
   await scenario(
-    "glossary creation, aliases and multiple meanings",
+    "Code Explain reads files without tours or glossary",
     async () => {
       await ui.named("Code Explain", '[role="tab"]')
-      await ui.named("Glossary", '[role="tab"]')
-      await ui.fill("#term-name", "answer")
-      await ui.fill('[aria-label="Aliases"]', "response")
-      await ui.fill('[aria-label="Definition"]', "The exported response value")
-      await ui.named("Save meaning")
-      await ui.has("The exported response value")
-      await ui.named("Add another meaning")
-      await ui.fill('[aria-label="Definition"]', "A reply to a question")
-      await ui.named("Save meaning")
-      await ui.has("A reply to a question")
+      await ui.fill('[aria-label="Filter files"]', "answer.ts")
+      await ui.named("answer.ts", '[aria-label="Snapshot files"] button', false)
+      await ui.until("!!document.querySelector('.monaco-editor')")
+      assert(
+        await ui.execute(
+          `return ![...document.querySelectorAll('[role=tab]')].some(e=>['Files','Tours','Glossary'].includes(e.textContent.trim()))`
+        )
+      )
+      await ui.screenshot("03-understand")
     }
   )
-  await scenario("read files and archive a glossary term", async () => {
-    await ui.named("Files", '[role="tab"]')
-    await ui.fill('[aria-label="Filter files"]', "answer.ts")
-    await ui.named("answer.ts", '[aria-label="Snapshot files"] button', false)
-    await ui.until("!!document.querySelector('.monaco-editor')")
-    assert(
-      !/In plain language|Explain with Rev|Add a section/.test(await ui.text())
-    )
-    await ui.screenshot("03-understand")
-    await ui.named("Glossary", '[role="tab"]')
-    await ui.named("Archive")
-    await ui.until(
-      "!document.querySelector('main')?.textContent.includes('The exported response value')"
-    )
-  })
-  await scenario("create a current-code tour and edit its anchor", async () => {
-    await ui.named("Tours", '[role="tab"]')
-    await ui.fill('[aria-label="New tour title"]', "Getting started")
-    await ui.named("Create tour")
-    await ui.has("Getting started")
-    await ui.named("Add step")
-    await ui.fill('[aria-label="Step title"]', "Read the export")
-    await ui.fill('[aria-label="Relative source path"]', "src/answer.ts")
-    await ui.fill(
-      '[aria-label="Step explanation"]',
-      "Start at the answer export"
-    )
-    await ui.named("Save current anchor")
-    await ui.has("Read the export")
-    await ui.screenshot("04-tour")
-    await ui.named("Mark read")
-    await ui.named("Mark unread")
-    await ui.named("Edit")
-    await ui.fill('[aria-label="Step title"]', "Read the answer export")
-    await ui.named("Save current anchor")
-    await ui.has("Read the answer export")
-    await f.write(
-      "src/answer.ts",
-      "// moved export\nexport const answer = 43;\n"
-    )
-    await ui.has("exact passage moved to line 2")
-    await f.write("src/answer.ts", "export const answer = 99;\n")
-    await ui.has("This anchor changed")
-    await ui.named("Repair anchor")
-    await ui.fill('[aria-label="First line"]', "1")
-    await ui.fill('[aria-label="Last line"]', "1")
-    await ui.named("Save current anchor")
-    await ui.has("Anchor still valid")
-    await f.write("src/answer.ts", "export const answer = 43;\n")
-  })
   await scenario(
     "external changes flag the frozen snapshot and refresh explicitly",
     async () => {

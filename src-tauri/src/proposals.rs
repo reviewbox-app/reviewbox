@@ -1,5 +1,3 @@
-#[path = "proposals/knowledge.rs"]
-pub(crate) mod code_explain;
 use crate::{contracts::*, knowledge, reviews, storage::Storage};
 
 fn validate(storage: &Storage, workspace: &Workspace, content: &ProposalContent) -> AppResult<()> {
@@ -248,9 +246,6 @@ pub fn answer(
     content: ProposalContent,
     accepted: bool,
 ) -> AppResult<Proposal> {
-    if proposal_id.starts_with("knowledge-") {
-        return code_explain::answer(storage, proposal_id, revision, content, accepted);
-    }
     let mut proposal: Proposal = storage.get("proposal", proposal_id)?;
     if proposal.revision != revision || proposal.status != "pending" {
         return Err(AppError::new(

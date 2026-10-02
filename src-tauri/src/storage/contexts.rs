@@ -113,13 +113,6 @@ impl Storage {
         }
         Ok(())
     }
-    pub(crate) fn release_finished_context(&self, id: &str) -> AppResult<()> {
-        let pending = self.pending_snapshot_gc.lock().unwrap().contains(id);
-        if pending {
-            self.release_context(id)?;
-        }
-        Ok(())
-    }
     pub(crate) fn shared_snapshot_exists(&self, id: &str) -> AppResult<bool> {
         self.sync_projects(false)?;
         Ok(self

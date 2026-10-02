@@ -14,7 +14,12 @@ import {
 } from "@/components/ui/input-group"
 import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { FileTree } from "@/features/knowledge/components/FileTree"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { FileTree } from "@/features/file-tree/components/FileTree"
 import { ReviewCodePane } from "@/features/review/composites/ReviewCodePane"
 import { reviewReaderLayout } from "@/features/review/reader.config"
 import { useScrollEdgeMask } from "@/hooks/use-scroll-edge-mask"
@@ -25,6 +30,8 @@ import type {
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
 import {
+  Add01Icon,
+  MinusSignIcon,
   ArrowLeft01Icon,
   GitCommitIcon,
   Search01Icon,
@@ -36,9 +43,12 @@ import {
   availableLayer,
   fullyStagedPaths,
   localFileStatuses,
+  localFileGroups,
 } from "../helpers/local-files"
 import type { SourceControlSession } from "../hooks/useSourceControl"
 import { sourceControlCommands as commands } from "../services/source-control.commands"
+import { LocalFileMenu } from "./LocalFileMenu"
+import { selectFiles } from "../helpers/file-selection"
 import { CommitDialog } from "./CommitDialog"
 
 const initialPosition: ReadingPosition = {
@@ -62,6 +72,11 @@ export function LocalChanges({
   onFinished: () => void
 }) {
   const { state, busy, mutate, reload, setError } = git
+  const [selection, setSelection] = useState({
+    layer: "",
+    paths: new Set<string>(),
+    anchor: "",
+  })
   const [chosen, setChosen] = useState("")
   const [preferredLayer, setPreferredLayer] = useState("unstaged")
   const [filter, setFilter] = useState("")
@@ -105,6 +120,7 @@ export function LocalChanges({
     loaded && loaded.change.path === path && loaded.change.layer === layer
       ? loaded
       : null
+  const groups = localFileGroups(state.files)
   const staged = state.files.filter((file) => file.stagedStatus).length
   return (
     <div
@@ -139,24 +155,141 @@ export function LocalChanges({
           ref={scrollMask}
           className="min-h-0 flex-1 overflow-auto"
         >
-          <FileTree
-            paths={state.files
-              .map((file) => file.path)
-              .filter((path) =>
-                path.toLowerCase().includes(filter.toLowerCase())
-              )}
-            selected={path ?? ""}
-            marks={{}}
-            statuses={localFileStatuses(state.files)}
-            reviewedPaths={fullyStagedPaths(state.files)}
-            dimmedLabel="Staged."
-            dimmedFolderLabel="All files staged."
-            alwaysExpanded
-            onSelect={(value) => {
-              setChosen(value)
-              setPosition(initialPosition)
-            }}
-          />
+          <div className="space-y-6 pb-3">
+            {(["unstaged", "staged"] as const).map((group) => {
+              const files = groups[group]
+              const visible = files.filter((file) =>
+                file.path.toLowerCase().includes(filter.toLowerCase())
+              )
+              return (
+                <section
+                  key={group}
+                  aria-label={
+                    group === "unstaged" ? "Unstaged files" : "Staged files"
+                  }
+                >
+                  <div className="mb-2 flex items-center justify-between px-2">
+                    <h2 className="text-xs font-medium opacity-50">
+                      {group === "unstaged" ? "Unstaged" : "Staged"} ·{" "}
+                      {visible.length}
+                    </h2>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-4 rounded-sm p-0"
+                            aria-label={
+                              group === "unstaged"
+                                ? "Stage all changes"
+                                : "Unstage all changes"
+                            }
+                            disabled={
+                              busy ||
+                              !files.length ||
+                              files.some((file) => file.conflicted)
+                            }
+                            onClick={() =>
+                              void mutate(() =>
+                                commands.stageFiles(
+                                  state.repositoryId,
+                                  files.map(({ path, version }) => ({
+                                    path,
+                                    version,
+                                  })),
+                                  group === "unstaged"
+                                )
+                              )
+                            }
+                          />
+                        }
+                      >
+                        <HugeiconsIcon
+                          icon={
+                            group === "unstaged" ? Add01Icon : MinusSignIcon
+                          }
+                          className="size-3"
+                        />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {group === "unstaged"
+                          ? "Stage all changes"
+                          : "Unstage all changes"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <FileTree
+                    paths={visible.map((file) => file.path)}
+                    selected={layer === group ? (path ?? "") : ""}
+                    selectedPaths={
+                      selection.layer === group ? selection.paths : undefined
+                    }
+                    renderRow={(row, target) => (
+                      <LocalFileMenu
+                        row={row}
+                        path={target.path}
+                        folder={target.folder}
+                        staged={group === "staged"}
+                        git={git}
+                        targets={() =>
+                          files.filter((file) =>
+                            target.folder
+                              ? file.path.startsWith(target.path + "/")
+                              : selection.layer === group &&
+                                  selection.paths.has(target.path)
+                                ? selection.paths.has(file.path)
+                                : file.path === target.path
+                          )
+                        }
+                        select={(selected) =>
+                          setSelection({
+                            layer: group,
+                            paths: new Set(selected.map((file) => file.path)),
+                            anchor: target.path,
+                          })
+                        }
+                      />
+                    )}
+                    marks={{}}
+                    statuses={localFileStatuses(files, group)}
+                    reviewedPaths={
+                      group === "staged"
+                        ? fullyStagedPaths(
+                            files.map((file) => ({
+                              ...file,
+                              unstagedStatus: null,
+                            }))
+                          )
+                        : undefined
+                    }
+                    dimmedLabel="Staged."
+                    defaultExpanded
+                    onSelect={(value, event, visiblePaths) => {
+                      const sameLayer = selection.layer === group
+                      setSelection({
+                        layer: group,
+                        paths: selectFiles(
+                          sameLayer ? selection.paths : new Set(),
+                          sameLayer ? selection.anchor : "",
+                          value,
+                          visiblePaths,
+                          event
+                        ),
+                        anchor:
+                          event.shiftKey && sameLayer
+                            ? selection.anchor
+                            : value,
+                      })
+                      setChosen(value)
+                      setPreferredLayer(group)
+                      setPosition(initialPosition)
+                    }}
+                  />
+                </section>
+              )
+            })}
+          </div>
         </nav>
       </aside>
       <main className="relative flex min-w-0 flex-1 flex-col rounded-panel border bg-card">
