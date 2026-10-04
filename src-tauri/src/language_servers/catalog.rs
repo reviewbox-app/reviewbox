@@ -8,13 +8,14 @@ use std::{
 
 use super::install::LanguageServerInstaller;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ServerSpec {
     pub id: String,
     pub name: String,
     pub description: String,
     pub languages: Vec<String>,
+    #[serde(default)]
     pub extensions: Vec<String>,
     pub version: String,
     pub method: String,
@@ -35,7 +36,7 @@ pub(crate) struct ServerSpec {
     pub overrides: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Artifact {
     pub id: String,
@@ -71,9 +72,17 @@ pub(crate) struct InstalledServer {
 }
 
 pub(crate) fn specs() -> AppResult<Vec<ServerSpec>> {
-    Ok(serde_json::from_str(include_str!(
-        "../../../resources/languages/catalogue.json"
-    ))?)
+    let mut specs: Vec<ServerSpec> =
+        serde_json::from_str(include_str!("../../../resources/languages/catalogue.json"))?;
+    let languages = super::packs::builtin_languages();
+    for spec in &mut specs {
+        spec.extensions = languages
+            .iter()
+            .filter(|l| spec.languages.contains(&l.lsp_id))
+            .flat_map(|l| l.extensions.clone())
+            .collect();
+    }
+    Ok(specs)
 }
 pub(crate) fn spec(id: &str) -> AppResult<ServerSpec> {
     specs()?
@@ -161,26 +170,26 @@ pub(crate) fn save_installed(
     Ok(())
 }
 
-fn matches_path(server: &ServerSpec, path: &str) -> bool {
-    let name = Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    server
-        .extensions
-        .iter()
-        .any(|extension| name == *extension || name.ends_with(&format!(".{extension}")))
-        || (server.id == "docker" && (name == "dockerfile" || name.starts_with("dockerfile.")))
-        || (server.id == "ruby" && matches!(name.as_str(), "gemfile" | "rakefile"))
+fn matches_path(server: &ServerSpec, path: &str, languages: &[LanguageDefinition]) -> bool {
+    super::packs::detect_language(languages, path, None)
+        .is_some_and(|l| server.languages.contains(&l.lsp_id))
 }
 
 pub(crate) fn resolve(storage: &Storage, path: &str) -> AppResult<LanguageServerConfig> {
+    resolve_language(storage, path, None, None)
+}
+pub(crate) fn resolve_language(
+    storage: &Storage,
+    path: &str,
+    language: Option<&str>,
+    selected: Option<&str>,
+) -> AppResult<LanguageServerConfig> {
     let extension = Path::new(path)
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("");
-    if let Ok(settings) = storage.get::<LanguageServerSettings>("language_servers", "settings")
+    if selected.is_none()
+        && let Ok(settings) = storage.get::<LanguageServerSettings>("language_servers", "settings")
         && let Some(server) = settings.servers.into_iter().find(|server| {
             server
                 .extensions
@@ -190,8 +199,17 @@ pub(crate) fn resolve(storage: &Storage, path: &str) -> AppResult<LanguageServer
     {
         return Ok(server);
     }
-    let candidates = specs()?;
-    let candidate = candidates.iter().find(|server| matches_path(server, path));
+    let candidates = super::packs::specs(storage)?;
+    let languages = super::packs::registry(storage)?.languages;
+    let candidate = candidates.iter().find(|server| {
+        if let Some(id) = selected {
+            server.id == id
+        } else if let Some(id) = language {
+            server.languages.iter().any(|l| l == id)
+        } else {
+            matches_path(server, path, &languages)
+        }
+    });
     if let Some(reason) = candidate.and_then(|server| server.setup_required.as_ref()) {
         return Err(AppError::new("language_server_setup_required", reason));
     }
@@ -204,7 +222,9 @@ pub(crate) fn resolve(storage: &Storage, path: &str) -> AppResult<LanguageServer
                 format!("{} is disabled in Settings > Languages.", server.name),
             ));
         }
-        if !Path::new(&receipt.executable).is_file() {
+        if !Path::new(&receipt.executable).is_file()
+            && receipt.executable.contains(std::path::MAIN_SEPARATOR)
+        {
             return Err(AppError::new(
                 "language_server_missing",
                 format!("Reinstall {} in Settings > Languages.", server.name),
@@ -223,10 +243,17 @@ pub(crate) fn resolve(storage: &Storage, path: &str) -> AppResult<LanguageServer
         .servers
         .into_iter()
         .find(|server| {
-            server
-                .extensions
-                .iter()
-                .any(|value| value.eq_ignore_ascii_case(extension))
+            selected.is_none_or(|id| id == server.id)
+                && (server
+                    .extensions
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(extension))
+                    || language.is_some_and(|id| {
+                        super::packs::builtin_languages().iter().any(|l| {
+                            l.lsp_id == id
+                                && l.extensions.iter().any(|e| server.extensions.contains(e))
+                        })
+                    }))
         })
         .ok_or_else(|| {
             AppError::new(
@@ -252,9 +279,9 @@ pub(crate) fn catalogue(
     installer.recover(storage)?;
     let operations = installer.operations();
     let mut entries = Vec::new();
-    for server in specs()? {
+    for server in super::packs::specs(storage)? {
         let native = (server.method == "native")
-            .then(|| artifact(&server.id).ok())
+            .then(|| super::packs::artifact(storage, &server.id).ok())
             .flatten();
         let supported = server.setup_required.is_none()
             && match server.method.as_str() {
@@ -262,6 +289,7 @@ pub(crate) fn catalogue(
                 "go" => artifact("runtime-go").is_ok(),
                 "ruby" => artifact("runtime-ruby").is_ok(),
                 "swift" => std::env::consts::OS == "macos",
+                "external" => true,
                 _ => native.is_some(),
             };
         let receipt = installed(storage, &server.id)?;
@@ -292,6 +320,7 @@ pub(crate) fn catalogue(
         entries.push(LanguageServerCatalogueEntry {
             preview: matches!(server.id.as_str(), "kotlin" | "csharp"),
             capabilities: None,
+            live_capabilities: None,
             id: server.id,
             name: server.name,
             description: server.description,
@@ -329,10 +358,12 @@ pub fn get_language_server_catalogue(
     storage: tauri::State<'_, Storage>,
     installer: tauri::State<'_, LanguageServerInstaller>,
     sessions: tauri::State<'_, super::LanguageServers>,
+    live: tauri::State<'_, super::live::LiveLanguages>,
 ) -> AppResult<LanguageServerCatalogue> {
     let mut result = catalogue(&storage, &installer)?;
     for entry in &mut result.entries {
         entry.capabilities = sessions.capabilities(&entry.id);
+        entry.live_capabilities = live.capabilities(&entry.id);
     }
     Ok(result)
 }
@@ -342,12 +373,15 @@ pub fn install_language_server(
     storage: tauri::State<'_, Storage>,
     installer: tauri::State<'_, LanguageServerInstaller>,
     sessions: tauri::State<'_, super::LanguageServers>,
+    live: tauri::State<'_, super::live::LiveLanguages>,
 ) -> AppResult<LanguageServerInstallOperation> {
-    installer.start(
+    let operation = installer.start(
         storage.inner().clone(),
-        server_id,
+        server_id.clone(),
         Some(sessions.inner().clone()),
-    )
+    )?;
+    live.stop_server(&server_id);
+    Ok(operation)
 }
 #[tauri::command]
 pub fn cancel_language_server_install(
@@ -363,8 +397,10 @@ pub async fn set_language_server_enabled(
     storage: tauri::State<'_, Storage>,
     installer: tauri::State<'_, LanguageServerInstaller>,
     sessions: tauri::State<'_, super::LanguageServers>,
+    live: tauri::State<'_, super::live::LiveLanguages>,
 ) -> AppResult<()> {
     sessions.stop_server(&server_id);
+    live.stop_server(&server_id);
     installer.set_enabled(&storage, &server_id, enabled)
 }
 #[tauri::command]
@@ -373,8 +409,10 @@ pub async fn uninstall_language_server(
     storage: tauri::State<'_, Storage>,
     installer: tauri::State<'_, LanguageServerInstaller>,
     sessions: tauri::State<'_, super::LanguageServers>,
+    live: tauri::State<'_, super::live::LiveLanguages>,
 ) -> AppResult<()> {
     sessions.stop_server(&server_id);
+    live.stop_server(&server_id);
     let installer = installer.inner().clone();
     let storage = storage.inner().clone();
     tauri::async_runtime::spawn_blocking(move || installer.uninstall(&storage, &server_id))
@@ -446,9 +484,18 @@ mod tests {
     }
     #[test]
     fn catalogue_matches_special_names_and_rejects_unknown_ids() {
-        assert!(matches_path(&spec("docker").unwrap(), "ops/Dockerfile.dev"));
-        assert!(matches_path(&spec("ruby").unwrap(), "Gemfile"));
-        assert!(matches_path(&spec("typescript").unwrap(), "src/Widget.TSX"));
+        let languages = super::super::packs::builtin_languages();
+        assert!(matches_path(
+            &spec("docker").unwrap(),
+            "ops/Dockerfile.dev",
+            &languages
+        ));
+        assert!(matches_path(&spec("ruby").unwrap(), "Gemfile", &languages));
+        assert!(matches_path(
+            &spec("typescript").unwrap(),
+            "src/Widget.TSX",
+            &languages
+        ));
         assert!(spec("../../source").is_err());
         assert!(!valid_id("../state"));
     }

@@ -21,6 +21,44 @@ struct Operation {
     publication: Mutex<()>,
     process: Mutex<Option<Arc<ProcessGroup>>>,
     sessions: Option<super::LanguageServers>,
+    artifacts: BTreeMap<String, Artifact>,
+    recipe_fingerprint: String,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct InstallationRecipe {
+    pub server: ServerSpec,
+    pub artifacts: BTreeMap<String, Artifact>,
+}
+pub(crate) fn recipe(
+    storage: &Storage,
+    server: ServerSpec,
+    custom_artifact: Option<Artifact>,
+) -> AppResult<InstallationRecipe> {
+    let mut artifacts = BTreeMap::new();
+    let root = match server.method.as_str() {
+        "npm" => Some("runtime-node"),
+        "go" => Some("runtime-go"),
+        "ruby" => Some("runtime-ruby"),
+        "swift" | "external" => None,
+        _ => Some(server.id.as_str()),
+    };
+    if let Some(id) = root {
+        let mut pending = vec![
+            custom_artifact
+                .map(Ok)
+                .unwrap_or_else(|| super::packs::artifact(storage, id))?,
+        ];
+        while let Some(artifact) = pending.pop() {
+            if artifacts.contains_key(&artifact.id) {
+                continue;
+            }
+            for dependency in &artifact.dependencies {
+                pending.push(super::packs::artifact(storage, dependency)?);
+            }
+            artifacts.insert(artifact.id.clone(), artifact);
+        }
+    }
+    Ok(InstallationRecipe { server, artifacts })
 }
 #[derive(Default)]
 struct Owner {
@@ -97,6 +135,8 @@ impl LanguageServerInstaller {
                             publication: Mutex::new(()),
                             process: Mutex::new(None),
                             sessions: None,
+                            artifacts: BTreeMap::new(),
+                            recipe_fingerprint: String::new(),
                         }));
                 }
                 fs::remove_file(entry.path())?;
@@ -150,33 +190,33 @@ impl LanguageServerInstaller {
         id: String,
         sessions: Option<super::LanguageServers>,
     ) -> AppResult<LanguageServerInstallOperation> {
+        let server = super::packs::spec(&storage, &id)?;
+        if let Some(reason) = &server.setup_required {
+            return Err(AppError::new("language_server_setup_required", reason));
+        }
+        let recipe = recipe(&storage, server, None)?;
+        self.start_recipe(storage, recipe, sessions)
+    }
+    pub(crate) fn start_recipe(
+        &self,
+        storage: Storage,
+        recipe: InstallationRecipe,
+        sessions: Option<super::LanguageServers>,
+    ) -> AppResult<LanguageServerInstallOperation> {
         let _mutation = self
             .owner
             .mutation_gate
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         self.recover(&storage)?;
-        let server = catalog::spec(&id)?;
+        let recipe_fingerprint = fingerprint(&serde_json::to_vec(&recipe)?);
+        let server = recipe.server;
+        let id = server.id.clone();
         if let Some(reason) = &server.setup_required {
             return Err(AppError::new("language_server_setup_required", reason));
         }
         if self.owner.stopping.load(Ordering::SeqCst) {
             return Err(AppError::new("shutting_down", "ReviewBox is closing."));
-        }
-        match server.method.as_str() {
-            "npm" => {
-                catalog::artifact("runtime-node")?;
-            }
-            "go" => {
-                catalog::artifact("runtime-go")?;
-            }
-            "ruby" => {
-                catalog::artifact("runtime-ruby")?;
-            }
-            "swift" => {}
-            _ => {
-                catalog::artifact(&id)?;
-            }
         }
         let mut records = self
             .owner
@@ -186,6 +226,12 @@ impl LanguageServerInstaller {
         for record in records.iter() {
             let value = record.progress.lock().unwrap_or_else(|e| e.into_inner());
             if value.server_id == id && matches!(value.status.as_str(), "queued" | "installing") {
+                if record.recipe_fingerprint != recipe_fingerprint {
+                    return Err(AppError::new(
+                        "installation_busy",
+                        "Another version is being installed. Wait for it to finish before applying this plan.",
+                    ));
+                }
                 return Ok(value.clone());
             }
         }
@@ -204,6 +250,8 @@ impl LanguageServerInstaller {
             publication: Mutex::new(()),
             process: Mutex::new(None),
             sessions,
+            artifacts: recipe.artifacts,
+            recipe_fingerprint,
         });
         let pending = catalog::root(&storage).join("pending");
         fs::create_dir_all(&pending)?;
@@ -304,7 +352,7 @@ impl LanguageServerInstaller {
             .mutation_gate
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        catalog::spec(id)?;
+        super::packs::spec(storage, id)?;
         self.check_idle(id)?;
         let mut receipt = catalog::installed(storage, id)?
             .ok_or_else(|| AppError::new("not_installed", "Install this server first."))?;
@@ -319,7 +367,7 @@ impl LanguageServerInstaller {
             .mutation_gate
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        catalog::spec(id)?;
+        super::packs::spec(storage, id)?;
         self.check_idle(id)?;
         let receipt = catalog::installed(storage, id)?
             .ok_or_else(|| AppError::new("not_installed", "This server is not installed."))?;
@@ -862,7 +910,12 @@ fn install_artifact(
             "Circular language runtime dependency.",
         ));
     }
-    let artifact = catalog::artifact(id)?;
+    let artifact = operation.artifacts.get(id).ok_or_else(|| {
+        AppError::new(
+            "invalid_recipe",
+            "An artifact is missing from the approved installation recipe.",
+        )
+    })?;
     if !catalog::valid_id(&artifact.version) {
         return Err(AppError::new(
             "invalid_catalogue",
@@ -922,8 +975,8 @@ fn install_artifact(
     let payload = staging.path().join("payload");
     fs::create_dir_all(&payload)?;
     let archive = staging.path().join("archive");
-    download(&artifact, &archive, operation)?;
-    unpack(&artifact, &archive, &payload, operation)?;
+    download(artifact, &archive, operation)?;
+    unpack(artifact, &archive, &payload, operation)?;
     let final_path = parent.join(format!("{}-{}", artifact.version, uuid::Uuid::new_v4()));
     let mut environment = private_environment(storage, &dependencies);
     if id == "kotlin" {
@@ -983,7 +1036,7 @@ fn install_artifact(
         .map(|argument| expand(argument, &final_path, &dependencies))
         .collect::<AppResult<Vec<_>>>()?;
     let receipt = InstalledServer {
-        version: artifact.version,
+        version: artifact.version.clone(),
         enabled: true,
         executable,
         arguments,
@@ -1049,6 +1102,18 @@ fn publish(
 
 fn install_server(storage: &Storage, server: &ServerSpec, operation: &Operation) -> AppResult<()> {
     match server.method.as_str() {
+        "external" => {
+            let receipt = InstalledServer {
+                version: server.version.clone(),
+                enabled: true,
+                executable: server.package.clone(),
+                arguments: server.arguments.clone(),
+                environment: BTreeMap::new(),
+                directory: None,
+            };
+            check(operation)?;
+            catalog::save_installed(storage, &server.id, &receipt)
+        }
         "npm" => install_npm(storage, server, operation),
         "go" => install_go(storage, server, operation),
         "ruby" => install_ruby(storage, server, operation),
@@ -1125,12 +1190,7 @@ fn install_npm(storage: &Storage, server: &ServerSpec, operation: &Operation) ->
     }
     let locks: BTreeMap<String, Value> =
         serde_json::from_str(include_str!("../../../resources/languages/npm-locks.json"))?;
-    let lock = locks.get(&server.id).ok_or_else(|| {
-        AppError::new(
-            "missing_lock",
-            "This server has no bundled dependency lock.",
-        )
-    })?;
+    let lock = locks.get(&server.id);
     let parent = catalog::root(storage).join("managed").join(&server.id);
     fs::create_dir_all(&parent)?;
     let staging = tempfile::Builder::new()
@@ -1138,7 +1198,9 @@ fn install_npm(storage: &Storage, server: &ServerSpec, operation: &Operation) ->
         .tempdir_in(&parent)?;
     let payload = staging.path().join("payload");
     fs::create_dir_all(&payload)?;
-    fs::write(payload.join("package-lock.json"), serde_json::to_vec(lock)?)?;
+    if let Some(lock) = lock {
+        fs::write(payload.join("package-lock.json"), serde_json::to_vec(lock)?)?;
+    }
     fs::write(
         payload.join("package.json"),
         serde_json::to_vec(
@@ -1158,7 +1220,11 @@ fn install_npm(storage: &Storage, server: &ServerSpec, operation: &Operation) ->
     )?;
     let arguments = vec![
         npm.to_string_lossy().into(),
-        "ci".into(),
+        if lock.is_some() {
+            "ci".into()
+        } else {
+            "install".into()
+        },
         "--ignore-scripts".into(),
         "--omit=dev".into(),
         "--no-audit".into(),
@@ -1432,6 +1498,8 @@ mod tests {
             publication: Mutex::new(()),
             process: Mutex::new(None),
             sessions: None,
+            artifacts: BTreeMap::new(),
+            recipe_fingerprint: String::new(),
         })
     }
     #[test]

@@ -1,0 +1,12 @@
+{
+  "typescript": ["tsconfig.json", "jsconfig.json", "package.json"],
+  "python": ["pyproject.toml", "pyrightconfig.json", "setup.cfg"],
+  "rust": ["Cargo.toml"],
+  "clangd": ["compile_commands.json", ".clangd", "CMakeLists.txt"],
+  "go": ["go.work", "go.mod"],
+  "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+  "ruby": ["Gemfile"],
+  "php": ["composer.json"],
+  "csharp": ["global.json"],
+  "kotlin": ["build.gradle.kts", "settings.gradle.kts"]
+}
