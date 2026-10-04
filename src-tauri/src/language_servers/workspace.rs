@@ -127,8 +127,10 @@ pub(super) fn source_tree(
 
 pub(super) struct Workspace {
     pub source: SourceTree,
-    _directory: tempfile::TempDir,
-    _snapshot: crate::storage::SnapshotLease,
+    _directory: Option<tempfile::TempDir>,
+    _snapshot: Option<crate::storage::SnapshotLease>,
+    pub live: bool,
+    languages: Vec<LanguageDefinition>,
     root: PathBuf,
 }
 
@@ -164,17 +166,40 @@ impl Workspace {
         let root = directory.path().canonicalize()?;
         Ok(Self {
             source,
-            _directory: directory,
-            _snapshot: snapshot,
+            _directory: Some(directory),
+            _snapshot: Some(snapshot),
+            live: false,
+            languages: super::packs::registry(storage)?.languages,
             root,
         })
     }
     pub fn root(&self) -> &Path {
         &self.root
     }
+    pub fn live(root: PathBuf) -> Self {
+        Self {
+            source: SourceTree {
+                snapshot_id: String::new(),
+                key: String::new(),
+                files: BTreeMap::new(),
+                change_id: None,
+                side: None,
+            },
+            _directory: None,
+            _snapshot: None,
+            live: true,
+            languages: vec![],
+            root,
+        }
+    }
     pub fn uri(&self, path: &str) -> AppResult<url::Url> {
         url::Url::from_file_path(self.root().join(path))
             .map_err(|_| AppError::new("invalid_location", "Invalid captured source URI."))
+    }
+    pub fn language_id(&self, path: &str, text: &str) -> String {
+        super::packs::detect_language(&self.languages, path, text.lines().next())
+            .map(|l| l.lsp_id.clone())
+            .unwrap_or_else(|| "plaintext".into())
     }
     pub fn text(&self, path: &str) -> AppResult<String> {
         crate::snapshots::safe_path(path)?;

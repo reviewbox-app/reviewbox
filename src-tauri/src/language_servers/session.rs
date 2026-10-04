@@ -17,6 +17,7 @@ use tokio::{
 
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+type NotificationHandler = Arc<dyn Fn(&Value) + Send + Sync>;
 struct Pending {
     label: String,
     reply: oneshot::Sender<AppResult<Value>>,
@@ -31,11 +32,13 @@ pub(super) struct Session {
     stopped: AtomicBool,
     next_id: AtomicU64,
     pending: Mutex<BTreeMap<u64, Pending>>,
-    capabilities: Mutex<Value>,
+    pub(super) capabilities: Mutex<Value>,
     opened: AsyncMutex<HashSet<String>>,
     capability_updates: tokio::sync::Notify,
     notifier: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     rust_source: Option<String>,
+    pub(super) notifications: Mutex<Option<NotificationHandler>>,
+    pub(super) live_settings: Mutex<Value>,
 }
 
 impl Session {
@@ -94,6 +97,8 @@ impl Session {
             capability_updates: tokio::sync::Notify::new(),
             notifier: Mutex::new(None),
             rust_source,
+            notifications: Mutex::new(None),
+            live_settings: Mutex::new(json!({})),
         });
         let weak = Arc::downgrade(&session);
         tauri::async_runtime::spawn(async move {
@@ -122,6 +127,13 @@ impl Session {
         }
     }
     fn configuration(&self) -> Value {
+        if self.workspace.live {
+            return self
+                .live_settings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+        }
         let mut configuration = read_only_configuration();
         if let Some(source) = &self.rust_source {
             configuration["cargo"]["sysrootSrc"] = json!(source);
@@ -132,6 +144,14 @@ impl Session {
     pub fn stop(&self) {
         if self.stopped.swap(true, Ordering::AcqRel) {
             return;
+        }
+        if let Some(notify) = self
+            .notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            notify(&json!({"method":"reviewbox/stopped","params":{}}));
         }
         self.group.terminate();
         let pending = std::mem::take(
@@ -158,7 +178,7 @@ impl Session {
             });
         }
     }
-    async fn send(&self, message: &Value) -> AppResult<()> {
+    pub(super) async fn send(&self, message: &Value) -> AppResult<()> {
         if self.is_stopped() {
             return Err(AppError::new(
                 "language_session_closed",
@@ -190,7 +210,7 @@ impl Session {
                 )
             })?
     }
-    async fn rpc(
+    pub(super) async fn rpc(
         &self,
         label: &str,
         method: &str,
@@ -279,6 +299,9 @@ impl Session {
         }
     }
     pub async fn initialize(&self) -> AppResult<()> {
+        if self.workspace.live {
+            return self.initialize_live().await;
+        }
         let root = url::Url::from_directory_path(self.workspace.root())
             .map_err(|_| AppError::new("invalid_location", "Invalid language workspace."))?;
         let mut options = self.configuration();
@@ -336,7 +359,7 @@ impl Session {
             .await?;
         self.send(&json!({"jsonrpc":"2.0","method":"workspace/didChangeConfiguration","params":{"settings":self.configuration()}})).await
     }
-    fn capability_data(&self) -> Value {
+    pub(super) fn capability_data(&self) -> Value {
         self.capabilities
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -374,7 +397,7 @@ impl Session {
         {
             let mut opened = self.opened.lock().await;
             if !opened.contains(&request.document.path) {
-                self.send(&json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"languageId":language_id(&request.document.path),"version":1,"text":text}}})).await?;
+                self.send(&json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"languageId":self.workspace.language_id(&request.document.path, &text),"version":1,"text":text}}})).await?;
                 opened.insert(request.document.path.clone());
             }
         }
@@ -598,6 +621,14 @@ async fn read_messages(weak: Weak<Session>, output: tokio::process::ChildStdout)
         }
         if let Some(method) = message["method"].as_str() {
             if message.get("id").is_none() {
+                if let Some(notify) = session
+                    .notifications
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                {
+                    notify(&message);
+                }
                 continue;
             }
             let response = match method {
@@ -873,31 +904,4 @@ pub(super) fn tokens(text: &str, result: &Value, legend: &Value) -> AppResult<La
         token_types,
         token_modifiers,
     })
-}
-fn language_id(path: &str) -> &str {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    if name.eq_ignore_ascii_case("dockerfile")
-        || name.to_ascii_lowercase().starts_with("dockerfile.")
-    {
-        return "dockerfile";
-    }
-    if matches!(name, "Gemfile" | "Rakefile") {
-        return "ruby";
-    }
-    match path.rsplit('.').next().unwrap_or("") {
-        "ts" | "mts" | "cts" => "typescript",
-        "tsx" => "typescriptreact",
-        "js" | "mjs" | "cjs" => "javascript",
-        "jsx" => "javascriptreact",
-        "rs" => "rust",
-        "py" | "pyi" => "python",
-        "cs" => "csharp",
-        "kt" | "kts" => "kotlin",
-        "rb" => "ruby",
-        "sh" | "bash" => "shellscript",
-        "yml" => "yaml",
-        "h" | "cc" | "cxx" | "hpp" => "cpp",
-        "jsonc" => "jsonc",
-        other => other,
-    }
 }
