@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-test("Code Explain restores cached selection and scroll while refreshing, and keeps it on errors", async ({
+test("Code Editor restores cached selection and scroll while refreshing, and keeps it on errors", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -56,13 +56,13 @@ test("Code Explain restores cached selection and scroll while refreshing, and ke
       (window as unknown as { cacheFixture: { reads: number } }).cacheFixture
         .reads
   )
-  await page.getByRole("button", { name: "Toggle Code Explain" }).click()
+  await page.getByRole("button", { name: "Toggle Code Editor" }).click()
   await page.evaluate(() => {
     ;(
       window as unknown as { cacheFixture: { delay: number } }
     ).cacheFixture.delay = 1500
   })
-  await page.getByRole("button", { name: "Toggle Code Explain" }).click()
+  await page.getByRole("button", { name: "Toggle Code Editor" }).click()
   await expect(page.getByText("Updating project files…")).toBeVisible()
   await expect(pane).toBeVisible()
   await expect(page.getByRole("textbox", { name: "Filter files" })).toHaveValue(

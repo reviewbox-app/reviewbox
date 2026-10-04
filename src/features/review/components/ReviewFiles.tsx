@@ -16,7 +16,7 @@ import type { Workspace } from "@/lib/desktop/contracts.generated"
 import { capturedFileStatuses } from "@/lib/git/file-status"
 import { fileDecision, reviewedTreePaths } from "../helpers/review.helpers"
 
-/** The review files as the same tree as Code Explain. */
+/** The review files as the same tree as Code Editor. */
 export function ReviewFiles({
   workspace,
   selectedId,

@@ -14,7 +14,7 @@ The app and headless commands share domain validation and the project writer.
    the topics, explanation or glossary contract under `resources/agents/contracts`.
 4. Run `reviewbox enrich --repo <path> --from request.json` to add that content.
    Use `propose` instead when the user wants to approve it first.
-5. Use `tour` for Code Explain onboarding paths. These are separate from the
+5. Use `tour` for historical project onboarding paths. These are separate from the
    guided review prepared by the native preparation manager.
 
 Do not fabricate anchors or human decisions. Reread context after a stale
@@ -24,7 +24,7 @@ validate files or steps, modify source files or manipulate Git.
 Review creation and enrichment stay in ignored `.reviewbox/.local/` drafts. Human
 completion publishes an immutable review by default unless kept local; later
 publications may archive older bundles as Git references. Agent commands cannot
-complete, publish, reopen or mutate completed reviews. Code Explain content remains
+complete, publish, reopen or mutate completed reviews. Historical knowledge content remains
 shared in `.reviewbox` and may be committed by the user. Keep
 secrets, absolute machine paths and private transcripts out of content. Direct
 file editing uses the version 4 JSON schemas and bounded indexed content packs;

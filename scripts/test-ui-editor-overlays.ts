@@ -96,7 +96,7 @@ try {
   await ui.named("View local changes")
   await ui.until("!!document.querySelector('[title=\"src/long.ts\"]')")
   await ui.click('[title="src/long.ts"]')
-  await ui.named("Code Explain", "[role=tab]")
+  await ui.named("Code Editor", "[role=tab]")
   await ui.named("Review", "[role=tab]")
   await ui.until(
     "!!document.querySelector('[aria-label=\"Code diff\"]')",

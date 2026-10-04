@@ -52,11 +52,24 @@ export class NativeUI {
       "native driver",
       30000
     )
-    this.session = (
-      await this.request<{ sessionId: string }>("/session", {
-        capabilities: { alwaysMatch: { browserName: "tauri" } },
-      })
-    ).sessionId
+    // The bundled app can expose /status before macOS creates its first window.
+    await this.wait(
+      async () => {
+        try {
+          this.session = (
+            await this.request<{ sessionId: string }>("/session", {
+              capabilities: { alwaysMatch: { browserName: "tauri" } },
+            })
+          ).sessionId
+          return true
+        } catch (error) {
+          if (String(error).includes('"error":"no such window"')) return false
+          throw error
+        }
+      },
+      "native window",
+      30000
+    )
     // The initial navigation can replace the WebDriver script bridge while it
     // is installing. Retry only this read, never a user action or mutation.
     await this.wait(

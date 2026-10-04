@@ -96,7 +96,7 @@ try {
     [],
     "main window controls must stay visible"
   )
-  await ui.named("Code Explain", '[role="tab"]')
+  await ui.named("Code Editor", '[role="tab"]')
   await ui.element('[aria-label="Filter files"]')
   await version("codex-cli 0.157.0")
   await ui.request(ui.route("/window"), { handle: "settings" })

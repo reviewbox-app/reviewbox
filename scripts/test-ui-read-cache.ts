@@ -22,11 +22,11 @@ try {
   await ui.named("Open")
   await ui.has("Read your changes")
   await ui.startManualReview()
-  await ui.named("Code Explain", "[role=tab]")
+  await ui.named("Code Editor", "[role=tab]")
   await ui.until(
-    `!!document.querySelector('nav[aria-label="Snapshot files"] [title="notes.TXT"]')`
+    `!!document.querySelector('nav[aria-label="Project files"] [title="notes.TXT"]')`
   )
-  await ui.click('nav[aria-label="Snapshot files"] [title="notes.TXT"]')
+  await ui.click('nav[aria-label="Project files"] [title="notes.TXT"]')
   await ui.has("Cache fixture")
   await ui.fill('input[aria-label="Filter files"]', "notes")
   await ui.execute(
@@ -36,7 +36,7 @@ try {
     `return document.querySelector('[aria-label="Markdown file"]').scrollTop`
   )
   await ui.named("Review", "[role=tab]")
-  await ui.named("Code Explain", "[role=tab]")
+  await ui.named("Code Editor", "[role=tab]")
   await ui.until(
     `document.querySelector('input[aria-label="Filter files"]')?.value==='notes'`
   )
@@ -45,7 +45,7 @@ try {
   )
   await f.write(
     "notes.TXT",
-    "# Updated outside ReviewBox\n\nNew captured content\n"
+    "# Updated outside ReviewBox\n\nNew live content\n"
   )
   await ui.has("Updated outside ReviewBox")
   assert(!(await ui.text()).includes("Snapshot content is unavailable"))

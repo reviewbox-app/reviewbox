@@ -42,7 +42,7 @@ try {
   await check("contents")
   await ui.keys("\uE00C")
   await ui.named("Code", '[role="tab"]')
-  await ui.named("Code Explain", '[role="tab"]')
+  await ui.named("Code Editor", '[role="tab"]')
   await check("understand")
   await ui.keys("\uE03D", "k")
   await ui.fill('[role="combobox"]', "Settings")

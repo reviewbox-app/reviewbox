@@ -278,11 +278,11 @@ try {
   await ui.request(ui.route("/window"), { handle: "main" })
   await ui.resize(1040, 800)
   await ui.screenshot("overview-light-narrow")
-  // Code Explain is a file browser with Markdown/source previews.
-  await ui.named("Code Explain", '[role="tab"]')
+  // Code Editor is a file browser with Markdown/source previews.
+  await ui.named("Code Editor", '[role="tab"]')
   await ui.element('[aria-label="Filter files"]')
   await ui.fill('[aria-label="Filter files"]', "README.md")
-  await ui.named("README.md", '[aria-label="Snapshot files"] button', false)
+  await ui.named("README.md", '[aria-label="Project files"] button', false)
   await ui.until(
     "!!document.querySelector('[aria-label=\"Markdown file\"] h1')"
   )
@@ -322,7 +322,7 @@ try {
     []
   )
   console.log(
-    "Native source control: staged versions, manual commit, Rev batches, publish, independent Code Explain passed."
+    "Native source control: staged versions, manual commit, Rev batches, publish, independent Code Editor passed."
   )
 } catch (error) {
   await ui.screenshot("failure").catch(() => {})

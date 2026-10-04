@@ -47,7 +47,7 @@ export function FileTreeWorkbench() {
       <output aria-label="Revealed path">{revealed}</output>
       {error && <p role="alert">{error}</p>}
       <div className="flex gap-4">
-        {["Review", "Code Explain", "Local changes"].map((name) => (
+        {["Review", "Code Editor", "Local changes"].map((name) => (
           <nav key={name} aria-label={name} className="w-72">
             <FileTree
               paths={paths.filter((path) => path.includes(filter))}

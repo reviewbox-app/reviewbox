@@ -8,7 +8,7 @@ test("shared tree appearance, opaque folders, filtered statuses and read-only me
   await page.goto("/dev/file-tree/")
   const review = page.getByRole("navigation", { name: "Review", exact: true })
   const explain = page.getByRole("navigation", {
-    name: "Code Explain",
+    name: "Code Editor",
     exact: true,
   })
   await expect(explain.locator("[data-folder]")).toHaveAttribute(
@@ -19,7 +19,7 @@ test("shared tree appearance, opaque folders, filtered statuses and read-only me
   for (const theme of ["Light", "Dark"]) {
     await page.getByRole("button", { name: theme, exact: true }).click()
     const values = []
-    for (const name of ["Review", "Code Explain", "Local changes"]) {
+    for (const name of ["Review", "Code Editor", "Local changes"]) {
       const tree = page.getByRole("navigation", { name, exact: true })
       await expect(tree.locator("[data-folder]")).toHaveCSS("opacity", "1")
       await expect(tree.locator("[data-folder] [data-git-status]")).toHaveCount(

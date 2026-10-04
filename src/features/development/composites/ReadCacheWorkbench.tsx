@@ -9,7 +9,7 @@ export function ReadCacheWorkbench() {
   return (
     <main className="flex h-screen flex-col">
       <Button onClick={() => setOpen((value) => !value)}>
-        Toggle Code Explain
+        Toggle Code Editor
       </Button>
       {error && <p role="alert">{error}</p>}
       {open && (

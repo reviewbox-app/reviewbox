@@ -43,11 +43,11 @@ try {
     await ui.until("!!document.querySelector('[aria-label=\"Code diff\"]')")
   })
   await scenario(
-    "Code Explain reads files without tours or glossary",
+    "Code Editor reads files without tours or glossary",
     async () => {
-      await ui.named("Code Explain", '[role="tab"]')
+      await ui.named("Code Editor", '[role="tab"]')
       await ui.fill('[aria-label="Filter files"]', "answer.ts")
-      await ui.named("answer.ts", '[aria-label="Snapshot files"] button', false)
+      await ui.named("answer.ts", '[aria-label="Project files"] button', false)
       await ui.until("!!document.querySelector('.monaco-editor')")
       assert(
         await ui.execute(

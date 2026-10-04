@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-test("Code Explain shares Markdown defaults, text toggle, search and positions", async ({
+test("Code Editor shares Markdown defaults, text toggle, search and positions", async ({
   page,
 }) => {
   const errors: string[] = []
@@ -81,7 +81,7 @@ test("Code Explain shares Markdown defaults, text toggle, search and positions",
   expect(errors).toEqual([])
 })
 
-test("a failed Code Explain preview can return to raw text", async ({
+test("a failed Code Editor preview can return to raw text", async ({
   page,
 }) => {
   await page.route("**/monaco/document-diff.worker.js", (route) =>

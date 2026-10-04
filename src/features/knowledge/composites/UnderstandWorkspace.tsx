@@ -66,7 +66,7 @@ export function UnderstandWorkspace({
   return (
     <div data-resize-workspace className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
       <aside
-        aria-label="Code Explain files"
+        aria-label="Code Editor files"
         className="relative flex w-[clamp(180px,var(--explain-files-width,272px),30%)] shrink-0 flex-col gap-3 pb-2 max-[1100px]:w-[clamp(180px,var(--explain-files-width,220px),30%)]"
       >
         <InputGroup className="mx-1 w-auto">
@@ -103,7 +103,7 @@ export function UnderstandWorkspace({
           />
         </nav>
         <SidebarResizeHandle
-          name="Code Explain files"
+          name="Code Editor files"
           property="--explain-files-width"
           maxRatio={0.3}
         />

@@ -143,27 +143,22 @@ try {
   await ui.until(
     `Math.abs(document.querySelector('aside[aria-label="Review files"]').getBoundingClientRect().width-${remembered})<1`
   )
-  await ui.named("Code Explain", "[role=tab]")
-  await ui.element(handle("Code Explain files"))
-  const explainInitial = await width("Code Explain files")
-  await drag("Code Explain files", 60)
-  assert(
-    Math.abs((await width("Code Explain files")) - explainInitial - 60) < 2
-  )
-  await keyboard("Code Explain files", "Home")
-  assert.equal(await width("Code Explain files"), 180)
-  await keyboard("Code Explain files", "ArrowRight")
-  assert.equal(await width("Code Explain files"), 190)
-  await keyboard("Code Explain files", "End")
-  const wide = await width("Code Explain files")
+  await ui.named("Code Editor", "[role=tab]")
+  await ui.element(handle("Code Editor files"))
+  const explainInitial = await width("Code Editor files")
+  await drag("Code Editor files", 60)
+  assert(Math.abs((await width("Code Editor files")) - explainInitial - 60) < 2)
+  await keyboard("Code Editor files", "Home")
+  assert.equal(await width("Code Editor files"), 180)
+  await keyboard("Code Editor files", "ArrowRight")
+  assert.equal(await width("Code Editor files"), 190)
+  await keyboard("Code Editor files", "End")
+  const wide = await width("Code Editor files")
   await ui.resize(800, 900)
-  assert(
-    (await width("Code Explain files")) < wide,
-    "narrow window clamps tree"
-  )
+  assert((await width("Code Editor files")) < wide, "narrow window clamps tree")
   await ui.resize(1440, 900)
   assert(
-    Math.abs((await width("Code Explain files")) - wide) < 2,
+    Math.abs((await width("Code Editor files")) - wide) < 2,
     "wide preference restored"
   )
   await ui.screenshot("code-explain-resized")

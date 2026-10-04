@@ -107,15 +107,15 @@ try {
       `${mode}: scroll survives save, polling and focus; explicit navigation recenters`
     )
   }
-  await ui.named("Code Explain", "[role=tab]")
+  await ui.named("Code Editor", "[role=tab]")
   await ui.fill('[aria-label="Filter files"]', "long.ts")
-  // Code Explain keeps its folders collapsible even when filtering files.
+  // Code Editor keeps its folders collapsible even when filtering files.
   await ui.named(
     "src",
-    '[aria-label="Snapshot files"] button[aria-expanded="false"]',
+    '[aria-label="Project files"] button[aria-expanded="false"]',
     false
   )
-  await ui.named("long.ts", '[aria-label="Snapshot files"] button', false)
+  await ui.named("long.ts", '[aria-label="Project files"] button', false)
   await ui.until(
     "document.querySelector('.monaco-editor .view-lines')?.textContent.includes('item')"
   )

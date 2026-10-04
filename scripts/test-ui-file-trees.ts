@@ -55,6 +55,21 @@ const readOnlyMenu = async (selector: string, keyboard = false) => {
     ["Copy path", "Reveal in Finder"]
   )
 }
+const editorMenu = async (selector: string, folder = false) => {
+  await context(selector, folder)
+  assert.deepEqual(
+    await ui.execute(
+      `return [...document.querySelectorAll('[role=menuitem]')].map(e=>e.textContent.trim())`
+    ),
+    [
+      "Copy path",
+      "Reveal in Finder",
+      ...(folder ? ["New file", "New folder"] : []),
+      "Rename",
+      "Move to Trash",
+    ]
+  )
+}
 const foldersOpaque = async (selector: string) =>
   assert(
     await ui.execute(
@@ -116,13 +131,13 @@ try {
     `const row=document.querySelector('${review} [title="src/answer.ts"]'), badge=row.querySelector('[data-git-status]');return {color:getComputedStyle(badge).color,opacity:getComputedStyle(badge).opacity}`
   )
   await ui.screenshot("review-tree")
-  await ui.named("Code Explain", "[role=tab]")
-  const explain = 'nav[aria-label="Snapshot files"]'
+  await ui.named("Code Editor", "[role=tab]")
+  const explain = 'nav[aria-label="Project files"]'
   assert(
     await ui.execute(
       `return ![...document.querySelectorAll('[role=tab]')].some(e=>['Files','Tours','Glossary'].includes(e.textContent.trim()))`
     ),
-    "Code Explain exposes only the file browser"
+    "Code Editor exposes only the file browser"
   )
   await ui.until(`!!document.querySelector('${explain} [data-folder="src"]')`)
   assert.equal(
@@ -131,7 +146,7 @@ try {
     ),
     "false"
   )
-  await readOnlyMenu(`${explain} [data-folder="src"]`, true)
+  await editorMenu(`${explain} [data-folder="src"]`, true)
   await ui.keys("\uE00C")
   assert.equal(
     await ui.execute(
@@ -141,7 +156,7 @@ try {
   )
   await ui.click(`${explain} [data-folder="src"]`)
   await ui.click(`${explain} [title="src/answer.ts"]`)
-  await readOnlyMenu(`${explain} [title="src/other.ts"]`)
+  await editorMenu(`${explain} [title="src/other.ts"]`)
   await ui.keys("\uE00C")
   assert.equal(
     await ui.execute(
@@ -278,7 +293,7 @@ try {
     []
   )
   console.log(
-    "Native shared trees: Review/Code Explain path-only menus, keyboard, stable selection, deleted-path Finder, identical badges, opaque folders, local staging/multi-selection and revert cancellation; Code Explain Markdown/text defaults, focusable toggle, search and retained preferences passed."
+    "Native shared trees: Review path menus and Code Editor file operations, keyboard, stable selection, deleted-path Finder, identical badges, opaque folders, local staging/multi-selection and revert cancellation; Code Editor Markdown/text defaults, focusable toggle, search and retained preferences passed."
   )
 } catch (error) {
   await ui.screenshot("failure").catch(() => {})
