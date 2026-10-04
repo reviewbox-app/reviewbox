@@ -39,7 +39,7 @@ export function LanguageServerCatalogueRow({
         </div>
         <span className="text-xs text-muted-foreground">
           {entry.installedVersion
-            ? `${entry.installedVersion} · ${entry.enabled ? "Enabled" : "Disabled"}`
+            ? `${entry.installedVersion} · ${entry.liveCapabilities ? "Active in Code Editor" : entry.enabled ? "Installed and enabled" : "Disabled"}`
             : entry.supported
               ? entry.version
               : entry.setupRequired
@@ -100,8 +100,7 @@ export function LanguageServerCatalogueRow({
                 >
                   {entry.enabled ? "Disable" : "Enable"}
                 </Button>
-                {(entry.id === "swift" ||
-                  entry.version !== entry.installedVersion) && (
+                {entry.supported && (
                   <Button
                     size="xs"
                     variant="secondary"
@@ -112,7 +111,11 @@ export function LanguageServerCatalogueRow({
                       )
                     }
                   >
-                    {entry.id === "swift" ? "Detect toolchain" : "Update"}
+                    {entry.id === "swift"
+                      ? "Detect toolchain"
+                      : entry.version !== entry.installedVersion
+                        ? "Update"
+                        : "Reinstall"}
                   </Button>
                 )}
                 <Button

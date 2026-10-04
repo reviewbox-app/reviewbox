@@ -1,4 +1,5 @@
 import type { LanguageServerCatalogueEntry } from "@/lib/desktop/contracts.generated"
+import { resolveCodeLanguage } from "@/lib/code/languages"
 
 export function activeInstallation(status?: string) {
   return status === "queued" || status === "installing"
@@ -8,26 +9,34 @@ export function recommendedServers(
   entries: LanguageServerCatalogueEntry[],
   paths: string[]
 ) {
-  const names = paths.map((path) => path.split("/").at(-1)?.toLowerCase() ?? "")
+  const languages = new Set(
+    paths.map((path) => resolveCodeLanguage(path).lspId)
+  )
   return new Set(
     entries
-      .filter((entry) =>
-        names.some(
-          (name) =>
-            entry.extensions.some(
-              (extension) =>
-                name === extension || name.endsWith(`.${extension}`)
-            ) ||
-            (entry.id === "docker" &&
-              (name === "dockerfile" || name.startsWith("dockerfile."))) ||
-            (entry.id === "ruby" && (name === "gemfile" || name === "rakefile"))
-        )
-      )
+      .filter((entry) => entry.languages.some((id) => languages.has(id)))
       .map((entry) => entry.id)
   )
 }
 
 export function capabilityLabels(entry: LanguageServerCatalogueEntry) {
+  if (entry.liveCapabilities)
+    return [
+      ["semanticTokensProvider", "Semantic colors"],
+      ["completionProvider", "Completion"],
+      ["hoverProvider", "Hover"],
+      ["signatureHelpProvider", "Signatures"],
+      ["definitionProvider", "Definitions"],
+      ["referencesProvider", "References"],
+      ["documentSymbolProvider", "File symbols"],
+      ["workspaceSymbolProvider", "Project symbols"],
+      ["diagnosticProvider", "Diagnostics"],
+      ["documentFormattingProvider", "Formatting"],
+      ["renameProvider", "Rename"],
+      ["codeActionProvider", "Code actions"],
+    ]
+      .filter(([key]) => entry.liveCapabilities?.[key])
+      .map(([, label]) => label)
   if (!entry.capabilities) return []
   return (
     [

@@ -6,16 +6,16 @@ import {
   recommendedServers,
 } from "./languageCatalogue.helpers"
 
-const entry = (id: string, extensions: string[]) =>
-  ({ id, extensions }) as LanguageServerCatalogueEntry
+const entry = (id: string, languages: string[]) =>
+  ({ id, languages }) as LanguageServerCatalogueEntry
 
 describe("language catalogue", () => {
   test("recommendations cover exact filenames, compound extensions and mixed case", () => {
     const entries = [
-      entry("typescript", ["ts", "tsx", "d.ts"]),
-      entry("docker", []),
-      entry("ruby", []),
-      entry("rust", ["rs"]),
+      entry("typescript", ["typescript", "typescriptreact"]),
+      entry("docker", ["dockerfile"]),
+      entry("ruby", ["ruby"]),
+      entry("rust", ["rust"]),
     ]
     expect([
       ...recommendedServers(entries, [
@@ -34,6 +34,16 @@ describe("language catalogue", () => {
     for (const status of ["failed", "cancelled", "ready", undefined])
       expect(activeInstallation(status)).toBe(false)
     expect(capabilityLabels(entry("typescript", []))).toEqual([])
+    expect(
+      capabilityLabels({
+        ...entry("typescript", []),
+        liveCapabilities: {
+          completionProvider: {},
+          renameProvider: true,
+          hoverProvider: false,
+        },
+      })
+    ).toEqual(["Completion", "Rename"])
     expect(
       capabilityLabels({
         ...entry("typescript", []),

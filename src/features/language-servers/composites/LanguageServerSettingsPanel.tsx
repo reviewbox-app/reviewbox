@@ -17,6 +17,7 @@ import { AdvancedLanguageServerSettings } from "./AdvancedLanguageServerSettings
 import { LanguageServerCatalogueRow } from "../components/LanguageServerCatalogueRow"
 import { useLanguageCatalogue } from "../hooks/useLanguageCatalogue"
 import { catalogueCommands } from "../services/catalogue.commands"
+import { LanguagePacksPanel } from "./LanguagePacksPanel"
 
 export function LanguageServerSettingsPanel() {
   const state = useLanguageCatalogue()
@@ -51,6 +52,7 @@ export function LanguageServerSettingsPanel() {
     : [{ value: "", label: "No open project" }]
   return (
     <section className="space-y-4">
+      <LanguagePacksPanel />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Label htmlFor="languages-project">Project</Label>
