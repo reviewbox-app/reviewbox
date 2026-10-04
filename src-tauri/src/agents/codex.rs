@@ -2,6 +2,15 @@ use super::*;
 use serde_json::json;
 mod draft;
 
+fn error_details(error: &Value) -> String {
+    // Only error metadata, never arbitrary RPC data, prompts or tool output.
+    serde_json::to_string_pretty(&json!({
+        "message": error["message"], "code": error["code"],
+        "codexErrorInfo": error["codexErrorInfo"],
+    }))
+    .unwrap_or_default()
+}
+
 async fn response(transport: &mut Transport, id: u32) -> AppResult<Value> {
     loop {
         let value = transport.next().await?;
@@ -10,7 +19,7 @@ async fn response(transport: &mut Transport, id: u32) -> AppResult<Value> {
                 return Err(AppError::new(
                     "provider_error",
                     "Codex rejected the request. Check CLI compatibility, authentication and configuration.",
-                ));
+                ).with_details(error_details(&value["error"])));
             }
             return Ok(value["result"].clone());
         }
@@ -24,6 +33,9 @@ async fn handle_request(transport: &mut Transport, value: &Value) -> AppResult<(
     let Some(method) = value["method"].as_str() else {
         return Ok(());
     };
+    if transport.read_only {
+        return transport.send(&json!({"id":value["id"],"result": if method == "item/permissions/requestApproval" { json!({"permissions":{},"scope":"turn"}) } else { json!({"decision":"decline"}) }})).await;
+    }
     // This runtime is explicitly configured for autonomous tool execution.
     // Approval decisions are local policy, never imported from project files.
     let result = match method {

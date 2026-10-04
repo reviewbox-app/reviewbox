@@ -3,6 +3,37 @@ use crate::reviews;
 use serde_json::json;
 use std::{fs, path::Path, process::Command};
 
+#[test]
+#[cfg(unix)]
+fn unexpected_provider_exit_keeps_bounded_stderr_and_exit_status() {
+    tauri::async_runtime::block_on(async {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf 'HTTP 403; Bearer private-token\\n' >&2; exit 7",
+        ]);
+        let mut transport = Transport::new(command, Arc::new(AtomicBool::new(false))).unwrap();
+        let error = transport.next().await.unwrap_err();
+        transport.finish().await;
+        assert_eq!(error.code, "provider_exited");
+        let details = error.details.unwrap();
+        assert!(details.contains("HTTP 403"));
+        assert!(!details.contains("private-token"));
+        assert!(details.contains("Process status:"));
+    });
+}
+
+#[test]
+fn claude_failure_retains_provider_details_only() {
+    let error = claude::failure(
+        &json!({"subtype":"error_max_turns", "errors":["maximum turns exceeded"], "result":"API_KEY=private-token", "request":{"prompt":"source-sentinel"}}),
+    );
+    let details = error.details.unwrap();
+    assert!(details.contains("maximum turns exceeded"));
+    assert!(!details.contains("private-token"));
+    assert!(!details.contains("source-sentinel"));
+}
+
 fn git(root: &Path, args: &[&str]) {
     let output = Command::new("git")
         .current_dir(root)

@@ -1,10 +1,33 @@
 use super::*;
+
+pub(super) fn failure(value: &Value) -> AppError {
+    AppError::new(
+        "provider_error",
+        "Claude could not complete the request. Check CLI authentication and configuration.",
+    )
+    .with_details(
+        serde_json::to_string_pretty(&serde_json::json!({
+            "subtype": value["subtype"], "errors": value["errors"], "message": value["result"]
+        }))
+        .unwrap_or_default(),
+    )
+}
 pub(super) async fn run(
     root: &std::path::Path,
     prompt: &str,
     config: &ProviderConfig,
     cancel: Arc<AtomicBool>,
     stream: &mut Stream,
+) -> AppResult<()> {
+    run_policy(root, prompt, config, cancel, stream, false).await
+}
+pub(super) async fn run_policy(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+    read_only: bool,
 ) -> AppResult<()> {
     let effort = models::effort(config, cancel.clone()).await?;
     let mut command = providers::command(&providers::resolve_executable(&config.executable));
@@ -19,9 +42,22 @@ pub(super) async fn run(
             "--include-partial-messages",
             "--no-session-persistence",
             "--permission-mode",
-            "bypassPermissions",
+            if read_only {
+                "dontAsk"
+            } else {
+                "bypassPermissions"
+            },
         ])
         .current_dir(root);
+    if read_only {
+        command.args([
+            "--safe-mode",
+            "--restricted",
+            "--strict-mcp-config",
+            "--tools",
+            "Read,Glob,Grep,WebSearch,WebFetch",
+        ]);
+    }
     if let Some(model) = config.model.as_ref().filter(|m| !m.is_empty()) {
         command.args(["--model", model]);
     }
@@ -30,21 +66,29 @@ pub(super) async fn run(
     }
     let mut transport = Transport::new(command, cancel)?;
     let mut previews = TextPreviews::default();
-    let result=async {
+    let result = async {
         transport.send_text_and_close(prompt).await?;
-        stream.emit("status","Waiting for Claude Code…")?;
-        loop {let value=transport.next().await?;
+        stream.emit("status", "Waiting for Claude Code…")?;
+        loop {
+            let value = transport.next().await?;
             activity(&value, stream)?;
             previews.receive(&value, stream)?;
-            if value["type"]=="result" {
-                if value["is_error"]==true{return Err(AppError::new("provider_error","Claude could not complete the request. Check CLI authentication and configuration."));}
-                let text = value["result"].as_str().ok_or_else(||AppError::new("provider_output", "Claude returned no final response."))?;
-                if let Some(preview) = &mut stream.preview { preview.update("result", text); }
-                stream.emit("delta",text)?;
+            if value["type"] == "result" {
+                if value["is_error"] == true {
+                    return Err(failure(&value));
+                }
+                let text = value["result"].as_str().ok_or_else(|| {
+                    AppError::new("provider_output", "Claude returned no final response.")
+                })?;
+                if let Some(preview) = &mut stream.preview {
+                    preview.update("result", text);
+                }
+                stream.emit("delta", text)?;
                 return Ok(());
             }
         }
-    }.await;
+    }
+    .await;
     transport.finish().await;
     result
 }

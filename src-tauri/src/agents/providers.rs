@@ -30,7 +30,7 @@ fn compatibility(output: &str) -> ProviderCompatibility {
     }
 }
 
-pub(super) fn resolve_executable(executable: &str) -> PathBuf {
+pub(crate) fn resolve_executable(executable: &str) -> PathBuf {
     let path = PathBuf::from(executable);
     if path.components().count() > 1 || path.is_absolute() {
         return path;

@@ -30,8 +30,12 @@ fn failure(value: &Value) -> AppError {
         code,
         "Codex could not complete the request. Completed preparation results are kept.",
     )
+    .with_details(super::error_details(error))
 }
 impl Session {
+    pub(in crate::agents) fn read_only(&mut self) {
+        self.transport.read_only = true;
+    }
     pub(in crate::agents) fn set_cancel(&mut self, cancel: Arc<AtomicBool>) {
         self.transport.cancel = cancel;
     }
@@ -90,7 +94,17 @@ impl Session {
         schema: Option<Value>,
         stream: &mut Stream,
     ) -> AppResult<()> {
-        let started = self.request("thread/start", json!({"cwd":self.root,"approvalPolicy":"never","sandbox":"danger-full-access","serviceName":"reviewbox","model":self.config.model,"ephemeral":true})).await?;
+        let mut start = json!({"cwd":self.root,"approvalPolicy":"never","sandbox":if self.transport.read_only { "read-only" } else { "danger-full-access" },"serviceName":"reviewbox","model":self.config.model,"ephemeral":true});
+        if self.transport.read_only {
+            let effective = self
+                .request(
+                    "config/read",
+                    json!({"cwd": self.root, "includeLayers": false}),
+                )
+                .await?;
+            start["config"] = planning_configuration(&effective["config"]);
+        }
+        let started = self.request("thread/start", start).await?;
         if started["thread"]["ephemeral"] != true {
             return Err(AppError::new(
                 "incompatible_provider",
@@ -103,7 +117,7 @@ impl Session {
             .to_owned();
         let turn_request = self.next_id;
         self.next_id += 1;
-        let mut params = json!({"threadId":thread,"input":[{"type":"text","text":prompt}],"approvalPolicy":"never","sandboxPolicy":{"type":"dangerFullAccess"}});
+        let mut params = json!({"threadId":thread,"input":[{"type":"text","text":prompt}],"approvalPolicy":"never","sandboxPolicy":{"type":if self.transport.read_only { "readOnly" } else { "dangerFullAccess" }}});
         if let Some(effort) = &self.prepared.effort {
             params["effort"] = json!(effort);
         }
@@ -341,5 +355,50 @@ impl Session {
     }
     pub(in crate::agents) async fn finish(&mut self) {
         self.transport.finish().await;
+    }
+}
+
+/// Read-only filesystem sandbox plus no out-of-sandbox connectors or delegated tools.
+fn planning_configuration(effective: &Value) -> Value {
+    let mut config = json!({"features.apps": false, "features.plugins": false, "features.multi_agent": false, "agents.enabled": false, "apps._default.enabled": false});
+    for category in ["mcp_servers", "plugins", "apps"] {
+        if let Some(entries) = effective[category].as_object() {
+            for name in entries.keys() {
+                config[format!(
+                    "{category}.{}.enabled",
+                    serde_json::to_string(name).expect("JSON key")
+                )] = json!(false);
+            }
+        }
+    }
+    config
+}
+#[cfg(test)]
+mod planning_tests {
+    use super::*;
+    #[test]
+    fn provider_failure_keeps_actionable_details_without_credentials_or_rpc_payloads() {
+        let error = failure(&json!({"error": {
+            "message": "Request failed, HTTP 403; Authorization: Bearer private-token",
+            "codexErrorInfo": {"httpConnectionFailed":{"httpStatusCode":403}},
+            "code": -32000,
+            "data": {"prompt": "private-source-sentinel"}
+        }}));
+        assert_eq!(error.code, "provider_authentication");
+        let details = error.details.unwrap();
+        assert!(details.contains("HTTP 403"));
+        assert!(details.contains("-32000"));
+        assert!(!details.contains("private-token"));
+        assert!(!details.contains("private-source-sentinel"));
+    }
+    #[test]
+    fn disables_configured_connectors_and_delegation_without_writing_preferences() {
+        let source = json!({"mcp_servers":{"files":{"command":"test"}},"apps":{"writer":{"enabled":true}},"plugins":{"tool@local":{"enabled":true}}});
+        let config = planning_configuration(&source);
+        assert_eq!(config["mcp_servers.\"files\".enabled"], false);
+        assert_eq!(config["apps.\"writer\".enabled"], false);
+        assert_eq!(config["plugins.\"tool@local\".enabled"], false);
+        assert_eq!(config["features.multi_agent"], false);
+        assert_eq!(source["apps"]["writer"]["enabled"], true);
     }
 }

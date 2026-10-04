@@ -2,6 +2,7 @@ mod claude;
 mod codex;
 pub(crate) mod commit;
 mod exploration;
+pub(crate) mod language_setup;
 mod outline_preview;
 mod preparation;
 pub(crate) use outline_preview::{OutlineItem, OutlineObserver};
@@ -23,6 +24,7 @@ use std::{
     time::Duration,
 };
 use tauri::ipc::Channel;
+mod stderr;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout},
@@ -33,6 +35,11 @@ pub struct AgentManager {
     active: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 impl AgentManager {
+    pub fn is_active(&self, id: &str) -> bool {
+        self.active
+            .lock()
+            .is_ok_and(|active| active.contains_key(id))
+    }
     pub fn cancel(&self, id: &str) -> AppResult<()> {
         if let Some(flag) = self
             .active
@@ -73,6 +80,8 @@ impl AgentManager {
     }
 }
 struct Transport {
+    stderr: stderr::Stderr,
+    read_only: bool,
     group: crate::processes::ProcessGroup,
     child: Child,
     input: Option<ChildStdin>,
@@ -84,7 +93,7 @@ impl Transport {
         command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         #[cfg(unix)]
         {
@@ -108,6 +117,13 @@ impl Transport {
         )
         .lines();
         Ok(Self {
+            stderr: stderr::Stderr::capture(
+                child
+                    .stderr
+                    .take()
+                    .ok_or_else(|| AppError::new("process", "Missing process stderr."))?,
+            ),
+            read_only: false,
             group,
             child,
             input: Some(input),
@@ -151,10 +167,18 @@ impl Transport {
                 Err(_) => continue,
                 Ok(Err(e)) => return Err(e.into()),
                 Ok(Ok(None)) => {
+                    let stderr = self.stderr.text().await;
+                    let status = self
+                        .child
+                        .try_wait()
+                        .ok()
+                        .flatten()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "stdout closed".into());
                     return Err(AppError::new(
                         "provider_exited",
                         "Provider exited before completing. Check its CLI configuration and authentication.",
-                    ));
+                    ).with_details(format!("Process status: {status}\n\nStderr:\n{stderr}")));
                 }
                 Ok(Ok(Some(line))) => {
                     if line.len() > 4 * 1024 * 1024 {
