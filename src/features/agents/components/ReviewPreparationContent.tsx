@@ -3,8 +3,6 @@
 import { Button } from "@/components/ui/button"
 import { InlineMarkdown } from "@/features/markdown/components/InlineMarkdown"
 import type { Workspace } from "@/lib/desktop/contracts.generated"
-import { Alert02Icon } from "@hugeicons/core-free-icons"
-import { HugeiconsIcon } from "@hugeicons/react"
 import type {
   ReviewPreparationView,
   ReviewUpdateView,
@@ -14,6 +12,7 @@ import { PreparationWorkers } from "./PreparationWorkers"
 import { PreparationProgress } from "./PreparationProgress"
 import { PreparationSteps } from "./PreparationSteps"
 import { PreparedReview } from "./PreparedReview"
+import { ReviewPreparationError } from "./ReviewPreparationError"
 
 export function ReviewPreparationContent({
   workspace,
@@ -102,19 +101,7 @@ export function ReviewPreparationContent({
         />
       )}
       {state && <PreparationSteps steps={state.steps} status={state.status} />}
-      {preparation.error && (
-        <div
-          role="alert"
-          className="flex gap-2.5 rounded-2xl bg-destructive/10 p-4 text-sm text-destructive"
-        >
-          <HugeiconsIcon
-            icon={Alert02Icon}
-            size={16}
-            className="mt-0.5 shrink-0"
-          />
-          <p className="min-w-0 wrap-anywhere">{preparation.error}</p>
-        </div>
-      )}
+      <ReviewPreparationError workspace={workspace} preparation={preparation} />
       {stopped && (
         <p role="status" className="text-sm text-muted-foreground">
           {active

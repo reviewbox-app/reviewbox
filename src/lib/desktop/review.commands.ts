@@ -1,4 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core"
+import { reportDiagnostic } from "./diagnostics"
+import { diagnosticContext } from "./diagnostics.helpers"
 import type {
   CaptureRequest,
   Coverage,
@@ -26,7 +28,7 @@ export function errorMessage(error: unknown): string {
     return String(error.message)
   return String(error)
 }
-export function call<T>(
+export async function call<T>(
   command: string,
   args?: Record<string, unknown>
 ): Promise<T> {
@@ -36,7 +38,38 @@ export function call<T>(
         "Open the desktop app to work with local repositories. Run bun run dev."
       )
     )
-  return invoke<T>(command, { repositoryId: activeRepositoryId, ...args })
+  const repositoryId =
+    typeof args?.repositoryId === "string"
+      ? args.repositoryId
+      : activeRepositoryId
+  try {
+    return await invoke<T>(command, { repositoryId, ...args })
+  } catch (error) {
+    const entry = await reportDiagnostic(
+      error,
+      "native",
+      command,
+      diagnosticContext({ ...args, repositoryId })
+    )
+    // Preserve the rejection and its classification for existing consumers.
+    if (
+      entry &&
+      error &&
+      typeof error === "object" &&
+      Object.isExtensible(error)
+    ) {
+      try {
+        Object.defineProperty(error, "diagnosticId", {
+          value: entry.id,
+          enumerable: true,
+          configurable: true,
+        })
+      } catch {
+        /* A frozen/provider object still keeps its original error. */
+      }
+    }
+    throw error
+  }
 }
 export const reviewCommands = {
   projectSettings: (repositoryId: string) =>

@@ -9,6 +9,35 @@ import type {
 } from "@/lib/desktop/contracts.generated"
 
 const action = async () => {}
+
+test("Rev errors offer a compact copy action beneath the alert in creation and update views", () => {
+  for (const updating of [false, true]) {
+    const html = renderToStaticMarkup(
+      <ReviewPreparationContent
+        workspace={workspace}
+        preparation={{
+          ...controller("failed"),
+          status: "",
+          error: "Codex could not complete the request.",
+          errorDetails: {
+            code: "provider_authentication",
+            message: "Codex could not complete the request.",
+            details: "HTTP 403",
+            retryable: false,
+          },
+        }}
+        updating={updating}
+        onStart={action}
+        onLeave={action}
+      />
+    )
+    expect(html.indexOf("Copy error details")).toBeGreaterThan(
+      html.indexOf('role="alert"')
+    )
+    expect(html).toContain("h-7")
+    expect(html).toContain("text-foreground/50")
+  }
+})
 const workspace = {
   review: {
     title: "Review",

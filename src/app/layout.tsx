@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { DiagnosticsRuntime } from "@/features/diagnostics/components/DiagnosticsRuntime"
 import { cn } from "@/lib/utils"
 import "./globals.css"
 
@@ -27,6 +28,7 @@ export default function RootLayout({
       )}
     >
       <body>
+        <DiagnosticsRuntime />
         <ThemeProvider>
           <TooltipProvider>{children}</TooltipProvider>
         </ThemeProvider>

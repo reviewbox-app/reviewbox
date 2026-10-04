@@ -2,9 +2,11 @@
 import { preparationCommands } from "../services/preparation.commands"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type {
+  AppError,
   PreparationState,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
+import { appError } from "@/lib/desktop/diagnostics.helpers"
 import {
   reviewCommands,
   desktopAvailable,
@@ -23,6 +25,7 @@ type View = {
   progress: PreparationProgress | null
   message: string
   error: string
+  errorDetails?: AppError
   pending: boolean
   readyId: string | null
 }
@@ -105,6 +108,7 @@ export function useReviewUpdate(
             value
           ),
           error: "",
+          errorDetails: undefined,
         }
       })
       if (
@@ -162,6 +166,7 @@ export function useReviewUpdate(
           setView((old) => ({
             ...baseView(old, owner),
             error: errorMessage(cause),
+            errorDetails: appError(cause),
           }))
       }
       if (alive) timer = setTimeout(() => void poll(), 800)
@@ -185,6 +190,7 @@ export function useReviewUpdate(
         owner: ticket,
         pending: true,
         error: "",
+        errorDetails: undefined,
         message: "",
       }))
       try {
@@ -236,7 +242,11 @@ export function useReviewUpdate(
         }
       } catch (cause) {
         if (current.current.owner === ticket)
-          setView((old) => ({ ...old, error: errorMessage(cause) }))
+          setView((old) => ({
+            ...old,
+            error: errorMessage(cause),
+            errorDetails: appError(cause),
+          }))
       } finally {
         requests.current++
         operation.current = false
@@ -260,7 +270,11 @@ export function useReviewUpdate(
         current.current.onApplied(value)
     } catch (cause) {
       if (current.current.owner === context.owner)
-        setView((old) => ({ ...old, error: errorMessage(cause) }))
+        setView((old) => ({
+          ...old,
+          error: errorMessage(cause),
+          errorDetails: appError(cause),
+        }))
     }
   }
   const completedFork =

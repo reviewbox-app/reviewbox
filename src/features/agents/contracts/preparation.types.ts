@@ -1,4 +1,7 @@
-import type { PreparationState } from "@/lib/desktop/contracts.generated"
+import type {
+  AppError,
+  PreparationState,
+} from "@/lib/desktop/contracts.generated"
 import type { PreparationProgress } from "../helpers/preparationProgress.helpers"
 
 /** Rev writes the review, checks its references and saves it; no acceptance step. */
@@ -17,6 +20,7 @@ export type ReviewPreparationView = {
   active: boolean
   pending: boolean
   error: string
+  errorDetails?: AppError
   status: string
   readyToOpen: boolean
   start: () => void | Promise<void>
