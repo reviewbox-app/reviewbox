@@ -22,7 +22,9 @@ import { PreparingReview } from "@/features/agents/composites/PreparingReview"
 import { ReviewReader } from "@/features/review/composites/ReviewReader"
 import { ResumeReviews } from "@/features/review/composites/ResumeReviews"
 import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
-import { CodeExplainWorkspace } from "@/features/knowledge/composites/CodeExplainWorkspace"
+import { CodeEditorWorkspace } from "@/features/code-editor/composites/CodeEditorWorkspace"
+import { EditorLifecycle } from "@/features/code-editor/composites/EditorLifecycle"
+import { useReviewNotifications } from "@/features/notifications/hooks/useReviewNotifications"
 import { useRepositoryGitMenu } from "@/features/source-control/hooks/useRepositoryGitMenu"
 import { useSourceControl } from "@/features/source-control/hooks/useSourceControl"
 import { LocalChanges } from "@/features/source-control/composites/LocalChanges"
@@ -41,7 +43,11 @@ import {
   errorMessage,
   reviewCommands,
 } from "@/lib/desktop/review.commands"
-import type { ReadingLevel, Workspace } from "@/lib/desktop/contracts.generated"
+import type {
+  ReadingLevel,
+  ReviewNotificationTarget,
+  Workspace,
+} from "@/lib/desktop/contracts.generated"
 
 export function ReviewBoxApp() {
   useAppearancePreferences()
@@ -114,6 +120,26 @@ export function ReviewBoxApp() {
       preparing.snapshotId === workspace?.snapshot.id
   )
   const updating = update.active || update.pending
+  const { openNotification, selectStep, setError } = session
+  const openNotifiedReview = useCallback(
+    async (target: ReviewNotificationTarget) => {
+      const value = await openNotification(target)
+      if (!value) return
+      dismissedPreparations.current.add(readerIdentity(value))
+      setPreparing(null)
+      setSurface(null)
+      setSettings(false)
+      setPalette(false)
+      setSpace("review")
+      setView("document")
+      if (!value.review.position.stepId) {
+        const first = readingUnits(value)[0]
+        if (first) selectStep(first.step.step.id)
+      }
+    },
+    [openNotification, selectStep, setSettings, setPalette, setSpace, setView]
+  )
+  useReviewNotifications(openNotifiedReview, setError)
   const refresh = () =>
     workspace?.review.preparationId || workspace?.review.mode === "guided"
       ? update.start()
@@ -301,6 +327,7 @@ export function ReviewBoxApp() {
   }, [openRepository, reportError])
   return (
     <div className="flex h-svh min-h-[500px] flex-col overflow-hidden bg-background text-foreground">
+      <EditorLifecycle />
       <WorkspaceTitleBar
         repository={repository}
         rev={rev}
@@ -464,10 +491,23 @@ export function ReviewBoxApp() {
           onError={session.setError}
         />
       ) : space === "understand" ? (
-        <CodeExplainWorkspace
+        <CodeEditorWorkspace
           key={repository.id}
           repositoryId={repository.id}
-          onError={session.setError}
+          statuses={Object.fromEntries(
+            (git.state?.files ?? []).map((file) => [
+              file.path,
+              file.unstagedStatus === "?"
+                ? "U"
+                : file.stagedStatus === "A"
+                  ? "A"
+                  : file.previousPath
+                    ? "R"
+                    : file.unstagedStatus === "D"
+                      ? "D"
+                      : "M",
+            ])
+          )}
         />
       ) : local ? (
         <LocalChanges

@@ -28,6 +28,9 @@ pub struct LanguageServerCatalogueEntry {
     pub error: Option<String>,
     pub preview: bool,
     pub capabilities: Option<super::LanguageCapabilities>,
+    #[serde(default)]
+    #[ts(type = "Record<string, unknown> | null")]
+    pub live_capabilities: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]

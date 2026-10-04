@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod repository_reads;
+pub use repository_reads::*;
 mod source_control;
 pub use source_control::*;
 mod appearance;
@@ -10,9 +12,21 @@ mod catalogue;
 pub use catalogue::*;
 mod languages;
 pub use languages::*;
+mod editor;
+pub use editor::*;
+mod live_languages;
+pub use live_languages::*;
+mod language_packs;
+pub use language_packs::*;
+mod language_setup;
+pub use language_setup::*;
 mod reader;
 pub use reader::*;
+mod notifications;
 mod preparation;
+pub use notifications::*;
+mod diagnostics;
+pub use diagnostics::*;
 mod provider_setup;
 mod publication;
 pub use creation::*;
@@ -26,6 +40,12 @@ pub struct AppError {
     pub code: String,
     pub message: String,
     pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub details: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub diagnostic_id: Option<String>,
 }
 pub type AppResult<T> = Result<T, AppError>;
 impl AppError {
@@ -34,7 +54,13 @@ impl AppError {
             code: code.into(),
             message: message.into(),
             retryable: false,
+            details: None,
+            diagnostic_id: None,
         }
+    }
+    pub(crate) fn with_details(mut self, details: impl AsRef<str>) -> Self {
+        self.details = Some(crate::diagnostics::redact(details.as_ref(), 16_384));
+        self
     }
 }
 impl From<std::io::Error> for AppError {
@@ -488,7 +514,33 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
+        LanguageSetupRequest::decl(&cfg),
+        LanguageSetupFile::decl(&cfg),
+        LanguageSetupCommand::decl(&cfg),
+        LanguageSetupServer::decl(&cfg),
+        LanguageSetupPlan::decl(&cfg),
+        LanguageSetupStatus::decl(&cfg),
+        LanguageDefinition::decl(&cfg),
+        LanguagePackArtifact::decl(&cfg),
+        LanguagePackInstallation::decl(&cfg),
+        LanguagePackServer::decl(&cfg),
+        LanguagePack::decl(&cfg),
+        LanguageRegistry::decl(&cfg),
+        LiveLanguageDocument::decl(&cfg),
+        LiveLanguageSession::decl(&cfg),
+        LiveLanguageEvent::decl(&cfg),
+        RepositoryReadChange::decl(&cfg),
+        EditorEntry::decl(&cfg),
+        EditorSearchMatch::decl(&cfg),
+        EditorSearchResult::decl(&cfg),
+        EditorFile::decl(&cfg),
+        EditorDraft::decl(&cfg),
+        EditorRecovery::decl(&cfg),
+        EditorMutation::decl(&cfg),
         AppError::decl(&cfg),
+        DiagnosticInput::decl(&cfg),
+        DiagnosticEntry::decl(&cfg),
+        DiagnosticLog::decl(&cfg),
         ReviewMenuAction::decl(&cfg),
         ReviewMenuEntry::decl(&cfg),
         ReviewMenuState::decl(&cfg),
@@ -527,6 +579,7 @@ pub fn typescript() -> String {
         PreparationBatchStatus::decl(&cfg),
         PreparationPhaseCount::decl(&cfg),
         PreparationStatus::decl(&cfg),
+        ReviewNotificationTarget::decl(&cfg),
         PreparationPhase::decl(&cfg),
         Repository::decl(&cfg),
         Scope::decl(&cfg),

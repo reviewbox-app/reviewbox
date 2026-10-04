@@ -3,11 +3,15 @@ mod app_info;
 mod appearance;
 mod commands;
 pub mod contracts;
+mod diagnostics;
+mod editor;
 mod illustrations;
 mod integrations;
 mod knowledge;
 pub use integrations::run_cli;
+mod editor_menu;
 mod language_servers;
+mod notifications;
 mod onboarding;
 mod preparation;
 mod processes;
@@ -34,6 +38,10 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
         .manage(illustrations::Illustrations::default())
+        .manage(editor::commands::EditorState::default())
+        .manage(notifications::Notifications::default())
+        .manage(language_servers::live::LiveLanguages::default())
+        .manage(language_servers::setup::Setup::default())
         .register_uri_scheme_protocol("reviewbox-illustration", illustrations::protocol)
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("reader-isolation")
@@ -41,6 +49,8 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            editor::macos::install(app.handle())?;
             review_menu::install(app.handle())?;
             #[cfg(not(feature = "native-validation"))]
             let data_dir = app.path().app_data_dir()?;
@@ -50,8 +60,22 @@ pub fn run() {
                 .ok_or_else(|| {
                     std::io::Error::other("Validation requires an isolated data directory")
                 })?;
-            let storage = storage::Storage::open(data_dir.clone())
-                .map_err(|e| std::io::Error::other(e.message))?;
+            let error_log =
+                std::sync::Arc::new(diagnostics::Diagnostics::new(data_dir.join("logs")));
+            diagnostics::install_panic_hook(&error_log);
+            app.manage(error_log.clone());
+            let storage = storage::Storage::open(data_dir.clone()).map_err(|e| {
+                let _ = error_log.record(contracts::DiagnosticInput {
+                    source: "native".into(),
+                    operation: "startup".into(),
+                    code: e.code,
+                    message: e.message.clone(),
+                    details: e.details,
+                    stack: None,
+                    context: Default::default(),
+                });
+                std::io::Error::other(e.message)
+            })?;
             #[cfg(unix)]
             app.manage(
                 integrations::LocalBridge::start(storage.clone(), &data_dir)
@@ -64,7 +88,14 @@ pub fn run() {
             });
             app.manage(storage);
             app.manage(source_control::SourceControl::default());
-            app.manage(preparation::PreparationManager::default());
+            notifications::install(app.handle());
+            let notification_app = app.handle().clone();
+            app.manage(
+                preparation::PreparationManager::with_ready_notifier(move |target| {
+                    notifications::review_ready(&notification_app, target);
+                })
+                .with_diagnostics(error_log),
+            );
             app.manage(agents::models::CatalogManager::default());
             app.manage(review_creation::CaptureManager::default());
             app.manage(agents::setup::SetupManager::default());
@@ -85,8 +116,15 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && editor::commands::confirm_exit(window.app_handle())
+            {
+                api.prevent_close();
+            }
             if matches!(event, tauri::WindowEvent::Focused(true)) {
                 review_menu::focused(window.app_handle(), window.label());
+                editor_menu::focused(window.app_handle(), window.label());
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window
@@ -98,6 +136,14 @@ pub fn run() {
                     .stop_all();
             }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                notifications::shutdown(window.app_handle());
+                window
+                    .state::<language_servers::setup::Setup>()
+                    .0
+                    .stop_all();
+                window
+                    .state::<language_servers::live::LiveLanguages>()
+                    .stop_all();
                 window.state::<source_control::SourceControl>().stop_all();
                 window.state::<preparation::PreparationManager>().stop_all();
                 window
@@ -114,6 +160,37 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info::get_app_info,
+            diagnostics::diagnostics_record,
+            diagnostics::diagnostics_read,
+            diagnostics::diagnostics_reveal,
+            notifications::pending_review_notification,
+            notifications::acknowledge_review_notification,
+            language_servers::packs::language_registry,
+            language_servers::packs::export_language_pack,
+            language_servers::packs::save_language_pack,
+            language_servers::packs::remove_language_pack,
+            language_servers::setup::plan_language_setup,
+            language_servers::setup::get_language_setup,
+            language_servers::setup::latest_language_setup,
+            language_servers::setup::cancel_language_setup,
+            language_servers::setup::apply_language_setup,
+            language_servers::live::live_language_open,
+            language_servers::live::live_language_sync,
+            language_servers::live::live_language_request,
+            language_servers::live::live_language_close,
+            language_servers::live::live_language_cancel,
+            language_servers::live::live_language_restart,
+            language_servers::live::live_language_source,
+            editor::commands::editor_inventory,
+            editor::commands::editor_search_content,
+            editor::commands::editor_cancel_search,
+            editor::commands::editor_read,
+            editor::commands::editor_revision,
+            editor::commands::editor_mutate,
+            editor::commands::editor_recovery,
+            editor::commands::editor_store_recovery,
+            editor::commands::editor_dirty,
+            editor::commands::editor_exit,
             knowledge::context::release_code_context,
             knowledge::context::code_explain_context,
             source_control::commands::local_git_state,
@@ -129,6 +206,7 @@ pub fn run() {
             source_control::commands::cancel_git_operation,
             source_control::commands::last_git_operation,
             review_menu::configure_review_menu,
+            editor_menu::configure_editor_menu,
             review_menu::configure_repository_menu,
             appearance::appearance_settings,
             appearance::configure_appearance,
@@ -206,10 +284,19 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build ReviewBox")
         .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { ref api, .. } = event
+                && editor::commands::confirm_exit(app)
+            {
+                api.prevent_exit();
+                return;
+            }
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
+                app.state::<language_servers::setup::Setup>().0.stop_all();
+                app.state::<language_servers::live::LiveLanguages>()
+                    .stop_all();
                 app.state::<preparation::PreparationManager>().stop_all();
                 app.state::<agents::models::CatalogManager>().0.stop_all();
                 app.state::<review_creation::CaptureManager>().cancel_all();

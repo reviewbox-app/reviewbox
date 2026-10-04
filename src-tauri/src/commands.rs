@@ -733,7 +733,9 @@ pub async fn start_review_preparation(
     let storage = storage.scoped(repository_id.as_deref());
     let manager = manager.inner().clone();
     let resources = resource_root(&app)?;
-    blocking(move || manager.start(storage, resources, request)).await
+    let state = blocking(move || manager.start(storage, resources, request)).await?;
+    crate::notifications::prepare(&app);
+    Ok(state)
 }
 #[tauri::command]
 pub async fn update_review_with_rev(
@@ -748,7 +750,12 @@ pub async fn update_review_with_rev(
     let storage = storage.scoped(repository_id.as_deref());
     let manager = manager.inner().clone();
     let resources = resource_root(&app)?;
-    blocking(move || manager.adapt(storage, resources, &review_id, revision, provider)).await
+    let state =
+        blocking(move || manager.adapt(storage, resources, &review_id, revision, provider)).await?;
+    if state.is_some() {
+        crate::notifications::prepare(&app);
+    }
+    Ok(state)
 }
 #[tauri::command]
 pub async fn discard_review_update(
@@ -784,7 +791,11 @@ pub async fn resume_review_preparation(
     let storage = storage.scoped(repository_id.as_deref());
     let manager = manager.inner().clone();
     let resources = resource_root(&app)?;
-    blocking(move || manager.resume(storage, resources, &review_id)).await
+    let state = blocking(move || manager.resume(storage, resources, &review_id)).await?;
+    if state.status == PreparationStatus::Running {
+        crate::notifications::prepare(&app);
+    }
+    Ok(state)
 }
 #[tauri::command]
 pub async fn cancel_review_preparation(

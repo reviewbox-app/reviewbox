@@ -8,6 +8,9 @@
     "dev:web": "bun run icons:build && bun run workers:build && bun --bun next dev --hostname 127.0.0.1 --port 1420",
     "build": "bun run tauri build",
     "build:web": "bun scripts/build-guard.ts web",
+    "build:storage": "bun scripts/build-guard.ts report",
+    "build:clean": "bun scripts/build-guard.ts clean",
+    "test:build-storage": "bun test ./scripts/build-storage.test.ts",
     "build:validation": "bun scripts/build-validation.ts",
     "workers:build": "bun scripts/build-monaco-workers.ts",
     "lint": "bun --bun eslint . --max-warnings 0",
@@ -57,12 +60,14 @@
     "test:ui:code-colors": "bun scripts/test-ui-code-colors.ts",
     "test:ui:block-diff": "bun scripts/test-ui-block-diff.ts",
     "app-icons:build": "bun scripts/build-app-icons.ts",
-    "build:storage": "bun scripts/build-guard.ts report",
-    "build:clean": "bun scripts/build-guard.ts clean",
-    "test:build-storage": "bun test ./scripts/build-storage.test.ts"
+    "test:ui:code-editor": "bun scripts/test-ui-code-editor.ts",
+    "test:ui:editor-languages": "bun scripts/test-ui-editor-languages.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@gsap/react": "^2.1.2",
     "@hugeicons/core-free-icons": "^4.3.4",
     "@hugeicons/react": "^1.1.10",
@@ -127,7 +132,8 @@
     "prettier": "^3.9.6",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vscode-languageserver-protocol": "3.17.5"
   },
   "packageManager": "bun@1.3.14",
   "engines": {

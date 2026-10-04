@@ -21,10 +21,13 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 flate2 = "1.1.10"
+ignore = "0.4.25"
+trash = "5.2.9"
 json5 = "0.4"
 notify = "8.2.0"
 parking_lot = "=0.12.5"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+regex = "1.13"
 rfd = "0.17.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 schemars = "1"
@@ -44,13 +47,15 @@ uuid = { version = "1.26.1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "=0.6.2"
 objc2 = "=0.6.4"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSImage"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSArray"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSArray", "NSBundle", "NSError"] }
+objc2-user-notifications = { version = "=0.3.2", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter"] }
 
 [lints.rust]
-# The macOS 27 menu visibility API is not yet exposed by objc2-app-kit.
-# Only its availability-checked setter has a local exception.
+# Narrow macOS bridges (menus, termination and notification delegates)
+# document their ABI and lifetime invariants alongside local exceptions.
 unsafe_code = "deny"
 
 [features]

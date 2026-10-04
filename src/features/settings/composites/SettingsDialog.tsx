@@ -4,6 +4,7 @@ import { useTheme } from "next-themes"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   AiMagicIcon,
+  AlertCircleIcon,
   Attachment01Icon,
   CodeIcon,
   ComputerTerminal01Icon,
@@ -26,6 +27,7 @@ import { Kbd } from "@/components/ui/kbd"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProviderSettingsPanel } from "@/features/agents/composites/ProviderSettingsPanel"
 import { LanguageServerSettingsPanel } from "@/features/language-servers/composites/LanguageServerSettingsPanel"
+import { ErrorLogPanel } from "@/features/diagnostics/composites/ErrorLogPanel"
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
 import { cn } from "@/lib/utils"
 import { SettingRow } from "../components/SettingRow"
@@ -42,6 +44,7 @@ const sections = [
   { id: "Integrations", icon: PlugSocketIcon },
   { id: "Languages", icon: CodeIcon },
   { id: "Storage", icon: Database01Icon },
+  { id: "Error log", icon: AlertCircleIcon },
   { id: "Shortcuts", icon: KeyboardIcon },
   { id: "Project", icon: Folder01Icon },
 ] as const
@@ -54,7 +57,7 @@ const shortcuts = [
   ["Switch document / code", ["D"]],
   ["Command palette", ["⌘K"]],
   ["Open a review file", ["⌘P"]],
-  ["Home · Review · Code Explain", ["⌘1", "⌘2", "⌘3"]],
+  ["Home · Review · Code Editor", ["⌘1", "⌘2", "⌘3"]],
   ["Side-by-side diff", ["⌘\\"]],
   ["New review / open repository", ["⌘N", "⌘O"]],
   ["Confirm (forms)", ["⌘↵"]],
@@ -70,8 +73,10 @@ const intro: Record<Section, string> = {
   Integrations:
     "Enrich project reviews from other tools, with the app open or closed.",
   Languages:
-    "Install and manage language tools for richer code reading. Servers work with the captured source files.",
+    "Manage language tools for the live Code Editor and captured review sources.",
   Storage: "Where reviews, tours and explanations are saved.",
+  "Error log":
+    "Inspect recent errors from Rev and ReviewBox, or copy their details for troubleshooting.",
   Shortcuts: "Every reading action has a shortcut.",
   Project:
     "Saved in .reviewbox and shared through Git. Executables and permissions stay in the application settings.",
@@ -243,6 +248,7 @@ export function SettingsDialog({
               </>
             )}
             {section === "Languages" && <LanguageServerSettingsPanel />}
+            {section === "Error log" && <ErrorLogPanel />}
             {section === "Storage" && (
               <div className="rounded-3xl border px-5">
                 <SettingRow

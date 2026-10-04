@@ -33,6 +33,7 @@ pub(crate) fn install(app: &AppHandle) -> tauri::Result<()> {
     menu.insert(&submenu, position)?;
     #[cfg(debug_assertions)]
     install_inspector(app, &menu)?;
+    crate::editor_menu::install(app, &menu)?;
     app.set_menu(menu)?;
     app.manage(ReviewMenu {
         submenu,

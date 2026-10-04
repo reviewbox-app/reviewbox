@@ -110,7 +110,7 @@ export function CommandPalette({
                 </CommandItem>
                 <CommandItem onSelect={run(() => actions.space("understand"))}>
                   <HugeiconsIcon icon={BookOpen01Icon} />
-                  Code Explain
+                  Code Editor
                   <CommandShortcut>⌘3</CommandShortcut>
                 </CommandItem>
               </>
