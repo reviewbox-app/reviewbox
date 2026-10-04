@@ -76,7 +76,7 @@ test("Review folders always expose every file and their Git status without colla
   expect(html).not.toContain("aria-expanded")
 })
 
-test("Code Explain keeps folders collapsible and initially closed", () => {
+test("Code Editor keeps folders collapsible and initially closed", () => {
   const html = renderToStaticMarkup(
     <FileTree
       paths={["src/feature/a.ts"]}
@@ -188,4 +188,50 @@ test("folder color uses filtered-out descendants and folder rows support shared 
   expect(html).toContain('aria-current="page"')
   expect(html).not.toMatch(/data-folder="src"[^>]*opacity-/)
   expect(html.match(/data-git-status=/g)).toHaveLength(1)
+})
+
+test("only entirely ignored folders fade, using the full inventory without cascading opacity", () => {
+  const html = renderToStaticMarkup(
+    <FileTree
+      paths={[
+        "cache/deep/a.txt",
+        "cache/top.txt",
+        "mixed/ignored.txt",
+        "empty/",
+      ]}
+      allPaths={[
+        "cache/deep/a.txt",
+        "cache/top.txt",
+        "mixed/ignored.txt",
+        "mixed/visible.txt",
+        "empty/",
+      ]}
+      ignoredPaths={
+        new Set(["cache/deep/a.txt", "cache/top.txt", "mixed/ignored.txt"])
+      }
+      selected=""
+      marks={{}}
+      defaultExpanded
+      onSelect={() => {}}
+    />
+  )
+  expect(html).toMatch(/data-folder="cache"[^>]*opacity-60/)
+  expect(html).toMatch(/data-folder="cache\/deep"[^>]*opacity-60/)
+  expect(html).not.toMatch(/data-folder="mixed"[^>]*opacity-/)
+  expect(html).not.toMatch(/data-folder="empty"[^>]*opacity-/)
+  expect(html).not.toMatch(/<(?:li|ul)[^>]*opacity-/)
+})
+
+test("compacted ignored-only folder chains also fade", () => {
+  const html = renderToStaticMarkup(
+    <FileTree
+      paths={["cache/nested/only.txt"]}
+      ignoredPaths={new Set(["cache/nested/only.txt"])}
+      selected=""
+      marks={{}}
+      alwaysExpanded
+      onSelect={() => {}}
+    />
+  )
+  expect(html).toMatch(/data-folder="cache\/nested"[^>]*opacity-60/)
 })

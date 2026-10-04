@@ -35,7 +35,7 @@ function buildTree(paths: string[]) {
         })
       node = node.folders.get(part)!
     }
-    node.files.push(path)
+    if (!path.endsWith("/")) node.files.push(path)
   }
   // Collapse single-child chains ("src-tauri/src") like the prototype.
   const compact = (folder: Folder): Folder => {
@@ -61,26 +61,35 @@ const markLabels: Record<FileMark, string> = {
 /** Shared file tree with Git statuses and review decisions. */
 export function FileTree({
   paths,
+  allPaths = paths,
   selected,
   marks,
   statuses = {},
   reviewedPaths,
+  ignoredPaths,
   dimmedLabel = "Reviewed.",
   alwaysExpanded = false,
   defaultExpanded = false,
   onSelect,
   selectedPaths,
   renderRow,
+  toggledFolders,
+  onToggleFolder,
 }: {
   paths: string[]
+  /** Full inventory keeps filtered-out files in folder ignore decisions. */
+  allPaths?: string[]
   selected: string
   marks: Record<string, FileMark>
   statuses?: Record<string, GitFileStatus>
   reviewedPaths?: ReadonlySet<string>
+  ignoredPaths?: ReadonlySet<string>
   dimmedLabel?: string
   alwaysExpanded?: boolean
   defaultExpanded?: boolean
   selectedPaths?: ReadonlySet<string>
+  toggledFolders?: ReadonlySet<string>
+  onToggleFolder?: (path: string) => void
   renderRow?: (
     row: React.ReactElement,
     target: { path: string; folder: boolean }
@@ -92,8 +101,23 @@ export function FileTree({
   ) => void
 }) {
   const tree = useMemo(() => buildTree(paths), [paths])
+  const ignoredFolders = useMemo(() => {
+    const folders = new Map<string, boolean>()
+    for (const path of allPaths) {
+      if (path.endsWith("/")) continue
+      const ignored = ignoredPaths?.has(path) ?? false
+      let end = path.lastIndexOf("/")
+      while (end > 0) {
+        const folder = path.slice(0, end)
+        folders.set(folder, (folders.get(folder) ?? true) && ignored)
+        end = path.lastIndexOf("/", end - 1)
+      }
+    }
+    return folders
+  }, [allPaths, ignoredPaths])
   const folderStatuses = useMemo(() => folderGitStatuses(statuses), [statuses])
-  const [toggled, setToggled] = useState<Set<string>>(new Set())
+  const [internalToggled, setToggled] = useState<Set<string>>(new Set())
+  const toggled = toggledFolders ?? internalToggled
   const visiblePaths: string[] = []
   const collect = (folder: Folder) => {
     for (const child of [...folder.folders.values()].sort((a, b) =>
@@ -107,13 +131,18 @@ export function FileTree({
   collect(tree)
   const wrap = (row: React.ReactElement, path: string, folder: boolean) =>
     renderRow ? renderRow(row, { path, folder }) : row
-  const toggle = (path: string) =>
+  const toggle = (path: string) => {
+    if (onToggleFolder) {
+      onToggleFolder(path)
+      return
+    }
     setToggled((value) => {
       const next = new Set(value)
       if (next.has(path)) next.delete(path)
       else next.add(path)
       return next
     })
+  }
   const row =
     "relative flex w-full items-center gap-1.5 rounded-xl py-1 pr-2 text-left text-sm outline-none hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/30"
   const render = (folder: Folder, depth: number): React.ReactNode => (
@@ -148,7 +177,10 @@ export function FileTree({
                   <div
                     data-folder={child.path}
                     tabIndex={renderRow ? 0 : undefined}
-                    className={row}
+                    className={cn(
+                      row,
+                      ignoredFolders.get(child.path) && "opacity-60"
+                    )}
                     style={{ paddingLeft: 6 + depth * 14 }}
                   >
                     {content}
@@ -157,7 +189,10 @@ export function FileTree({
                   <button
                     data-folder={child.path}
                     aria-expanded={open}
-                    className={row}
+                    className={cn(
+                      row,
+                      ignoredFolders.get(child.path) && "opacity-60"
+                    )}
                     style={{ paddingLeft: 6 + depth * 14 }}
                     onClick={() => toggle(child.path)}
                   >
@@ -188,9 +223,11 @@ export function FileTree({
               <span
                 className={cn(
                   "flex min-w-0 flex-1 items-center gap-1.5",
-                  reviewedPaths?.has(path)
-                    ? "opacity-50"
-                    : statuses[path] === "D" && "opacity-75"
+                  ignoredPaths?.has(path)
+                    ? "opacity-60"
+                    : reviewedPaths?.has(path)
+                      ? "opacity-50"
+                      : statuses[path] === "D" && "opacity-75"
                 )}
               >
                 <FileIcon path={path} />
