@@ -1,0 +1,48 @@
+import { expect, test } from "bun:test"
+import {
+  createRepositoryReadDispatcher,
+  mergeRepositoryChanges,
+} from "./repositoryReads"
+import type { RepositoryReadChange } from "./contracts.generated"
+const change = (
+  repositoryId: string,
+  paths: string[]
+): RepositoryReadChange => ({
+  repositoryId,
+  paths,
+  tree: false,
+  git: false,
+  full: false,
+})
+
+test("bursts coalesce by checkout, preserve all paths and stop after unsubscribe", async () => {
+  const bus = createRepositoryReadDispatcher(10)
+  const received: RepositoryReadChange[] = []
+  const stop = bus.subscribe("one", (event) => received.push(event))
+  bus.receive(change("one", ["a"]))
+  bus.receive(change("two", ["other"]))
+  bus.receive({ ...change("one", ["a", "b"]), tree: true })
+  await Bun.sleep(30)
+  expect(received).toEqual([{ ...change("one", ["a", "b"]), tree: true }])
+  bus.receive(change("one", ["late"]))
+  stop()
+  await Bun.sleep(30)
+  expect(received).toHaveLength(1)
+  bus.dispose()
+})
+test("overflow becomes bounded full reconciliation, including earlier scopes", () => {
+  const next = mergeRepositoryChanges(
+    change(
+      "one",
+      Array.from({ length: 512 }, (_, i) => String(i))
+    ),
+    change("one", ["extra"])
+  )
+  expect(next).toEqual({
+    repositoryId: "one",
+    paths: [],
+    tree: true,
+    git: true,
+    full: true,
+  })
+})

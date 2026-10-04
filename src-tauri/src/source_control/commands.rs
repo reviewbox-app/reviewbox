@@ -18,7 +18,12 @@ pub async fn local_git_state(
 ) -> AppResult<LocalGitState> {
     let root = repositories::root(&storage, &repository_id)?;
     let manager = manager.inner().clone();
-    blocking(move || history::state(&manager, &root, &repository_id)).await
+    let storage = storage.inner().clone();
+    blocking(move || {
+        storage.repository_cache.entry(&storage, &root)?;
+        history::state(&manager, &root, &repository_id)
+    })
+    .await
 }
 #[tauri::command]
 pub async fn local_file_diff(
@@ -41,7 +46,7 @@ pub async fn stage_local_file(
     staged: bool,
 ) -> AppResult<LocalGitState> {
     let root = repositories::root(&storage, &repository_id)?;
-    let _invalidation = storage.repository_cache.mutation(&root);
+    let _invalidation = storage.repository_cache.git_mutation(&root);
     let manager = manager.inner().clone();
     blocking(move || {
         let operation = manager.begin(&root, &id())?;
@@ -67,7 +72,7 @@ pub async fn fetch_git_remote(
     force: bool,
 ) -> AppResult<LocalGitState> {
     let root = repositories::root(&storage, &repository_id)?;
-    let _invalidation = storage.repository_cache.mutation(&root);
+    let _invalidation = storage.repository_cache.git_mutation(&root);
     let manager = manager.inner().clone();
     blocking(move || {
         let operation = manager.begin(&root, &id())?;
@@ -85,7 +90,7 @@ pub async fn push_git_branch(
     remote: Option<String>,
 ) -> AppResult<LocalGitState> {
     let root = repositories::root(&storage, &repository_id)?;
-    let _invalidation = storage.repository_cache.mutation(&root);
+    let _invalidation = storage.repository_cache.git_mutation(&root);
     let manager = manager.inner().clone();
     blocking(move || {
         let operation = manager.begin(&root, &id())?;
@@ -111,7 +116,7 @@ pub async fn commit_local_changes(
 ) -> AppResult<GitOperation> {
     let s = storage.scoped(Some(&request.repository_id));
     let root = repositories::root(&s, &request.repository_id)?;
-    let _invalidation = storage.repository_cache.mutation(&root);
+    let _invalidation = storage.repository_cache.git_mutation(&root);
     let operation = manager.begin(&root, &request.operation_id)?;
     let reading_root = root.clone();
     let expected = request.index_version.clone();
@@ -193,7 +198,7 @@ pub async fn stage_local_files(
     staged: bool,
 ) -> AppResult<LocalGitState> {
     let root = repositories::root(&storage, &repository_id)?;
-    let _invalidation = storage.repository_cache.mutation(&root);
+    let _invalidation = storage.repository_cache.git_mutation(&root);
     let manager = manager.inner().clone();
     blocking(move || {
         let operation = manager.begin(&root, &id())?;

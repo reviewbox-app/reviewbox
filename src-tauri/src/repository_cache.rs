@@ -13,7 +13,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Notifier = Arc<dyn Fn(String) + Send + Sync>;
+mod events;
+
+type Notifier = Arc<dyn Fn(RepositoryReadChange) + Send + Sync>;
 
 #[derive(Default)]
 pub(crate) struct RepositoryCache {
@@ -77,7 +79,7 @@ impl Request {
     }
 }
 impl RepositoryCache {
-    pub fn set_notifier(&self, notify: impl Fn(String) + Send + Sync + 'static) {
+    pub fn set_notifier(&self, notify: impl Fn(RepositoryReadChange) + Send + Sync + 'static) {
         *self.notifier.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(notify));
     }
     pub fn begin(&self, id: &str) -> AppResult<Request> {
@@ -122,7 +124,48 @@ impl RepositoryCache {
             requests.insert(id.into(), Arc::new(AtomicBool::new(true)));
         }
     }
+    pub fn notify_editor_mutation(&self, root: &Path, mutation: &EditorMutation) {
+        // Invalidate native cached reads conservatively, but target UI consumers.
+        if let Some(entry) = self
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(root)
+        {
+            entry
+                .changes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .uncertain = true;
+        }
+        let (paths, tree) = match mutation {
+            EditorMutation::Save { path, .. } => (vec![path.clone()], false),
+            EditorMutation::Create { path, .. } | EditorMutation::Trash { path, .. } => {
+                (vec![path.clone()], true)
+            }
+            EditorMutation::Rename {
+                path, destination, ..
+            } => (vec![path.clone(), destination.clone()], true),
+        };
+        if let Some(notify) = self
+            .notifier
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            notify(RepositoryReadChange {
+                paths,
+                tree,
+                git: false,
+                full: false,
+                ..events::full(root)
+            });
+        }
+    }
     pub fn invalidate(&self, root: &Path) {
+        self.invalidate_with(root, events::full(root));
+    }
+    fn invalidate_with(&self, root: &Path, change: RepositoryReadChange) {
         if let Some(entry) = self
             .entries
             .lock()
@@ -140,7 +183,7 @@ impl RepositoryCache {
                 .unwrap_or_else(|e| e.into_inner())
                 .as_ref()
             {
-                notify(fingerprint(root.to_string_lossy().as_bytes()));
+                notify(change);
             }
         }
     }
@@ -214,45 +257,25 @@ fn watch(
     notify: Option<Notifier>,
 ) -> Option<notify::RecommendedWatcher> {
     let flags = changes;
+    let notify = notify.map(events::batched);
     let checkout = root.to_path_buf();
-    let repository_id = fingerprint(root.to_string_lossy().as_bytes());
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
-        let mut changed = false;
-        match event {
-            Ok(event) if !event.kind.is_access() => {
-                if event.need_rescan() {
+        let Some(change) = events::classify(&checkout, event) else {
+            return;
+        };
+        {
+            let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
+            flags.uncertain |= change.full;
+            for path in &change.paths {
+                if flags.paths.len() < 10000 {
+                    flags.paths.insert(checkout.join(path));
+                } else {
                     flags.uncertain = true;
                 }
-                for path in event.paths {
-                    if path
-                        .strip_prefix(&checkout)
-                        .is_ok_and(|p| p.starts_with(".reviewbox"))
-                    {
-                        continue;
-                    }
-                    // Lock files are transient, and are not source revisions.
-                    if path.extension().is_some_and(|e| e == "lock")
-                        && path.components().any(|c| c.as_os_str() == ".git")
-                    {
-                        continue;
-                    }
-                    changed = true;
-                    if flags.paths.len() < 10000 {
-                        flags.paths.insert(path);
-                    } else {
-                        flags.uncertain = true;
-                    }
-                }
             }
-            Err(_) => {
-                flags.uncertain = true;
-                changed = true;
-            }
-            _ => {}
         }
-        if changed && let Some(notify) = &notify {
-            notify(repository_id.clone());
+        if let Some(notify) = &notify {
+            notify(change);
         }
     })
     .ok();
@@ -385,6 +408,7 @@ pub(crate) fn inventory_fingerprint(root: &Path) -> AppResult<String> {
 pub(crate) struct Mutation {
     cache: Arc<RepositoryCache>,
     root: PathBuf,
+    git_only: bool,
 }
 impl RepositoryCache {
     pub fn mutation(self: &Arc<Self>, root: &Path) -> Mutation {
@@ -392,12 +416,35 @@ impl RepositoryCache {
         Mutation {
             cache: self.clone(),
             root: root.into(),
+            git_only: false,
+        }
+    }
+    pub fn git_mutation(self: &Arc<Self>, root: &Path) -> Mutation {
+        let change = RepositoryReadChange {
+            full: false,
+            ..events::full(root)
+        };
+        self.invalidate_with(root, change);
+        Mutation {
+            cache: self.clone(),
+            root: root.into(),
+            git_only: true,
         }
     }
 }
 impl Drop for Mutation {
     fn drop(&mut self) {
-        self.cache.invalidate(&self.root);
+        if self.git_only {
+            self.cache.invalidate_with(
+                &self.root,
+                RepositoryReadChange {
+                    full: false,
+                    ..events::full(&self.root)
+                },
+            );
+        } else {
+            self.cache.invalidate(&self.root);
+        }
     }
 }
 

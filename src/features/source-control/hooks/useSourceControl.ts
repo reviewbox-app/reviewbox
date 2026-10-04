@@ -1,4 +1,5 @@
 "use client"
+import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { LocalGitState } from "@/lib/desktop/contracts.generated"
 import { desktopAvailable, errorMessage } from "@/lib/desktop/review.commands"
@@ -66,25 +67,48 @@ export function useSourceControl(repositoryId: string | undefined) {
   useEffect(() => {
     if (!repositoryId || !desktopAvailable()) return
     let alive = true
-    let timer: ReturnType<typeof setTimeout>
+    let running = false
+    let queued = false
     const refresh = async () => {
+      if (!alive) return
+      if (running) {
+        queued = true
+        return
+      }
+      if (
+        document.visibilityState !== "visible" ||
+        gate.current.has(repositoryId)
+      )
+        return
+      running = true
       try {
-        if (!gate.current.has(repositoryId)) await reload()
+        await reload()
       } catch (cause) {
         if (alive) setError(errorMessage(cause))
+      } finally {
+        running = false
+        if (queued && alive) {
+          queued = false
+          void refresh()
+        }
       }
-      if (alive) timer = setTimeout(refresh, 2500)
     }
     void refresh()
     void fetch()
+    const unsubscribe = subscribeRepositoryReads(
+      repositoryId,
+      () => void refresh()
+    )
+    const timer = setInterval(() => void refresh(), 30000)
     const focus = () => {
       void fetch()
-      void reload().catch(() => {})
+      void refresh()
     }
     window.addEventListener("focus", focus)
     return () => {
       alive = false
-      clearTimeout(timer)
+      unsubscribe()
+      clearInterval(timer)
       window.removeEventListener("focus", focus)
     }
   }, [repositoryId, reload, fetch, setError])

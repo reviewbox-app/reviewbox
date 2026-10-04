@@ -121,9 +121,9 @@ export function useNewReviewWizard(
     const key = previewKey(request)
     const timer = setTimeout(async () => {
       reading.current = true
-      setPreviewing(true)
-      setVerified(false)
       const cached = previews.get(key)
+      if (!cached) setPreviewing(true)
+      setVerified(false)
       if (cached) setPreview(cached)
       try {
         operationId = crypto.randomUUID()
@@ -170,13 +170,16 @@ export function useNewReviewWizard(
   }, [request, refresh])
   useEffect(() => {
     const focus = () => {
-      if (!operation.current && !reading.current) {
-        setPreviewing(true)
+      if (
+        document.visibilityState === "visible" &&
+        !operation.current &&
+        !reading.current
+      ) {
         setRefresh((n) => n + 1)
       }
     }
     const unsubscribe = subscribeRepositoryReads(repositoryId, focus)
-    const interval = window.setInterval(focus, 5000)
+    const interval = window.setInterval(focus, 30000)
     window.addEventListener("focus", focus)
     return () => {
       unsubscribe()

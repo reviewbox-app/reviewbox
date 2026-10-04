@@ -37,7 +37,7 @@ export function CodeExplainWorkspace({
       if (running) return
       clearTimeout(timer)
       running = true
-      if (alive) setRefreshing(true)
+      if (alive && !displayed.current) setRefreshing(true)
       try {
         const value = await contextCommands.refresh(repositoryId)
         if (alive) {
@@ -52,7 +52,7 @@ export function CodeExplainWorkspace({
         running = false
         if (alive) {
           setRefreshing(false)
-          timer = setTimeout(refresh, 5000)
+          timer = setTimeout(refresh, 30000)
         }
       }
     }

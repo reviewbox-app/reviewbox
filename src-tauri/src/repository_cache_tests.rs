@@ -215,3 +215,36 @@ fn cached_preview_invalidates_stats_after_external_edit() {
     assert_ne!(updated.scopes[0].additions, cached.scopes[0].additions);
     storage.repository_cache.finish(&task);
 }
+
+#[test]
+fn explicit_editor_and_git_mutations_do_not_invalidate_unrelated_buffers() {
+    let (_dir, storage, repo) = fixture();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let received = events.clone();
+    storage
+        .repository_cache
+        .set_notifier(move |event| received.lock().unwrap().push(event));
+    let root = Path::new(&repo.path);
+    let _entry = storage.repository_cache.entry(&storage, root).unwrap();
+    storage.repository_cache.notify_editor_mutation(
+        root,
+        &EditorMutation::Save {
+            path: "file-1.txt".into(),
+            text: "changed".into(),
+            expected_revision: "old".into(),
+        },
+    );
+    let event = events.lock().unwrap().pop().unwrap();
+    assert_eq!(event.paths, ["file-1.txt"]);
+    assert!(!event.tree && !event.git && !event.full);
+    {
+        let _mutation = storage.repository_cache.git_mutation(root);
+    }
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(
+        events
+            .iter()
+            .all(|e| e.git && !e.full && e.paths.is_empty())
+    );
+}
