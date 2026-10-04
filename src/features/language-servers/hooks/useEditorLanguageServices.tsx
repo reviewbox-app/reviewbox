@@ -47,6 +47,11 @@ interface Binding {
 const bindings = new Map<string, Binding>()
 const targets = new Map<string, LanguageLocation>()
 const installed = new WeakSet<MonacoInstance>()
+const capturedSelector = [
+  "reviewbox",
+  "reviewbox-language",
+  "reviewbox-exploration",
+].map((scheme) => ({ scheme }))
 let refreshSemanticTokens: (() => void) | undefined
 const releaseTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let observers = 0
@@ -238,7 +243,7 @@ function installProviders(monaco: MonacoInstance) {
   installed.add(monaco)
   const semanticChanges = new monaco.Emitter<void>()
   refreshSemanticTokens = () => semanticChanges.fire()
-  monaco.languages.registerDocumentSemanticTokensProvider("*", {
+  monaco.languages.registerDocumentSemanticTokensProvider(capturedSelector, {
     onDidChange: semanticChanges.event,
     getLegend: () => ({
       tokenTypes: semanticTokenTypes,
@@ -267,7 +272,7 @@ function installProviders(monaco: MonacoInstance) {
       }
     },
   })
-  monaco.languages.registerHoverProvider("*", {
+  monaco.languages.registerHoverProvider(capturedSelector, {
     async provideHover(model, position, token) {
       const binding = bindings.get(model.uri.toString())
       if (!binding) return null
@@ -291,7 +296,7 @@ function installProviders(monaco: MonacoInstance) {
       }
     },
   })
-  monaco.languages.registerDefinitionProvider("*", {
+  monaco.languages.registerDefinitionProvider(capturedSelector, {
     async provideDefinition(model, position, token) {
       const binding = bindings.get(model.uri.toString())
       if (!binding) return null
@@ -305,7 +310,7 @@ function installProviders(monaco: MonacoInstance) {
       }
     },
   })
-  monaco.languages.registerReferenceProvider("*", {
+  monaco.languages.registerReferenceProvider(capturedSelector, {
     async provideReferences(model, position, _context, token) {
       const binding = bindings.get(model.uri.toString())
       if (!binding) return []
@@ -319,7 +324,7 @@ function installProviders(monaco: MonacoInstance) {
       }
     },
   })
-  monaco.languages.registerDocumentSymbolProvider("*", {
+  monaco.languages.registerDocumentSymbolProvider(capturedSelector, {
     displayName: "Captured source",
     async provideDocumentSymbols(model, token) {
       const binding = bindings.get(model.uri.toString())
@@ -391,6 +396,8 @@ export function useEditorLanguageServices(
   )
   const onMount = useCallback((editor: Editor, monaco: MonacoInstance) => {
     cleanup.current?.()
+    if (!documents.current.document && !documents.current.secondaryDocument)
+      return () => {}
     installProviders(monaco)
     const owner: Owner = {
       alive: true,

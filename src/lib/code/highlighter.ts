@@ -1,4 +1,8 @@
-import { createHighlighterCore, type HighlighterCore } from "shiki/core"
+import {
+  createHighlighterCore,
+  type LanguageRegistration,
+  type HighlighterCore,
+} from "shiki/core"
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript"
 import { bundledLanguages, type BundledLanguage } from "shiki/langs"
 import type * as Monaco from "monaco-editor/editor/editor.api"
@@ -10,6 +14,7 @@ import { tokenizePseudoLine, type PseudoState } from "./pseudocode"
 let highlighter: Promise<HighlighterCore> | undefined
 const languages = new Map<string, Promise<void>>()
 let refreshMonaco: (() => void) | undefined
+const customGrammars = new Map<string, LanguageRegistration>()
 let restoreMonacoTheme: (() => void) | undefined
 
 export function getCodeHighlighter() {
@@ -31,7 +36,12 @@ export async function ensureCodeLanguage(input: string | undefined) {
   if (!loading) {
     loading = (async () => {
       const engine = await getCodeHighlighter()
-      await engine.loadLanguage(bundledLanguages[id as BundledLanguage])
+      if (!engine.getLoadedLanguages().includes(id)) {
+        const language =
+          customGrammars.get(id) ?? bundledLanguages[id as BundledLanguage]
+        if (!language) return
+        await engine.loadLanguage(language)
+      }
       refreshMonaco?.()
     })().catch((error: unknown) => {
       languages.delete(id)
@@ -48,8 +58,9 @@ export async function highlightCode(
   input: string | undefined,
   theme: string
 ) {
-  const language = await ensureCodeLanguage(input)
+  let language = await ensureCodeLanguage(input)
   const engine = await getCodeHighlighter()
+  if (!engine.getLoadedLanguages().includes(language)) language = "plaintext"
   const result = engine.codeToTokens(source, {
     lang: language === "plaintext" ? "text" : language,
     theme,
@@ -157,4 +168,26 @@ export async function initializeCodeHighlighting(monaco: typeof Monaco) {
   }
   refreshMonaco()
   registerPseudoLanguage(monaco)
+}
+
+/** Manifest grammars are local data and are only loaded when the language is opened. */
+export function configureCustomGrammars(grammars: LanguageRegistration[]) {
+  const changed = new Set([
+    ...customGrammars.keys(),
+    ...grammars.map((g) => g.name),
+  ])
+  customGrammars.clear()
+  for (const grammar of grammars) customGrammars.set(grammar.name, grammar)
+  for (const id of changed) languages.delete(id)
+  if (highlighter)
+    void highlighter
+      .then(async (engine) => {
+        for (const id of changed) {
+          if (!engine.getLoadedLanguages().includes(id)) continue
+          const grammar = customGrammars.get(id)
+          if (grammar) await engine.loadLanguage(grammar)
+        }
+        refreshMonaco?.()
+      })
+      .catch(() => {})
 }
