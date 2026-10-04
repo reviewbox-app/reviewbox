@@ -8,6 +8,7 @@ import type {
   ReviewAction,
   ReadingPosition,
   Workspace,
+  ReviewNotificationTarget,
 } from "@/lib/desktop/contracts.generated"
 import {
   desktopAvailable,
@@ -16,6 +17,7 @@ import {
   setActiveRepository,
 } from "@/lib/desktop/review.commands"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
+import { loadReviewNotification } from "@/features/notifications/services/reviewNotifications"
 import {
   anchorFor,
   nextReaderTarget,
@@ -164,6 +166,34 @@ export function useReviewSession() {
       setError(errorMessage(e))
     }
   }, [open])
+  const openNotification = useCallback(
+    async (target: ReviewNotificationTarget) => {
+      await mutations.current
+      const request = ++generation.current
+      setBusy(true)
+      setError("")
+      try {
+        const {
+          repositories: repos,
+          repository: repo,
+          workspace: value,
+        } = await loadReviewNotification(target)
+        if (generation.current !== request) return null
+        setActiveRepository(repo.id)
+        setRepositories(repos)
+        setRepository(repo)
+        setNewReview(false)
+        install(value)
+        return value
+      } catch (error) {
+        if (generation.current !== request) return null
+        throw error
+      } finally {
+        if (generation.current === request) setBusy(false)
+      }
+    },
+    [install]
+  )
   const load = useCallback(
     async (id: string) => {
       await mutations.current
@@ -534,6 +564,7 @@ export function useReviewSession() {
     setNewReview,
     setError,
     open,
+    openNotification,
     choose,
     load,
     create,

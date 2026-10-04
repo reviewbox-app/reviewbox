@@ -74,8 +74,11 @@ impl Drop for PreparationFinished {
         self.0.store(true, Ordering::Release);
     }
 }
+type ReadyNotifier = Arc<dyn Fn(ReviewNotificationTarget) + Send + Sync>;
 #[derive(Clone)]
 pub(crate) struct PreparationManager {
+    diagnostics: Option<Arc<crate::diagnostics::Diagnostics>>,
+    ready_notifier: Option<ReadyNotifier>,
     active: Arc<Mutex<HashMap<String, Active>>>,
     paused: Arc<Mutex<HashSet<String>>>,
     stopping: Arc<AtomicBool>,
@@ -86,6 +89,8 @@ pub(crate) struct PreparationManager {
 impl Default for PreparationManager {
     fn default() -> Self {
         Self {
+            ready_notifier: None,
+            diagnostics: None,
             active: Default::default(),
             paused: Default::default(),
             stopping: Default::default(),
@@ -96,6 +101,51 @@ impl Default for PreparationManager {
     }
 }
 impl PreparationManager {
+    pub(crate) fn with_diagnostics(
+        mut self,
+        diagnostics: Arc<crate::diagnostics::Diagnostics>,
+    ) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self
+    }
+    pub(crate) fn with_ready_notifier(
+        notify: impl Fn(ReviewNotificationTarget) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            ready_notifier: Some(Arc::new(notify)),
+            ..Self::default()
+        }
+    }
+
+    fn notify_ready(&self, repository_id: &str, state: &PreparationState) {
+        if state.status == PreparationStatus::Ready
+            && let Some(notify) = &self.ready_notifier
+        {
+            notify(ReviewNotificationTarget {
+                operation_id: state.id.clone(),
+                repository_id: repository_id.into(),
+                review_id: state.adaptation.as_ref().map_or_else(
+                    || state.review_id.clone(),
+                    |update| update.destination_review_id.clone(),
+                ),
+            });
+        }
+    }
+
+    async fn record_failure(
+        &self,
+        repository_id: &str,
+        state: &PreparationState,
+        error: &mut AppError,
+    ) {
+        if let Some(log) = self.diagnostics.clone() {
+            let input = crate::diagnostics::preparation_input(repository_id, state, error);
+            if let Ok(Ok(entry)) = tokio::task::spawn_blocking(move || log.record(input)).await {
+                error.diagnostic_id = Some(entry.id);
+            }
+        }
+    }
+
     pub(crate) fn start(
         &self,
         storage: Storage,
@@ -524,6 +574,18 @@ impl PreparationManager {
                 )
             });
             run.checkpoint.state.error = result.err();
+            if run.checkpoint.state.status == PreparationStatus::Failed
+                && let Some(mut error) = run.checkpoint.state.error.take()
+            {
+                run.manager
+                    .record_failure(
+                        &run.checkpoint.repository_id,
+                        &run.checkpoint.state,
+                        &mut error,
+                    )
+                    .await;
+                run.checkpoint.state.error = Some(error);
+            }
             run.checkpoint.state.updated_at = now();
             if run.checkpoint.state.status == PreparationStatus::Ready
                 && run.checkpoint.state.adaptation.is_some()
@@ -532,13 +594,23 @@ impl PreparationManager {
             }
             let saved = run.save_checkpoint().await;
             drop(lease);
-            if let Err(error) = saved {
+            if let Err(mut error) = saved {
+                run.manager
+                    .record_failure(
+                        &run.checkpoint.repository_id,
+                        &run.checkpoint.state,
+                        &mut error,
+                    )
+                    .await;
                 run.update(|state| {
                     state.status = PreparationStatus::Failed;
                     state.error = Some(error);
                 });
             } else {
                 run.update(|state| *state = run.checkpoint.state.clone());
+                // The review and its final checkpoint are durable before notifying.
+                run.manager
+                    .notify_ready(&run.checkpoint.repository_id, &run.checkpoint.state);
             }
         });
     }

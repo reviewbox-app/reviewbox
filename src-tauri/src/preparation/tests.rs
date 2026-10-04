@@ -22,6 +22,64 @@ fn state() -> PreparationState {
     }
 }
 #[test]
+fn ready_notifications_exclude_non_success_and_follow_adaptation_destinations() {
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let observed = notices.clone();
+    let manager = PreparationManager::with_ready_notifier(move |target| {
+        observed.lock().unwrap().push(target)
+    });
+    let mut preparation = state();
+    for status in [
+        PreparationStatus::Running,
+        PreparationStatus::Failed,
+        PreparationStatus::Cancelled,
+        PreparationStatus::Interrupted,
+    ] {
+        preparation.status = status;
+        manager.notify_ready("checkout", &preparation);
+    }
+    assert!(notices.lock().unwrap().is_empty());
+    preparation.status = PreparationStatus::Ready;
+    manager.notify_ready("checkout", &preparation);
+    preparation.adaptation = Some(ReviewAdaptation {
+        operation_id: "update".into(),
+        provider: "claude".into(),
+        source_review_id: "review".into(),
+        source_revision: 1,
+        snapshot_id: "snapshot".into(),
+        candidate_review_id: "private-candidate".into(),
+        destination_review_id: "published-fork".into(),
+        retained_steps: 0,
+        rewritten_steps: 1,
+        added_steps: 0,
+        removed_steps: 0,
+    });
+    manager.notify_ready("checkout", &preparation);
+    let received = notices.lock().unwrap();
+    assert_eq!(received.len(), 2);
+    assert_eq!(received[0].review_id, "review");
+    assert_eq!(received[1].review_id, "published-fork");
+    assert_eq!(received[1].repository_id, "checkout");
+}
+
+#[test]
+fn unavailable_error_log_does_not_replace_a_preparation_failure() {
+    tauri::async_runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-directory");
+        std::fs::write(&path, "occupied").unwrap();
+        let manager = PreparationManager::default()
+            .with_diagnostics(Arc::new(crate::diagnostics::Diagnostics::new(path)));
+        let mut error = AppError::new("provider_quota", "Usage limit reached")
+            .with_details("Limit reached before the next batch.");
+        manager.record_failure("repo", &state(), &mut error).await;
+        assert_eq!(error.code, "provider_quota");
+        assert!(error.details.unwrap().contains("next batch"));
+        assert!(error.diagnostic_id.is_none());
+    });
+}
+
+#[test]
 fn progress_is_bounded_sequenced_and_independent_of_subscribers() {
     let manager = PreparationManager::default();
     manager.active.lock().unwrap().insert(
@@ -602,7 +660,20 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
         tauri::async_runtime::block_on(async {
             let (dir, storage, workspace) = fixture();
             fs::write(dir.path().join("pause"), "").unwrap();
-            let manager = PreparationManager::default();
+            let (notifications, received) = std::sync::mpsc::channel();
+            let notification_storage = storage.clone();
+            let manager = PreparationManager::with_ready_notifier(move |target| {
+                let checkpoint: Checkpoint = notification_storage
+                    .get(
+                        KIND,
+                        &format!("{}:{}", target.repository_id, target.review_id),
+                    )
+                    .unwrap();
+                assert_eq!(checkpoint.state.status, PreparationStatus::Ready);
+                let review = reviews::load(&notification_storage, &target.review_id).unwrap();
+                assert!(!review.review.topics.is_empty());
+                notifications.send(target).unwrap();
+            });
             let started = manager
                 .start(
                     storage.clone(),
@@ -634,6 +705,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
             })
             .await;
             assert_eq!(cancelled.status, PreparationStatus::Cancelled);
+            assert!(received.try_recv().is_err());
             assert!(cancelled.completed_batches >= 1);
             fs::remove_file(dir.path().join("pause")).unwrap();
             manager
@@ -645,6 +717,9 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
             .await;
             assert_eq!(ready.status, PreparationStatus::Ready, "{:?}", ready.error);
             assert_eq!(ready.id, started.id);
+            let notified = received.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(notified.operation_id, ready.id);
+            assert_eq!(notified.review_id, workspace.review.id);
             let review = reviews::load(&storage, &workspace.review.id)
                 .unwrap()
                 .review;
@@ -657,6 +732,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
                 .resume(storage.clone(), resources(), &workspace.review.id)
                 .unwrap();
             assert_eq!(fs::read_to_string(dir.path().join("calls")).unwrap(), calls);
+            assert!(received.try_recv().is_err());
             assert_eq!(
                 reviews::load(&storage, &workspace.review.id)
                     .unwrap()
@@ -671,7 +747,10 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
         tauri::async_runtime::block_on(async {
             let (dir, storage, workspace) = fixture();
             fs::write(dir.path().join("invalid"), "").unwrap();
-            let manager = PreparationManager::default();
+            let log_path = dir.path().join("error-log");
+            let manager = PreparationManager::default().with_diagnostics(Arc::new(
+                crate::diagnostics::Diagnostics::new(log_path.clone()),
+            ));
             manager
                 .start(
                     storage.clone(),
@@ -687,6 +766,14 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
             })
             .await;
             assert_eq!(failed.status, PreparationStatus::Failed);
+            let error = failed.error.as_ref().unwrap();
+            let records = fs::read_to_string(log_path.join("errors.jsonl")).unwrap();
+            let logged: DiagnosticEntry =
+                serde_json::from_str(records.lines().last().unwrap()).unwrap();
+            assert_eq!(error.diagnostic_id.as_deref(), Some(logged.id.as_str()));
+            assert_eq!(logged.error.context["reviewId"], workspace.review.id);
+            assert_eq!(logged.error.context["operationId"], failed.id);
+            assert_eq!(logged.error.code, error.code);
             assert!(failed.can_resume);
             assert!(failed.completed_batches >= 1);
             assert_eq!(
