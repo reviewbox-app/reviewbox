@@ -41,3 +41,4 @@ next-env.d.ts
 /public/monaco/
 /public/file-icons/
 /artifacts/
+/.reviewbox-build-lock/

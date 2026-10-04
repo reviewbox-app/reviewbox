@@ -7,7 +7,7 @@
     "dev": "bun run tauri dev",
     "dev:web": "bun run icons:build && bun run workers:build && bun --bun next dev --hostname 127.0.0.1 --port 1420",
     "build": "bun run tauri build",
-    "build:web": "bun run icons:build && bun run workers:build && bun --bun next build",
+    "build:web": "bun scripts/build-guard.ts web",
     "build:validation": "bun scripts/build-validation.ts",
     "workers:build": "bun scripts/build-monaco-workers.ts",
     "lint": "bun --bun eslint . --max-warnings 0",
@@ -17,7 +17,7 @@
     "typecheck": "bun --bun next typegen && bun --bun tsc --noEmit",
     "rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings",
     "check": "bun run contracts:check && bun run schemas:check && bun run typecheck && bun run lint && bun run format:check && bun run rust:check",
-    "tauri": "bun --bun node_modules/@tauri-apps/cli/tauri.js",
+    "tauri": "bun scripts/build-guard.ts tauri",
     "contracts:generate": "bun scripts/export-contracts.ts",
     "contracts:check": "bun scripts/export-contracts.ts --check",
     "test": "bun test",
@@ -56,7 +56,10 @@
     "test:ui:languages": "bun scripts/test-ui-languages.ts",
     "test:ui:code-colors": "bun scripts/test-ui-code-colors.ts",
     "test:ui:block-diff": "bun scripts/test-ui-block-diff.ts",
-    "app-icons:build": "bun scripts/build-app-icons.ts"
+    "app-icons:build": "bun scripts/build-app-icons.ts",
+    "build:storage": "bun scripts/build-guard.ts report",
+    "build:clean": "bun scripts/build-guard.ts clean",
+    "test:build-storage": "bun test ./scripts/build-storage.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

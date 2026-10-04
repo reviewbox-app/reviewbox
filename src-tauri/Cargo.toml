@@ -6,6 +6,12 @@ edition = "2024"
 rust-version = "1.95"
 publish = false
 
+# Keep useful backtraces without full type/variable debug information. Tests
+# inherit this profile. Reuse dependencies, but avoid growing incremental caches.
+[profile.dev]
+debug = 1
+incremental = false
+
 [lib]
 name = "reviewbox_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
