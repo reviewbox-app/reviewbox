@@ -14,11 +14,14 @@ const send=value=>{const data=Buffer.from(JSON.stringify({jsonrpc:'2.0',...value
 for await(const chunk of process.stdin){buffer=Buffer.concat([buffer,chunk]);while(true){
 const split=buffer.indexOf('\\r\\n\\r\\n');if(split<0)break;const length=Number(buffer.subarray(0,split).toString().match(/Content-Length:\\s*(\\d+)/i)?.[1]);if(buffer.length<split+4+length)break;
 const {id,method,params}=JSON.parse(buffer.subarray(split+4,split+4+length));buffer=buffer.subarray(split+4+length);
-appendFileSync(${JSON.stringify(calls)},JSON.stringify({method,params})+'\\n');
+appendFileSync(${JSON.stringify(calls)},JSON.stringify({pid:process.pid,method,params,text:opened.get(params?.textDocument?.uri)?.text})+'\\n');
 if(method==='textDocument/didOpen')opened.set(params.textDocument.uri,params.textDocument);
 if(method==='textDocument/didChange'){const doc=opened.get(params.textDocument.uri);doc.text=params.contentChanges[0].text;doc.version=params.textDocument.version;send({method:'textDocument/publishDiagnostics',params:{uri:doc.uri,version:doc.version,diagnostics:[{range:{start:{line:0,character:0},end:{line:0,character:5}},message:'Live draft diagnostic',severity:2}]}})}
 if(id===undefined)continue;let result=null;
-if(method==='initialize')result={capabilities:{positionEncoding:'utf-16',textDocumentSync:{openClose:true,change:1,save:true},completionProvider:{},definitionProvider:true,renameProvider:true,documentFormattingProvider:true,hoverProvider:true}};
+if(method==='initialize')result={capabilities:{positionEncoding:'utf-16',textDocumentSync:{openClose:true,change:1,save:true},completionProvider:{},definitionProvider:true,renameProvider:true,documentFormattingProvider:true,codeActionProvider:{codeActionKinds:['source.organizeImports']},hoverProvider:true}};
+const fullEdit=(uri,text)=>{const lines=(opened.get(uri)?.text??'').split('\\n');return {range:{start:{line:0,character:0},end:{line:lines.length-1,character:lines.at(-1).length}},newText:text}};
+if(method==='textDocument/codeAction'){const uri=params.textDocument.uri,text=opened.get(uri)?.text??'';result=text.includes('savePipeline')?[{title:'Organize fixture imports',kind:'source.organizeImports',edit:{changes:{[uri]:[fullEdit(uri,text.replace('savePipeline','importsApplied'))]}}}]:[]}
+if(method==='textDocument/formatting'){const uri=params.textDocument.uri,text=opened.get(uri)?.text??'';result=text.includes('importsApplied')?[fullEdit(uri,text.replace('importsApplied','formattedAfterImports'))]:[]}
 if(method==='textDocument/hover')result={contents:'Example hover from the running server'};
 if(method==='textDocument/completion')result=[{label:opened.get(params.textDocument.uri)?.text.includes('draft')?'unsavedMember':'diskMember',kind:5}];
 if(method==='textDocument/definition')result={uri:params.textDocument.uri.replace(/main\\.exdsl$/,'sibling.exdsl'),range:{start:{line:0,character:0},end:{line:0,character:5}}};
@@ -45,7 +48,8 @@ send({id,result});
           aliases: [],
         },
       ],
-      rootMarkers: [],
+      rootMarkers: ["example.config.json"],
+      watchedFiles: ["**/*.exdsl", "**/example.config.json"],
       server: {
         installation: { kind: "executable", executable },
         arguments: [],

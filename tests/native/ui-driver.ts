@@ -129,8 +129,24 @@ export class NativeUI {
     )["element-6066-11e4-a52e-4f735466cecf"]
   }
   async click(selector: string) {
-    const id = await this.element(selector)
-    await this.request(this.route(`/element/${id}/click`), {})
+    for (let attempt = 0; ; attempt++) {
+      const id = await this.element(selector)
+      try {
+        await this.request(this.route(`/element/${id}/click`), {})
+        break
+      } catch (error) {
+        // The driver rejects a detached element before dispatching the click.
+        // Re-resolve it once after a background render; never retry a sent action.
+        if (
+          attempt ||
+          !String(error).includes('"error":"stale element reference"')
+        )
+          throw error
+        await this.execute(
+          `const errors=window.__uiErrors??[];const index=errors.lastIndexOf('Error: stale element reference');if(index>=0)errors.splice(index,1);return true`
+        )
+      }
+    }
     await Bun.sleep(80)
   }
   async named(name: string, selector = "button", exact = true) {
@@ -201,6 +217,85 @@ export class NativeUI {
     })
     await this.request(this.route("/actions"), undefined, "DELETE")
     await Bun.sleep(150)
+  }
+  /** Exercise WebView keyboard handlers with the modifier flags lost by WDIO. */
+  async shortcut(key: string, shift = false) {
+    await this.execute(
+      `const e=document.activeElement || document.body;
+       for(const type of ['keydown','keyup']) e.dispatchEvent(new KeyboardEvent(type,{
+         key:arguments[0],code:'Key'+arguments[0].toUpperCase(),keyCode:arguments[0].toUpperCase().charCodeAt(0),
+         which:arguments[0].toUpperCase().charCodeAt(0),metaKey:true,shiftKey:arguments[1],bubbles:true,cancelable:true
+       }));return true`,
+      [key, shift]
+    )
+  }
+  /** Native menus are outside the WebView; target the isolated test process. */
+  async nativeMenu(menu: string, item: string) {
+    assert.equal(
+      process.platform,
+      "darwin",
+      "Native menu validation requires macOS"
+    )
+    assert(this.child, "Start the validation process before using its menu")
+    await this.until(
+      "!document.querySelector('[role=dialog], [role=alertdialog]')",
+      "close dialog before native menu action"
+    )
+    const result = Bun.spawn(
+      [
+        "osascript",
+        "-e",
+        `on run argv
+        set targetPid to (item 1 of argv) as integer
+        set menuName to item 2 of argv
+        set itemName to item 3 of argv
+        with timeout of 12 seconds
+          tell application "System Events"
+            tell (first application process whose unix id is targetPid)
+              set frontmost to true
+              repeat 50 times
+                if enabled of menu bar item menuName of menu bar 1 then exit repeat
+                delay 0.1
+              end repeat
+              click menu bar item menuName of menu bar 1
+              repeat 50 times
+                if enabled of menu item itemName of menu 1 of menu bar item menuName of menu bar 1 then exit repeat
+                delay 0.1
+              end repeat
+              click menu item itemName of menu 1 of menu bar item menuName of menu bar 1
+              -- AXPress returns while Cocoa can still be tracking the menu.
+              -- A subsequent WebDriver DOM click can cancel that selection.
+              -- Wait for native closure, never for product state or a fixed delay.
+              set menuClosed to false
+              repeat 100 times
+                if not (exists menu 1 of menu bar item menuName of menu bar 1) then
+                  set menuClosed to true
+                  exit repeat
+                end if
+                set menuSize to size of menu 1 of menu bar item menuName of menu bar 1
+                if item 1 of menuSize is 0 and item 2 of menuSize is 0 then
+                  set menuClosed to true
+                  exit repeat
+                end if
+                delay 0.02
+              end repeat
+              if not menuClosed then error "Native menu did not close after selection."
+            end tell
+          end tell
+        end timeout
+      end run`,
+        String(this.child.pid),
+        menu,
+        item,
+      ],
+      { stdout: "pipe", stderr: "pipe" }
+    )
+    const error = await new Response(result.stderr).text()
+    assert.equal(
+      await result.exited,
+      0,
+      `Cannot complete native ${menu} > ${item}. Check macOS Accessibility permission and menu completion: ${error}`
+    )
   }
   async select(selector: string, label: string) {
     await this.click(selector)
