@@ -619,3 +619,40 @@ fn committing_a_publication_updates_local_get_and_list_associations_without_bund
     );
     assert_eq!(directory_bytes(&directory), original);
 }
+
+#[test]
+fn publication_verifies_large_capture_with_git_and_shared_delta_pack() {
+    let (_dir, storage, repo) = fixture();
+    let root = Path::new(&repo.path);
+    for i in 0..512 {
+        fs::write(
+            root.join(format!("source-{i}.ts")),
+            format!("export const value = {i};\n"),
+        )
+        .unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "many sources"]);
+    for i in 0..32 {
+        fs::write(
+            root.join(format!("source-{i}.ts")),
+            format!("export const value = {i};\n// changed\n"),
+        )
+        .unwrap();
+    }
+    let workspace = capture(&storage, &repo);
+    let index = git(root, &["write-tree"]);
+    let started = std::time::Instant::now();
+    let published = complete(&storage, &workspace);
+    eprintln!(
+        "Published {} sources in {:?}",
+        published.snapshot.files.len(),
+        started.elapsed()
+    );
+    assert_eq!(git(root, &["write-tree"]), index);
+    clear_source_cache(&storage);
+    assert_eq!(
+        snapshot_bytes(&storage, &published.snapshot),
+        snapshot_bytes(&storage, &workspace.snapshot)
+    );
+}

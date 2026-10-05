@@ -602,14 +602,14 @@ struct GitObject {
 
 /// One read-only cat-file process per operation; source paths never enter a
 /// shell and lazy object fetching/replacement objects are explicitly disabled.
-struct GitObjects {
+pub(super) struct GitObjects {
     child: Child,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
 }
 
 impl GitObjects {
-    fn new(root: &Path) -> AppResult<Self> {
+    pub(super) fn new(root: &Path) -> AppResult<Self> {
         let mut child = Command::new("git")
             .args([
                 "--no-optional-locks",
@@ -642,6 +642,18 @@ impl GitObjects {
             input,
             output,
         })
+    }
+
+    pub(super) fn blob(&mut self, oid: &str, limit: usize) -> AppResult<Vec<u8>> {
+        valid_oid(oid)?;
+        self.object(oid, "blob", limit)?
+            .map(|object| object.bytes)
+            .ok_or_else(|| {
+                AppError::new(
+                    "missing_git_object",
+                    format!("Git source {oid} is unavailable."),
+                )
+            })
     }
 
     fn object(
