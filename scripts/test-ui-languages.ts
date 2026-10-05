@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { join } from "node:path"
+import catalogue from "../resources/languages/catalogue.json"
 import { NativeUI, fixture } from "../tests/native/ui-driver"
 
 const f = await fixture()
@@ -35,7 +36,7 @@ const mark = (next: string) => {
   console.log(`Native settings: ${phase}`)
 }
 const selectedCodeTheme = (name: string) =>
-  `[...document.querySelectorAll('[role=tab]')].some(e=>e.textContent===${JSON.stringify(name)} && e.getAttribute('aria-selected')==='true')`
+  `document.querySelector('[aria-label="Code theme"]')?.textContent.includes(${JSON.stringify(name)})`
 const waitCodeTheme = async (name: string, value: string) => {
   await ui.until(selectedCodeTheme(name), `${phase}: ${name} selected`)
   // Verify acknowledged native persistence before destroying its owner window.
@@ -56,7 +57,7 @@ const openSettings = async () => {
     "settings window"
   )
   await ui.request(ui.route("/window"), { handle: "settings" })
-  await ui.has("Code colors")
+  await ui.has("Code theme")
   await ui.execute(`window.BASE_UI_ANIMATIONS_DISABLED=true;
     if(!window.__settingsFrames){
       const frame=window.requestAnimationFrame.bind(window),cancel=window.cancelAnimationFrame.bind(window);
@@ -85,24 +86,24 @@ try {
   mark("initial Tokyo Night preference")
   await waitCodeTheme("Tokyo Night", "tokyo-night")
   mark("switch to ReviewBox")
-  await ui.named("ReviewBox", '[role="tab"]')
+  await ui.select('[aria-label="Code theme"]', "ReviewBox")
   await waitCodeTheme("ReviewBox", "reviewbox")
   mark("close and reopen settings")
   await ui.request(ui.route("/window"), undefined, "DELETE")
   await ui.request(ui.route("/window"), { handle: "main" })
   await openSettings()
   await waitCodeTheme("ReviewBox", "reviewbox")
-  mark("restore Tokyo Night and import icons")
-  await ui.named("Tokyo Night", '[role="tab"]')
+  mark("restore Tokyo Night and verify bundled icons")
+  await ui.select('[aria-label="Code theme"]', "Tokyo Night")
   await waitCodeTheme("Tokyo Night", "tokyo-night")
-  await ui.named("Import VS Code icons")
-  await ui.until(
-    "![...document.querySelectorAll('button')].find(e=>e.textContent==='Import VS Code icons')?.disabled"
-  )
+  assert(!(await ui.text()).includes("Import VS Code"))
+  await ui.has("Included for everyone")
   await ui.screenshot("code-appearance-dark")
   mark("catalogue and installation")
   await ui.named("Languages", "nav button")
-  await ui.until("document.querySelectorAll('[data-server-id]').length === 22")
+  await ui.until(
+    `document.querySelectorAll('[data-server-id]').length === ${catalogue.length}`
+  )
   await ui.fill('[aria-label="Search languages"]', "TypeScript")
   await ui.has("Recommended")
   assert(
@@ -157,7 +158,7 @@ try {
   )
   assert.deepEqual(await ui.execute("return window.__uiErrors ?? []"), [])
   console.log(
-    "Native appearance persistence, icon import, 22-entry catalogue, real TypeScript installation, enable/disable/remove, cancellation and narrow/light/dark layouts passed."
+    "Native appearance persistence, bundled icons, language catalogue, real TypeScript installation, enable/disable/remove, cancellation and narrow/light/dark layouts passed."
   )
 } catch (error) {
   console.error("Fixture root:", f.root)

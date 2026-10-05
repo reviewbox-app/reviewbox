@@ -13,6 +13,8 @@ let originalTheme: "Dark" | "Light" | "System" | undefined
 const harness = await createPreparationHarness(f.root, false, 2)
 const lsp = await createLanguageHarness(f.root)
 const source = `export function renderUser(userId: string): string {
+  // neutral comment
+  /** documentation */
   const state = { loading: false, label: "hello" };
   return state.loading ? "Loading..." : userId + "${"a readable value ".repeat(55)}";
 }
@@ -82,6 +84,7 @@ try {
   await ui.named("or enter a path")
   await ui.fill('[aria-label="Repository path"]', f.repo)
   await ui.named("Open")
+  await ui.has("Read your changes")
   await ui.reviewScope()
   await ui.nextReviewStep()
   await ui.named("With Rev", "label", false)
@@ -107,6 +110,14 @@ try {
   await ui.wait(async () => (await colors()).length >= 5, "rich source colors")
   for (const name of ["Dark", "Light"] as const) {
     await theme(name)
+    await ui.resize(1440, 900)
+    await ui.wait(
+      async () =>
+        (await ui.execute<string>(
+          `const comment=[...document.querySelectorAll('${editorSelector} .view-line span')].find(e=>!e.querySelector('span')&&e.textContent.includes('neutral'));return comment ? getComputedStyle(comment).color : null`
+        )) === (name === "Dark" ? "rgb(145, 145, 145)" : "rgb(140, 140, 140)"),
+      "captured source comment color"
+    )
     for (const width of [1440, 800]) {
       await ui.resize(width, 900)
       await ui.until(
@@ -132,8 +143,14 @@ try {
   )
   await settings()
   await ui.named("General", "nav button")
-  await ui.named("ReviewBox", '[role="tab"]')
+  await ui.select('[aria-label="Code font"]', "Menlo")
+  await ui.select('[aria-label="Code font weight"]', "700 · Bold")
+  await ui.select('[aria-label="Code theme"]', "ReviewBox")
   await main()
+  await ui.until(
+    `Array.from(document.querySelectorAll('.block-diff .view-lines')).every(e=>getComputedStyle(e).fontFamily.includes('Menlo')&&getComputedStyle(e).fontWeight==='700')`,
+    "shared typography in main and comparison code"
+  )
   await ui.wait(
     async () => (await colors()).includes("rgb(143, 176, 255)"),
     "ReviewBox code color preference applies to an existing editor"
@@ -145,7 +162,7 @@ try {
     background
   )
   await settings()
-  await ui.named("Tokyo Night", '[role="tab"]')
+  await ui.select('[aria-label="Code theme"]', "Tokyo Night")
   await main()
   await ui.wait(
     async () => (await colors()).includes("rgb(187, 154, 247)"),
@@ -165,6 +182,10 @@ try {
   await ui.named("src/other.ts:1", '[aria-label="Source locations"] button')
   await ui.until(
     'document.querySelector("[role=dialog] .view-lines")?.textContent.includes("other")'
+  )
+  await ui.until(
+    `getComputedStyle(document.querySelector('[role=dialog] .view-lines')).fontFamily.includes('Menlo')&&getComputedStyle(document.querySelector('[role=dialog] .view-lines')).fontWeight==='700'`,
+    "new captured exploration inherits code typography"
   )
   const captured = await ui.execute<string>(
     'return document.querySelector("[role=dialog] .view-lines").textContent'
@@ -196,7 +217,7 @@ try {
   assert(methods.includes("textDocument/definition"))
   assert.deepEqual(await ui.execute("return window.__uiErrors"), [])
   console.log(
-    "Native code colors: Tokyo Night/ReviewBox, light/dark,  wrapping, Material headers, snapshot LSP and multiple read-only definitions passed."
+    "Native code colors: Tokyo Night/ReviewBox, light/dark comments, shared typography, wrapping, Material headers, snapshot LSP and multiple read-only definitions passed."
   )
 } catch (error) {
   console.error(await readFile(lsp.calls, "utf8").catch(() => "No LSP call"))
@@ -204,7 +225,7 @@ try {
   console.error(
     await ui
       .execute(
-        `return [...document.querySelectorAll('.monaco-editor, .monaco-diff-editor, .view-lines')].map(e=>({tag:e.tagName,class:e.className,parent:e.parentElement.className, text:e.classList.contains('view-lines')?e.textContent.slice(0,150):''}))`
+        `return [...document.querySelectorAll('.monaco-editor, .monaco-diff-editor, .view-lines')].map(e=>({tag:e.tagName,class:e.className,parent:e.parentElement.className,font:getComputedStyle(e).fontFamily,weight:getComputedStyle(e).fontWeight,text:e.classList.contains('view-lines')?e.textContent.slice(0,150):''}))`
       )
       .catch(() => [])
   )

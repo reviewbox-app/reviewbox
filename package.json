@@ -61,7 +61,9 @@
     "test:ui:block-diff": "bun scripts/test-ui-block-diff.ts",
     "app-icons:build": "bun scripts/build-app-icons.ts",
     "test:ui:code-editor": "bun scripts/test-ui-code-editor.ts",
-    "test:ui:editor-languages": "bun scripts/test-ui-editor-languages.ts"
+    "test:ui:editor-languages": "bun scripts/test-ui-editor-languages.ts",
+    "test:editor-extensions": "bun scripts/test-editor-extensions.ts",
+    "test:ui:editor-extensions": "bun scripts/test-ui-editor-extensions.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
