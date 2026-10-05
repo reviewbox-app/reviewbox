@@ -36,6 +36,13 @@ pub(crate) fn detect_language<'a>(
         .find(|language| language.filenames.iter().any(|p| matches_name(p, name)))
         .or_else(|| {
             name.rsplit_once('.').and_then(|(_, extension)| {
+                // Captured reviews retain their historical language selection.
+                // Live buffers send the explicit, ambiguity-aware language ID.
+                if extension.eq_ignore_ascii_case("h")
+                    && let Some(cpp) = languages.iter().find(|l| l.id == "cpp")
+                {
+                    return Some(cpp);
+                }
                 languages.iter().find(|language| {
                     language
                         .extensions
@@ -107,6 +114,11 @@ pub(crate) fn validate(pack: &LanguagePack) -> AppResult<()> {
             return Err(invalid("Root markers must be file names."));
         }
     }
+    for pattern in pack.watched_files.iter().flatten() {
+        if pattern.len() > 1024 || globset::Glob::new(pattern).is_err() {
+            return Err(invalid("Invalid language watch pattern."));
+        }
+    }
     for grammar in &pack.grammars {
         if !grammar.is_object()
             || grammar["scopeName"].as_str().is_none()
@@ -119,6 +131,16 @@ pub(crate) fn validate(pack: &LanguagePack) -> AppResult<()> {
         }
     }
     if let Some(server) = &pack.server {
+        if !server.settings.is_null() && !server.settings.is_object()
+            || server
+                .initialization_options
+                .as_ref()
+                .is_some_and(|v| !v.is_object())
+        {
+            return Err(invalid(
+                "Language settings and initialization options must be objects.",
+            ));
+        }
         match &server.installation {
             LanguagePackInstallation::Archive { artifacts } => {
                 for artifact in artifacts {
@@ -295,7 +317,7 @@ pub fn save_language_pack(
     pack: LanguagePack,
 ) -> AppResult<LanguageRegistry> {
     save(&storage, &pack)?;
-    live.stop_all();
+    live.invalidate_server(&pack.id);
     let _ = app.emit("reviewbox:language-packs-changed", ());
     registry(&storage)
 }
@@ -310,7 +332,7 @@ pub fn remove_language_pack(
     if !catalog::valid_id(&pack_id) {
         return Err(AppError::new("invalid_pack", "Invalid pack ID."));
     }
-    live.stop_all();
+    live.stop_server(&pack_id);
     if catalog::installed(&storage, &pack_id)?.is_some() {
         installer.uninstall(&storage, &pack_id)?;
     }
@@ -319,7 +341,6 @@ pub fn remove_language_pack(
             .join("packs")
             .join(format!("{pack_id}.json")),
     )?;
-    live.stop_all();
     let _ = app.emit("reviewbox:language-packs-changed", ());
     registry(&storage)
 }

@@ -388,6 +388,7 @@ pub async fn configure_language_servers(
     app: tauri::AppHandle,
     storage: State<'_, Storage>,
     manager: State<'_, crate::language_servers::LanguageServers>,
+    live: State<'_, crate::language_servers::live::LiveLanguages>,
     settings: LanguageServerSettings,
 ) -> AppResult<LanguageServerSettings> {
     let s = storage.inner().clone();
@@ -396,8 +397,19 @@ pub async fn configure_language_servers(
         Ok((previous, crate::language_servers::configure(&s, settings)?))
     })
     .await?;
-    for server in previous.servers.iter().chain(&result.servers) {
-        manager.stop_server(&server.id);
+    let ids = previous
+        .servers
+        .iter()
+        .chain(&result.servers)
+        .map(|server| server.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for id in ids {
+        let before = previous.servers.iter().find(|s| s.id == id);
+        let after = result.servers.iter().find(|s| s.id == id);
+        if serde_json::to_value(before)? != serde_json::to_value(after)? {
+            manager.stop_server(&id);
+            live.invalidate_server(&id);
+        }
     }
     use tauri::Emitter;
     let _ = app.emit("reviewbox:language-servers-changed", ());

@@ -536,17 +536,18 @@ async fn execute_plan(
                 "Another configured server takes priority. Select the installed server in language settings.",
             ));
         }
-        let (project, settings) =
-            super::live::project_configuration(storage, root, &plan.path, server_id)?;
-        let session = Session::spawn(
-            server.clone(),
-            Workspace::live(project),
-            catalog::launch_environment(storage, &server)?,
-        )?;
+        let project = super::project::resolve(storage, root, &plan.path, server_id)?;
+        let mut environment = catalog::launch_environment(storage, &server)?;
+        environment.extend(project.context.environment.clone());
+        let session = Session::spawn(server.clone(), Workspace::live(project.root), environment)?;
         *session
             .live_settings
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = settings;
+            .unwrap_or_else(|e| e.into_inner()) = project.settings;
+        *session
+            .live_initialization_options
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = project.initialization_options;
         let result: AppResult<()> = async {
             session.initialize().await?;
             let file = crate::editor::read(root, &plan.path)?;

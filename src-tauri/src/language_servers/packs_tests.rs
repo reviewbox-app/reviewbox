@@ -48,6 +48,7 @@ fn pack_validation_rejects_unsafe_recipes_and_preserves_existing_custom_servers(
         },
         arguments: vec![],
         settings: serde_json::json!({}),
+        initialization_options: None,
     });
     assert!(validate(&p).is_err());
     let mut p = pack();

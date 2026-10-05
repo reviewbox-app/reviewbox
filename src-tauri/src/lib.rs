@@ -86,6 +86,20 @@ pub fn run() {
                 use tauri::Emitter;
                 let _ = cache_app.emit("reviewbox:repository-read-invalidated", repository_id);
             });
+            let live = app
+                .state::<language_servers::live::LiveLanguages>()
+                .inner()
+                .clone();
+            storage
+                .repository_cache
+                .set_native_notifier(move |root, change| {
+                    let live = live.clone();
+                    let root = root.to_path_buf();
+                    let change = change.clone();
+                    tauri::async_runtime::spawn(async move {
+                        live.repository_changed(&root, &change).await;
+                    });
+                });
             app.manage(storage);
             app.manage(source_control::SourceControl::default());
             notifications::install(app.handle());
@@ -181,7 +195,11 @@ pub fn run() {
             language_servers::live::live_language_cancel,
             language_servers::live::live_language_restart,
             language_servers::live::live_language_source,
+            language_servers::project::get_live_language_project_settings,
+            language_servers::project::set_live_language_project_settings,
             editor::commands::editor_inventory,
+            editor::commands::editor_watch,
+            editor::commands::editor_watch_status,
             editor::commands::editor_search_content,
             editor::commands::editor_cancel_search,
             editor::commands::editor_read,
