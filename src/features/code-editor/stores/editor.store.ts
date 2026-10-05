@@ -6,10 +6,13 @@ import type {
   RepositoryReadChange,
   EditorFile,
   EditorRecovery,
+  EditorSaveActions,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { isDocumentFile } from "@/features/markdown/helpers/documentFiles.helpers"
-import { resolveCodeLanguage } from "@/lib/code/languages"
+import { resolveLanguageId, type LanguageDecision } from "@/lib/code/languages"
+import type { ContentLanguageDetection } from "@/features/language-servers/helpers/languageDetection"
+import { detectProjectLanguage } from "@/features/language-servers/helpers/projectLanguage"
 import { editorCommands } from "../services/editor.commands"
 
 export interface EditorBuffer extends EditorFile {
@@ -19,6 +22,7 @@ export interface EditorBuffer extends EditorFile {
   external?: EditorFile | null
   preview: boolean
   language?: string
+  detectedLanguage?: ContentLanguageDetection
   navigation?: { line: number; column: number; length: number; token: string }
 }
 export interface EditorSession {
@@ -30,10 +34,12 @@ export interface EditorSession {
   showIgnored: boolean
   ignoredPaths: ReadonlySet<string>
   toggledFolders: ReadonlySet<string>
+  saveActions?: Record<string, EditorSaveActions>
   autoSave: boolean
   associations: Record<string, string>
   servers: Record<string, string>
   ready: boolean
+  watchHealthy?: boolean
   error: string
 }
 export const useEditorStore = create<{
@@ -134,6 +140,7 @@ export async function initializeEditor(id: string) {
       ...s,
       buffers,
       active: recovery.active ?? buffers[0]?.path ?? "",
+      saveActions: recovery.saveActions ?? {},
       autoSave: recovery.autoSave,
       associations: recovery.associations ?? {},
       servers: recovery.servers ?? {},
@@ -184,14 +191,21 @@ export function editBuffer(id: string, key: string, text: string) {
     b.text === text ? b : { ...b, text, version: b.version + 1 }
   )
 }
-export async function saveBuffer(id: string, key: string, overwrite = false) {
+export type SaveReason = "manual" | "all" | "close" | "automatic"
+export async function saveBuffer(
+  id: string,
+  key: string,
+  overwrite = false,
+  reason: SaveReason = "manual"
+) {
   const lock = `save/${id}/${key}`
   if (pending.has(lock)) {
     await pending.get(lock)
-    return saveBuffer(id, key, overwrite)
+    return saveBuffer(id, key, overwrite, reason)
   }
-  const buffer = getEditor(id)?.buffers.find((b) => b.id === key)
-  if (!buffer || buffer.readOnly || !dirty(buffer)) return
+  let buffer = getEditor(id)?.buffers.find((b) => b.id === key)
+  if (!buffer || buffer.readOnly || (reason === "automatic" && !dirty(buffer)))
+    return
   if (buffer.external !== undefined && !overwrite)
     throw new Error("Compare the external changes before saving.")
   if (buffer.external === null)
@@ -199,19 +213,33 @@ export async function saveBuffer(id: string, key: string, overwrite = false) {
       "This file was deleted. Recreate it or copy the draft into a new file."
     )
   const work = (async () => {
+    if (reason === "manual" || reason === "all") {
+      const { prepareLiveSave } =
+        await import("@/features/language-servers/services/liveMonaco")
+      await prepareLiveSave(id, key)
+      buffer = getEditor(id)?.buffers.find((b) => b.id === key)
+    }
+    if (!buffer || buffer.readOnly || !dirty(buffer)) return
+    if (buffer.external !== undefined && !overwrite)
+      throw new Error("Compare the external changes before saving.")
+    if (buffer.external === null)
+      throw new Error(
+        "This file was deleted. Recreate it or copy the draft into a new file."
+      )
+    const saving = buffer
     await editorCommands.mutate(id, {
       kind: "save",
-      path: buffer.path,
-      text: buffer.text,
-      expectedRevision: overwrite ? buffer.external!.revision : buffer.revision,
+      path: saving.path,
+      text: saving.text,
+      expectedRevision: overwrite ? saving.external!.revision : saving.revision,
     })
-    const saved = await editorCommands.read(id, buffer.path)
+    const saved = await editorCommands.read(id, saving.path)
     const sameText =
-      saved.text.replace(/\r\n?/g, "\n") === buffer.text.replace(/\r\n?/g, "\n")
+      saved.text.replace(/\r\n?/g, "\n") === saving.text.replace(/\r\n?/g, "\n")
     updateBuffer(id, key, (b) => ({
       ...b,
-      baseText: sameText ? buffer.text : buffer.baseText,
-      revision: sameText ? saved.revision : buffer.revision,
+      baseText: sameText ? saving.text : saving.baseText,
+      revision: sameText ? saved.revision : saving.revision,
       external: sameText ? undefined : saved,
     }))
   })()
@@ -223,13 +251,16 @@ export async function saveBuffer(id: string, key: string, overwrite = false) {
   pending.set(lock, work)
   return work
 }
-export async function saveAllEditors(repositoryId?: string) {
+export async function saveAllEditors(
+  repositoryId?: string,
+  reason: SaveReason = "all"
+) {
   for (const [id, session] of Object.entries(
     useEditorStore.getState().sessions
   )) {
     if (repositoryId && id !== repositoryId) continue
     for (const buffer of session.buffers)
-      if (dirty(buffer)) await saveBuffer(id, buffer.id)
+      if (dirty(buffer)) await saveBuffer(id, buffer.id, false, reason)
   }
 }
 const queuedRefreshes = new Map<string, RepositoryReadChange>()
@@ -271,18 +302,14 @@ async function reconcileEditor(id: string, change: RepositoryReadChange) {
   if (!before) return
   if (change.tree || change.full) {
     const showIgnored = before.showIgnored
-    const [entries, visible] = await Promise.all([
-      editorCommands.inventory(id, showIgnored),
-      showIgnored ? editorCommands.inventory(id, false) : Promise.resolve(null),
-    ])
-    const visiblePaths = visible && new Set(visible.map((entry) => entry.path))
+    const entries = await editorCommands.inventory(
+      id,
+      showIgnored,
+      [...before.toggledFolders],
+      change
+    )
     const ignoredPaths = new Set(
-      entries
-        .filter(
-          (entry) =>
-            !entry.directory && visiblePaths && !visiblePaths.has(entry.path)
-        )
-        .map((entry) => entry.path)
+      entries.filter((entry) => entry.ignored).map((entry) => entry.path)
     )
     updateEditor(id, (s) => {
       if (s.showIgnored !== showIgnored) return s
@@ -292,7 +319,10 @@ async function reconcileEditor(id: string, change: RepositoryReadChange) {
           (entry, i) =>
             entry.path === s.entries[i].path &&
             entry.directory === s.entries[i].directory &&
-            entry.revision === s.entries[i].revision
+            entry.revision === s.entries[i].revision &&
+            entry.ignored === s.entries[i].ignored &&
+            entry.excluded === s.entries[i].excluded &&
+            entry.lazy === s.entries[i].lazy
         )
       const sameIgnored =
         ignoredPaths.size === s.ignoredPaths.size &&
@@ -364,6 +394,7 @@ async function reconcileEditor(id: string, change: RepositoryReadChange) {
 export function editorRecovery(s: EditorSession): EditorRecovery {
   return {
     revision: 0,
+    saveActions: s.saveActions ?? {},
     autoSave: s.autoSave,
     associations: s.associations,
     servers: s.servers,
@@ -401,11 +432,37 @@ export function fileAssociation(path: string) {
     : name
 }
 export function bufferLanguage(repository: string, buffer: EditorBuffer) {
-  return (
-    buffer.language ??
-    getEditor(repository)?.associations[fileAssociation(buffer.path)] ??
-    resolveCodeLanguage(buffer.path, buffer.text.split("\n", 1)[0]).id
+  return bufferLanguageDecision(repository, buffer).language.id
+}
+export function bufferLanguageDecision(
+  repository: string,
+  buffer: EditorBuffer
+): LanguageDecision {
+  const session = getEditor(repository)
+  const association = session?.associations[fileAssociation(buffer.path)]
+  if (buffer.language || association)
+    return {
+      language: resolveLanguageId(buffer.language ?? association),
+      source: buffer.language ? "manual" : "association",
+      candidates: [],
+    }
+  const decision = detectProjectLanguage(
+    buffer.path,
+    buffer.text.split("\n", 1)[0],
+    session?.entries ?? []
   )
+  const detected = buffer.detectedLanguage
+  if (
+    decision.source === "plaintext" &&
+    detected?.path === buffer.path &&
+    detected.languageId
+  )
+    return {
+      language: resolveLanguageId(detected.languageId),
+      source: "content",
+      candidates: [],
+    }
+  return decision
 }
 
 /** Reorder existing models without changing their identity or the active file. */

@@ -13,9 +13,13 @@ import {
   bufferLanguage,
   getEditor,
   updateEditor,
+  editBuffer,
   useEditorStore,
   type EditorBuffer,
 } from "@/features/code-editor/stores/editor.store"
+import { documentCapability } from "../helpers/liveCapabilities"
+import { runSaveActions } from "./saveActions"
+import { reportDiagnostic } from "@/lib/desktop/diagnostics"
 import { replaceText } from "../helpers/lspEdits"
 import { editorCommands } from "@/features/code-editor/services/editor.commands"
 import { liveCommands } from "./liveLanguage.commands"
@@ -28,11 +32,17 @@ interface Binding {
   session?: LiveLanguageSession
   pending?: Promise<void>
   version: number
+  sendingVersion?: number
   revision: string
   path: string
   language?: string
   stopped?: boolean
   diagnosticVersion?: number
+  diagnosticRequest?: symbol
+  semanticChanges?: M.Emitter<void>
+  saveTransaction?: boolean
+  changes?: { base: number; edits: M.editor.IModelContentChange[] }
+  modelListener?: M.IDisposable
   providers?: { signature: string; disposables: M.IDisposable[] }
 }
 export interface EditPreview {
@@ -46,10 +56,18 @@ export interface EditPreview {
   }[]
 }
 export const useLiveLanguages = create<{
+  saveNotices: Record<string, string>
+  sessions: Record<string, LiveLanguageSession>
   status: Record<string, string>
   capabilities: Record<string, LiveLanguageSession["capabilities"]>
   edits: EditPreview | null
-}>(() => ({ status: {}, capabilities: {}, edits: null }))
+}>(() => ({
+  saveNotices: {},
+  sessions: {},
+  status: {},
+  capabilities: {},
+  edits: null,
+}))
 const bindings = new Map<string, Binding>()
 const navigation = new Map<string, M.IRange | M.IPosition>()
 const targets = new Map<string, { repository: string; path: string }>()
@@ -57,17 +75,25 @@ let dispose: (() => void) | undefined
 let installed = false
 const providerFactories: {
   capability: string
-  register: (selector: M.languages.LanguageSelector) => M.IDisposable
+  register: (
+    selector: M.languages.LanguageSelector,
+    options: unknown,
+    binding: Binding
+  ) => M.IDisposable
 }[] = []
 function registerFor(
   capability: string,
-  register: (selector: M.languages.LanguageSelector) => M.IDisposable
+  register: (
+    selector: M.languages.LanguageSelector,
+    options: unknown,
+    binding: Binding
+  ) => M.IDisposable
 ) {
   providerFactories.push({ capability, register })
 }
 function refreshProviders(b: Binding) {
   const available = providerFactories.filter(({ capability }) => {
-    const value = b.session?.capabilities[capability]
+    const value = capabilityFor(b, capability)
     return (
       !b.stopped &&
       !b.model.isDisposed() &&
@@ -76,13 +102,19 @@ function refreshProviders(b: Binding) {
         (value as L.SemanticTokensOptions).full)
     )
   })
-  const signature = available.map((f) => f.capability).join("/")
+  const signature = JSON.stringify(
+    available.map((f) => [f.capability, capabilityFor(b, f.capability)])
+  )
   if (b.providers?.signature === signature) return
   b.providers?.disposables.forEach((p) => p.dispose())
   b.providers = {
     signature,
-    disposables: available.map(({ register }) =>
-      register({ scheme: b.model.uri.scheme, pattern: b.model.uri.path })
+    disposables: available.map(({ register, capability }) =>
+      register(
+        { scheme: b.model.uri.scheme, pattern: b.model.uri.path },
+        capabilityFor(b, capability),
+        b
+      )
     ),
   }
 }
@@ -118,14 +150,31 @@ function documentation(
 function current(b: Binding) {
   return getEditor(b.repository)?.buffers.find((file) => file.id === b.key)
 }
+function forgetPublishedSession(b: Binding) {
+  useLiveLanguages.setState((state) => {
+    const sessions = { ...state.sessions }
+    delete sessions[b.key]
+    return { sessions }
+  })
+}
+function capabilityFor(b: Binding, name: string) {
+  const file = current(b)
+  return documentCapability(
+    b.session?.capabilities,
+    name,
+    file?.uri ?? "",
+    b.language ??
+      (file ? resolveLanguageId(bufferLanguage(b.repository, file)).lspId : "")
+  )
+}
 function get(model: M.editor.ITextModel, capability: string) {
   const b = bindings.get(model.uri.toString())
-  return b?.session?.capabilities[capability] ? b : undefined
+  return b && capabilityFor(b, capability) ? b : undefined
 }
-async function sync(b: Binding) {
+async function sync(b: Binding, allowStart = true) {
   if (b.pending) {
     await b.pending
-    return sync(b)
+    return sync(b, allowStart)
   }
   const file = current(b)
   if (!file || file.readOnly || b.stopped) return
@@ -146,10 +195,13 @@ async function sync(b: Binding) {
     ) {
       await liveCommands.close(b.session.id, b.path)
       b.session = undefined
+      forgetPublishedSession(b)
+      b.language = undefined
       b.version = 0
       b.path = ""
     }
     if (!b.session) {
+      if (!allowStart) return
       status(b, "Starting language support…")
       b.session = await liveCommands.open(
         b.repository,
@@ -159,6 +211,7 @@ async function sync(b: Binding) {
       )
       if (!current(b) || b.model.isDisposed()) return
       useLiveLanguages.setState((s) => ({
+        sessions: { ...s.sessions, [b.key]: b.session! },
         capabilities: { ...s.capabilities, [b.key]: b.session!.capabilities },
       }))
       refreshProviders(b)
@@ -167,7 +220,9 @@ async function sync(b: Binding) {
       await liveCommands.close(b.session.id, b.path)
       b.version = 0
     }
-    b.version = file.version
+    const changes = b.changes
+    b.changes = undefined
+    b.sendingVersion = file.version
     await liveCommands.sync(
       b.session.id,
       {
@@ -175,6 +230,14 @@ async function sync(b: Binding) {
         version: file.version,
         text: file.text,
         languageId: language.lspId,
+        baseVersion: changes?.base ?? null,
+        changes: (changes?.edits ?? []).map((e) => ({
+          startLine: e.range.startLineNumber - 1,
+          startCharacter: e.range.startColumn - 1,
+          endLine: e.range.endLineNumber - 1,
+          endCharacter: e.range.endColumn - 1,
+          text: e.text,
+        })),
       },
       b.revision !== file.revision && !dirty(file)
     )
@@ -187,7 +250,7 @@ async function sync(b: Binding) {
     b.version = file.version
     b.revision = file.revision
     status(b, "Language support active")
-    if (b.session.capabilities.diagnosticProvider)
+    if (capabilityFor(b, "diagnosticProvider"))
       void pullDiagnostics(b).catch(() => {})
   })()
     .catch((error) => {
@@ -196,6 +259,7 @@ async function sync(b: Binding) {
     })
     .finally(() => {
       b.pending = undefined
+      b.sendingVersion = undefined
     })
   b.pending = work
   return work
@@ -204,10 +268,11 @@ async function request<T>(
   b: Binding,
   method: string,
   params: object,
-  token?: M.CancellationToken
+  token?: M.CancellationToken,
+  allowStart = true
 ): Promise<T | undefined> {
   try {
-    await sync(b)
+    await sync(b, allowStart)
     await Promise.all(
       [...bindings.values()]
         .filter(
@@ -216,7 +281,7 @@ async function request<T>(
             other.repository === b.repository &&
             other.session?.id === b.session?.id
         )
-        .map((other) => sync(other).catch(() => {}))
+        .map((other) => sync(other, allowStart).catch(() => {}))
     )
     const file = current(b)
     if (!file || !b.session || token?.isCancellationRequested) return
@@ -250,6 +315,7 @@ async function request<T>(
       error && typeof error === "object" && "code" in error ? error.code : ""
     if (code !== "cancelled" && code !== "stale_document")
       status(b, errorMessage(error))
+    if (!allowStart) throw error
     return
   }
 }
@@ -423,9 +489,9 @@ function install(monaco: typeof M) {
       return true
     },
   })
-  registerFor("completionProvider", (selector) =>
+  registerFor("completionProvider", (selector, options) =>
     monaco.languages.registerCompletionItemProvider(selector, {
-      triggerCharacters: [".", ":", ">", '"', "'", "/", "@"],
+      triggerCharacters: (options as L.CompletionOptions)?.triggerCharacters,
       async provideCompletionItems(model, p, context, token) {
         const b = get(model, "completionProvider")
         if (!b) return
@@ -497,8 +563,8 @@ function install(monaco: typeof M) {
           current(owned.binding)?.version !== owned.version
         )
           return item
-        const provider = owned.binding.session?.capabilities
-          .completionProvider as L.CompletionOptions | undefined
+        const provider = capabilityFor(owned.binding, "completionProvider") as
+          L.CompletionOptions | undefined
         if (!provider?.resolveProvider) return item
         const result = await request<L.CompletionItem>(
           owned.binding,
@@ -582,10 +648,12 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("signatureHelpProvider", (selector) =>
+  registerFor("signatureHelpProvider", (selector, options) =>
     monaco.languages.registerSignatureHelpProvider(selector, {
-      signatureHelpTriggerCharacters: ["(", ","],
-      signatureHelpRetriggerCharacters: [")"],
+      signatureHelpTriggerCharacters: (options as L.SignatureHelpOptions)
+        ?.triggerCharacters,
+      signatureHelpRetriggerCharacters: (options as L.SignatureHelpOptions)
+        ?.retriggerCharacters,
       async provideSignatureHelp(model, p, token, context) {
         const b = get(model, "signatureHelpProvider")
         if (!b) return
@@ -668,7 +736,7 @@ function install(monaco: typeof M) {
     monaco.languages.registerRenameProvider(selector, {
       async resolveRenameLocation(model, p, token) {
         const b = get(model, "renameProvider")
-        const options = b?.session?.capabilities.renameProvider as
+        const options = (b ? capabilityFor(b, "renameProvider") : undefined) as
           L.RenameOptions | undefined
         if (b && options?.prepareProvider) {
           const prepared = await request<L.PrepareRenameResult | null>(
@@ -747,7 +815,7 @@ function install(monaco: typeof M) {
       }
       if (
         !action.edit &&
-        (b.session?.capabilities.codeActionProvider as L.CodeActionOptions)
+        (capabilityFor(b, "codeActionProvider") as L.CodeActionOptions)
           ?.resolveProvider
       )
         action =
@@ -845,40 +913,56 @@ function install(monaco: typeof M) {
     "documentation",
     "defaultLibrary",
   ]
-  registerFor("semanticTokensProvider", (selector) =>
-    monaco.languages.registerDocumentSemanticTokensProvider(selector, {
-      getLegend: () => ({ tokenTypes, tokenModifiers }),
-      releaseDocumentSemanticTokens() {},
-      async provideDocumentSemanticTokens(model, _last, token) {
-        const b = get(model, "semanticTokensProvider")
-        if (!b) return null
-        const capabilities = b.session!.capabilities
-          .semanticTokensProvider as L.SemanticTokensOptions
-        if (!capabilities.full) return null
-        const result = await request<L.SemanticTokens>(
-          b,
-          "textDocument/semanticTokens/full",
-          {},
-          token
-        )
-        if (!result) return null
-        const data = [...result.data]
-        for (let i = 0; i < data.length; i += 5) {
-          data[i + 3] = Math.max(
-            0,
-            tokenTypes.indexOf(capabilities.legend.tokenTypes[data[i + 3]])
+  registerFor("semanticTokensProvider", (selector, _options, binding) => {
+    const changes = new monaco.Emitter<void>()
+    binding.semanticChanges = changes
+    const provider = monaco.languages.registerDocumentSemanticTokensProvider(
+      selector,
+      {
+        onDidChange: changes.event,
+        getLegend: () => ({ tokenTypes, tokenModifiers }),
+        releaseDocumentSemanticTokens() {},
+        async provideDocumentSemanticTokens(model, _last, token) {
+          const b = get(model, "semanticTokensProvider")
+          if (!b) return null
+          const capabilities = capabilityFor(
+            b,
+            "semanticTokensProvider"
+          ) as L.SemanticTokensOptions
+          if (!capabilities.full) return null
+          const result = await request<L.SemanticTokens>(
+            b,
+            "textDocument/semanticTokens/full",
+            {},
+            token
           )
-          const bits = data[i + 4]
-          data[i + 4] = 0
-          capabilities.legend.tokenModifiers.forEach((name, index) => {
-            const target = tokenModifiers.indexOf(name)
-            if (target >= 0 && bits & (1 << index)) data[i + 4] |= 1 << target
-          })
-        }
-        return { data: new Uint32Array(data), resultId: result.resultId }
+          if (!result) return null
+          const data = [...result.data]
+          for (let i = 0; i < data.length; i += 5) {
+            data[i + 3] = Math.max(
+              0,
+              tokenTypes.indexOf(capabilities.legend.tokenTypes[data[i + 3]])
+            )
+            const bits = data[i + 4]
+            data[i + 4] = 0
+            capabilities.legend.tokenModifiers.forEach((name, index) => {
+              const target = tokenModifiers.indexOf(name)
+              if (target >= 0 && bits & (1 << index)) data[i + 4] |= 1 << target
+            })
+          }
+          return { data: new Uint32Array(data), resultId: result.resultId }
+        },
+      }
+    )
+    return {
+      dispose() {
+        provider.dispose()
+        changes.dispose()
+        if (binding.semanticChanges === changes)
+          binding.semanticChanges = undefined
       },
-    })
-  )
+    }
+  })
 }
 
 export function bindLiveEditor(
@@ -900,6 +984,25 @@ export function bindLiveEditor(
       path: "",
     }
     bindings.set(model.uri.toString(), b)
+    const binding = b
+    binding.modelListener = model.onDidChangeContent((event) => {
+      if (!binding.session || binding.stopped) {
+        binding.changes = undefined
+        return
+      }
+      if ((binding.changes?.edits.length ?? 0) + event.changes.length > 1024) {
+        binding.changes = { base: -1, edits: [] }
+        return
+      }
+      binding.changes ??= {
+        base: binding.sendingVersion ?? binding.version,
+        edits: [],
+      }
+      // Monaco ranges refer to the pre-event model; replay from bottom to top.
+      binding.changes.edits.push(
+        ...[...event.changes].sort((a, b) => b.rangeOffset - a.rangeOffset)
+      )
+    })
   }
   if (!buffer.readOnly) void sync(b).catch(() => {})
   for (const other of getEditor(repository)?.buffers ?? []) {
@@ -920,7 +1023,12 @@ export function bindLiveEditor(
       (event) => {
         for (const b of bindings.values()) {
           if (b.session?.id !== event.payload.sessionId) continue
-          if (event.payload.method === "reviewbox/capabilities") {
+          if (event.payload.method === "reviewbox/reconfigure") {
+            void restartLiveEditor(b.key).catch((error) =>
+              status(b, errorMessage(error))
+            )
+            break
+          } else if (event.payload.method === "reviewbox/capabilities") {
             b.session!.capabilities = event.payload
               .params as LiveLanguageSession["capabilities"]
             refreshProviders(b)
@@ -932,6 +1040,8 @@ export function bindLiveEditor(
             }))
           } else if (event.payload.method === "reviewbox/stopped") {
             b.stopped = true
+            b.diagnosticRequest = undefined
+            b.diagnosticVersion = undefined
             b.session!.capabilities = {}
             refreshProviders(b)
             b.monaco.editor.setModelMarkers(b.model, "reviewbox-lsp", [])
@@ -939,6 +1049,14 @@ export function bindLiveEditor(
             useLiveLanguages.setState((s) => ({
               capabilities: { ...s.capabilities, [b.key]: {} },
             }))
+          } else if (event.payload.method === "workspace/diagnostic/refresh") {
+            b.diagnosticVersion = undefined
+            if (!b.stopped && capabilityFor(b, "diagnosticProvider"))
+              void pullDiagnostics(b).catch(() => {})
+          } else if (
+            event.payload.method === "workspace/semanticTokens/refresh"
+          ) {
+            b.semanticChanges?.fire()
           } else if (event.payload.method === "window/logMessage") {
             const log = event.payload.params as L.LogMessageParams
             if (log.type === 1)
@@ -976,7 +1094,9 @@ export function bindLiveEditor(
         const file = current(b)
         if (!file) {
           bindings.delete(uri)
+          forgetPublishedSession(b)
           b.providers?.disposables.forEach((p) => p.dispose())
+          b.modelListener?.dispose()
           targets.delete(uri)
           if (b.session)
             void liveCommands.close(b.session.id, b.path).catch(() => {})
@@ -987,17 +1107,19 @@ export function bindLiveEditor(
           b.model.getValue().replace(/\r\n?/g, "\n") !==
           file.text.replace(/\r\n?/g, "\n")
         ) {
-          b.model.pushStackElement()
+          if (!b.saveTransaction) b.model.pushStackElement()
           b.model.pushEditOperations(
             [],
             [{ range: b.model.getFullModelRange(), text: file.text }],
             () => null
           )
-          b.model.pushStackElement()
+          if (!b.saveTransaction) b.model.pushStackElement()
         }
         const language = bufferLanguage(b.repository, file)
-        if (b.model.getLanguageId() !== language)
-          monaco.editor.setModelLanguage(b.model, language)
+        const languageChanged = b.model.getLanguageId() !== language
+        if (languageChanged) monaco.editor.setModelLanguage(b.model, language)
+        if (languageChanged && !b.session && !b.stopped)
+          void sync(b).catch(() => {})
         if (file.version !== b.version && b.session) {
           monaco.editor.setModelMarkers(b.model, "reviewbox-lsp", [])
           void sync(b).catch(() => {})
@@ -1015,6 +1137,156 @@ export function bindLiveEditor(
     }
   }
 }
+export async function prepareLiveSave(repository: string, key: string) {
+  const b = [...bindings.values()].find(
+    (b) => b.repository === repository && b.key === key
+  )
+  if (!b?.session || b.stopped || b.model.isDisposed()) return
+  const file = current(b)
+  if (!file || file.readOnly || file.external !== undefined) return
+  const notice = (value: string) =>
+    useLiveLanguages.setState((s) => ({
+      saveNotices: { ...s.saveNotices, [key]: value },
+    }))
+  notice("")
+  const preferences = getEditor(repository)?.saveActions
+  const settings = preferences?.[bufferLanguage(repository, file)] ??
+    preferences?.["*"] ?? {
+      formatOnSave: true,
+      organizeImportsOnSave: true,
+    }
+  const tokenFor = (signal: AbortSignal): M.CancellationToken => ({
+    get isCancellationRequested() {
+      return signal.aborted
+    },
+    onCancellationRequested(listener) {
+      const cancel = () => listener(undefined)
+      signal.addEventListener("abort", cancel, { once: true })
+      return { dispose: () => signal.removeEventListener("abort", cancel) }
+    },
+  })
+  const actions: Parameters<typeof runSaveActions>[0]["actions"] = []
+  let needsPreview = false
+  if (settings.organizeImportsOnSave && capabilityFor(b, "codeActionProvider"))
+    actions.push(async (before, signal) => {
+      const offered = await request<(L.CodeAction | L.Command)[]>(
+        b,
+        "textDocument/codeAction",
+        {
+          range: lspRange(b.model.getFullModelRange()),
+          context: {
+            diagnostics: [],
+            only: ["source.organizeImports"],
+            triggerKind: 1,
+          },
+        },
+        tokenFor(signal),
+        false
+      )
+      for (const item of offered ?? []) {
+        if (item.command) {
+          notice(
+            "An imports action requires a server command. Open Code actions to inspect it."
+          )
+          continue
+        }
+        if (
+          !("kind" in item) ||
+          !item.kind?.startsWith("source.organizeImports") ||
+          item.disabled ||
+          item.command
+        )
+          continue
+        let action = item
+        if (
+          !action.edit &&
+          (capabilityFor(b, "codeActionProvider") as L.CodeActionOptions)
+            ?.resolveProvider
+        )
+          action =
+            (await request<L.CodeAction>(
+              b,
+              "codeAction/resolve",
+              action,
+              tokenFor(signal),
+              false
+            )) ?? action
+        if (!action.edit || action.command) continue
+        const edits: L.TextEdit[] = []
+        let otherFiles = false
+        for (const [uri, changes] of Object.entries(
+          action.edit.changes ?? {}
+        )) {
+          if (uri !== current(b)?.uri) otherFiles = true
+          else edits.push(...changes)
+        }
+        for (const change of action.edit.documentChanges ?? []) {
+          if (
+            !("textDocument" in change) ||
+            change.textDocument.uri !== current(b)?.uri ||
+            (change.textDocument.version != null &&
+              change.textDocument.version !== before.version)
+          )
+            otherFiles = true
+          else
+            edits.push(
+              ...change.edits.filter((e): e is L.TextEdit => "range" in e)
+            )
+        }
+        if (!otherFiles) return replaceText(before.text, edits)
+        if (!signal.aborted) {
+          notice(
+            "Imports affect other files. Open Code actions to review the changes before applying them."
+          )
+          needsPreview = true
+        }
+        return before.text
+      }
+      return before.text
+    })
+  if (settings.formatOnSave && capabilityFor(b, "documentFormattingProvider"))
+    actions.push(async (before, signal) => {
+      if (needsPreview) return before.text
+      const options = b.model.getOptions()
+      const edits = await request<L.TextEdit[]>(
+        b,
+        "textDocument/formatting",
+        {
+          options: {
+            tabSize: options.tabSize,
+            insertSpaces: options.insertSpaces,
+          },
+        },
+        tokenFor(signal),
+        false
+      )
+      return replaceText(before.text, edits ?? [])
+    })
+  if (!actions.length) return
+  b.saveTransaction = true
+  b.model.pushStackElement()
+  try {
+    await runSaveActions({
+      read: () => current(b),
+      apply(before, text) {
+        if (current(b)?.version !== before.version || b.model.isDisposed())
+          return
+        editBuffer(repository, key, text)
+        return current(b)
+      },
+      actions,
+      warn(error) {
+        notice(errorMessage(error))
+        status(b, errorMessage(error))
+        void reportDiagnostic(error, "code-editor", "save-actions")
+      },
+    })
+  } finally {
+    b.saveTransaction = false
+    if (!b.model.isDisposed()) b.model.pushStackElement()
+  }
+}
+
 export async function restartLiveEditor(key: string, stop = false) {
   const target = [...bindings.values()].find((b) => b.key === key)
   if (!target) return
@@ -1026,9 +1298,11 @@ export async function restartLiveEditor(key: string, stop = false) {
   if (sessionId) await liveCommands.restart(sessionId)
   for (const b of group) {
     b.session = undefined
+    forgetPublishedSession(b)
     b.version = 0
     b.path = ""
     b.diagnosticVersion = undefined
+    b.diagnosticRequest = undefined
     b.stopped = stop
     refreshProviders(b)
     b.monaco.editor.setModelMarkers(b.model, "reviewbox-lsp", [])
@@ -1037,7 +1311,7 @@ export async function restartLiveEditor(key: string, stop = false) {
     }))
     status(b, stop ? "Language support stopped" : "Starting language support…")
   }
-  if (!stop) await Promise.all(group.map(sync))
+  if (!stop) await Promise.all(group.map((b) => sync(b)))
 }
 export function restoreLanguageNavigation(
   editor: M.editor.IStandaloneCodeEditor
@@ -1134,18 +1408,42 @@ function setDiagnostics(b: Binding, diagnostics: L.Diagnostic[]) {
 }
 async function pullDiagnostics(b: Binding) {
   const file = current(b)
-  if (!file || !b.session || b.diagnosticVersion === file.version) return
-  b.diagnosticVersion = file.version
-  const result = await liveCommands.request<L.DocumentDiagnosticReport>(
-    b.session.id,
-    crypto.randomUUID(),
-    file.path,
-    file.version,
-    "textDocument/diagnostic",
-    {}
+  if (
+    !file ||
+    !b.session ||
+    b.stopped ||
+    b.model.isDisposed() ||
+    b.diagnosticVersion === file.version
   )
-  if (current(b)?.version === file.version && result.kind === "full")
-    setDiagnostics(b, result.items)
+    return
+  const sessionId = b.session.id
+  const request = Symbol()
+  b.diagnosticRequest = request
+  b.diagnosticVersion = file.version
+  try {
+    const result = await liveCommands.request<L.DocumentDiagnosticReport>(
+      sessionId,
+      crypto.randomUUID(),
+      file.path,
+      file.version,
+      "textDocument/diagnostic",
+      {}
+    )
+    if (
+      b.diagnosticRequest === request &&
+      b.session?.id === sessionId &&
+      !b.stopped &&
+      !b.model.isDisposed() &&
+      bindings.get(b.model.uri.toString()) === b &&
+      current(b)?.version === file.version &&
+      result.kind === "full"
+    )
+      setDiagnostics(b, result.items)
+  } catch (error) {
+    if (b.diagnosticRequest === request && b.session?.id === sessionId)
+      b.diagnosticVersion = undefined
+    throw error
+  }
 }
 
 export function languageDiagnostic(key: string) {
