@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "collaboration",
+  "description": "Local project agent skills and review context preferences.",
+  "windows": ["main", "settings"],
+  "permissions": [
+    "allow-project-skill-preferences",
+    "allow-configure-project-skills",
+    "allow-import-project-skills"
+  ]
+}

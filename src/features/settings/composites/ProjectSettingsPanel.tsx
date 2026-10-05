@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select"
 import { ModelSelector } from "@/features/agents/components/ModelSelector"
 import { useProviderStatus } from "@/features/agents/hooks/useProviderStatus"
+import { ProjectSkillSettings } from "../components/ProjectSkillSettings"
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
 import type {
   PreparationMode,
@@ -263,6 +264,9 @@ export function ProjectSettingsPanel() {
             {saved && <span role="status">Saved in .reviewbox</span>}
           </div>
         </form>
+      )}
+      {repositoryId && (
+        <ProjectSkillSettings key={repositoryId} repositoryId={repositoryId} />
       )}
       {error && (
         <p role="alert" className="text-destructive">

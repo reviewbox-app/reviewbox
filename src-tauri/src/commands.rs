@@ -148,9 +148,36 @@ pub async fn list_repositories(storage: State<'_, Storage>) -> AppResult<Vec<Rep
     blocking(move || s.list("repository")).await
 }
 #[tauri::command]
-pub async fn open_repository(storage: State<'_, Storage>, path: String) -> AppResult<Repository> {
+pub async fn open_repository(
+    app: tauri::AppHandle,
+    storage: State<'_, Storage>,
+    path: String,
+) -> AppResult<Repository> {
     let s = storage.inner().clone();
-    blocking(move || repositories::open(&s, &path)).await
+    let resources = resource_root(&app)?;
+    blocking(move || {
+        let repository = repositories::open(&s, &path)?;
+        let result = crate::project_skills::bootstrap(&s, &repository, &resources);
+        let error = match result {
+            Ok(report) => report.error,
+            Err(error) => Some(error),
+        };
+        if let Some(error) = error {
+            let _ = app
+                .state::<std::sync::Arc<crate::diagnostics::Diagnostics>>()
+                .record(DiagnosticInput {
+                    source: "native".into(),
+                    operation: "project_skills_import".into(),
+                    code: error.code,
+                    message: error.message,
+                    details: error.details,
+                    stack: None,
+                    context: Default::default(),
+                });
+        }
+        Ok(repository)
+    })
+    .await
 }
 #[tauri::command]
 pub async fn choose_repository() -> AppResult<Option<String>> {

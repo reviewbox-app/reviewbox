@@ -63,6 +63,7 @@
     "test:ui:terminal": "bun scripts/test-ui-terminal.ts",
     "test:ui:explorer": "bun scripts/test-ui-explorer.ts",
     "test:ui:review-comments": "bun scripts/test-ui-review-comments.ts",
+    "test:ui:project-skills": "bun scripts/test-ui-project-skills.ts",
     "test:ui:code-editor": "bun scripts/test-ui-code-editor.ts",
     "test:ui:editor-languages": "bun scripts/test-ui-editor-languages.ts",
     "test:editor-extensions": "bun scripts/test-editor-extensions.ts",

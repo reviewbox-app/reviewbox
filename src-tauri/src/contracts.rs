@@ -29,6 +29,8 @@ mod preparation;
 pub use notifications::*;
 mod diagnostics;
 pub use diagnostics::*;
+mod project_skills;
+pub use project_skills::*;
 mod provider_setup;
 mod publication;
 pub use creation::*;
@@ -516,6 +518,8 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
+        ProjectSkillPreferences::decl(&cfg),
+        ProjectSkillImport::decl(&cfg),
         ReviewCommentRange::decl(&cfg),
         ReviewCommentAnchor::decl(&cfg),
         ReviewCommentStatus::decl(&cfg),

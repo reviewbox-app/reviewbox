@@ -15,6 +15,14 @@ pub(crate) fn dispatch(storage: &Storage, request: Value) -> AppResult<Value> {
     let settings = storage.project_settings(&repository.id)?;
     let method = request["method"].as_str().unwrap_or_default();
     if method == "init" {
+        let report = crate::project_skills::bootstrap(
+            storage,
+            &repository,
+            &crate::project_skills::cli_resources()?,
+        )?;
+        if let Some(error) = report.error {
+            return Err(error);
+        }
         return Ok(serde_json::to_value(repository)?);
     }
     if method == "create" {

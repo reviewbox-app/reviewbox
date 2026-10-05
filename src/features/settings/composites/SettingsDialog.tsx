@@ -34,6 +34,7 @@ import { SettingRow } from "../components/SettingRow"
 import { CodeAppearanceSettings } from "../components/CodeAppearanceSettings"
 import { ReadingSettings } from "../components/ReadingSettings"
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel"
+import { ProjectSkillSettings } from "../components/ProjectSkillSettings"
 
 import { ExtensionsSettings } from "@/features/editor-extensions/composites/ExtensionsSettings"
 
@@ -60,7 +61,8 @@ const shortcuts = [
   ["Switch document / code", ["D"]],
   ["Command palette", ["⌘K"]],
   ["Open a review file", ["⌘P"]],
-  ["Home · Review · Code Editor", ["⌘1", "⌘2", "⌘3"]],
+  ["Home · Review · Code Editor · Terminal", ["⌘1", "⌘2", "⌘3", "⌘4"]],
+  ["Toggle terminal", ["Ctrl", "`"]],
   ["Side-by-side diff", ["⌘\\"]],
   ["New review / open repository", ["⌘N", "⌘O"]],
   ["Confirm (forms)", ["⌘↵"]],
@@ -169,6 +171,7 @@ export function SettingsDialog({
             {section === "General" && (
               <div className="rounded-3xl border px-5">
                 <CodeAppearanceSettings />
+                <ProjectSkillSettings />
                 <SettingRow
                   title="Appearance"
                   description="ReviewBox is designed dark first; light stays available."

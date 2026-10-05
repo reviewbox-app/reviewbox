@@ -16,6 +16,7 @@ mod notifications;
 mod onboarding;
 mod preparation;
 mod processes;
+mod project_skills;
 mod project_storage;
 #[cfg(test)]
 mod project_storage_tests;
@@ -178,6 +179,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            project_skills::project_skill_preferences,
+            project_skills::configure_project_skills,
+            project_skills::import_project_skills,
             review_comments::read_review_comments,
             review_comments::mutate_review_comment,
             editor::commands::editor_navigation,
