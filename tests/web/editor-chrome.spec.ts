@@ -149,6 +149,7 @@ test("whole tabs select, overlay close stays separate and dragging preserves sel
 test("tabs reorder with the keyboard and Escape cancels without changing selection", async ({
   page,
 }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" })
   await page.goto("/dev/editor-chrome/")
   await expect(
     page.getByRole("button", { name: "Create file or folder" })
@@ -163,7 +164,18 @@ test("tabs reorder with the keyboard and Escape cancels without changing selecti
     exact: true,
   })
   await first.focus()
-  await page.keyboard.press("Space", { delay: 50 })
+  await page.keyboard.press("Space")
+  await expect(first).toHaveAttribute("aria-pressed", "true")
+  // Collision measurement completes after the sensor activation render.
+  await expect(preview.getByRole("status")).toHaveText(
+    "Draggable item TestComponents.tsx was moved over droppable area TestComponents.tsx."
+  )
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+  )
   await page.keyboard.press("ArrowRight")
   await expect(
     page
@@ -171,13 +183,28 @@ test("tabs reorder with the keyboard and Escape cancels without changing selecti
       .filter({ hasText: "was moved over droppable area notes.md." })
   ).toHaveCount(1)
   await page.keyboard.press("Escape")
+  await expect(
+    page.getByRole("status").filter({ hasText: "Dragging was cancelled." })
+  ).toHaveCount(1)
+  await expect(first).not.toHaveAttribute("aria-pressed", "true")
   await expect(preview.getByRole("tab").first()).toHaveAttribute(
     "title",
     "TestComponents.tsx"
   )
   await expect(first).toHaveAttribute("aria-selected", "true")
   await first.focus()
-  await page.keyboard.press("Space", { delay: 50 })
+  await page.keyboard.press("Space")
+  await expect(first).toHaveAttribute("aria-pressed", "true")
+  // Collision measurement completes after the sensor activation render.
+  await expect(preview.getByRole("status")).toHaveText(
+    "Draggable item TestComponents.tsx was moved over droppable area TestComponents.tsx."
+  )
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+  )
   await page.keyboard.press("ArrowRight")
   await expect(
     page
