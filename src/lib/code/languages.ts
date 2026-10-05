@@ -9,6 +9,22 @@ export interface CodeLanguage {
   interpreters?: readonly string[]
 }
 
+export type LanguageDetectionSource =
+  | "manual"
+  | "association"
+  | "filename"
+  | "extension"
+  | "firstLine"
+  | "project"
+  | "content"
+  | "plaintext"
+export interface LanguageDecision {
+  language: CodeLanguage
+  source: LanguageDetectionSource
+  /** Conflicting associations are candidates, never resolved by registry order. */
+  candidates: readonly CodeLanguage[]
+}
+
 import bundledDefinitions from "../../../resources/languages/languages.json"
 
 /** Native and webview resolve the same bundled and locally imported definitions. */
@@ -33,13 +49,16 @@ const pseudo: CodeLanguage = {
 
 export function resolveLanguageId(id: string | undefined): CodeLanguage {
   const value = id?.toLowerCase()
+  const languages = [plaintext, pseudo, ...codeLanguages]
   return (
-    [pseudo, ...codeLanguages].find(
+    languages.find(
       (language) =>
         language.id === value ||
-        language.aliases?.includes(value ?? "") ||
-        language.extensions.includes(value ?? "")
-    ) ?? plaintext
+        language.lspId === value ||
+        language.aliases?.some((alias) => alias.toLowerCase() === value)
+    ) ??
+    languages.find((language) => language.extensions.includes(value ?? "")) ??
+    plaintext
   )
 }
 
@@ -47,18 +66,37 @@ export function resolveCodeLanguage(
   path: string,
   firstLine?: string
 ): CodeLanguage {
+  const decision = detectCodeLanguage(path, firstLine)
+  // Captured/read-only readers have no live detection lifecycle. Preserve their
+  // historical coloring (notably C++ headers); live editors use the decision API.
+  if (decision.candidates.length) {
+    if (path.toLowerCase().endsWith(".h"))
+      return (
+        decision.candidates.find((language) => language.id === "cpp") ??
+        decision.candidates[0]
+      )
+    return decision.candidates[0]
+  }
+  return decision.language
+}
+
+export function detectCodeLanguage(
+  path: string,
+  firstLine?: string
+): LanguageDecision {
   const name = path.replaceAll("\\", "/").split("/").at(-1) ?? ""
   const named = codeLanguages.find((language) =>
     language.filenames?.some((file) => matchesName(file, name))
   )
-  if (named) return named
+  if (named) return { language: named, source: "filename", candidates: [] }
   const extension = name.includes(".")
     ? name.split(".").at(-1)?.toLowerCase()
     : ""
-  const known = codeLanguages.find((language) =>
+  const known = codeLanguages.filter((language) =>
     language.extensions.includes(extension ?? "")
   )
-  if (known) return known
+  if (known.length === 1)
+    return { language: known[0], source: "extension", candidates: [] }
   if (firstLine?.startsWith("#!")) {
     const words = firstLine
       .slice(2)
@@ -70,9 +108,10 @@ export function resolveCodeLanguage(
         words.some((word) => matchesName(pattern, word))
       )
     )
-    if (detected) return detected
+    if (detected)
+      return { language: detected, source: "firstLine", candidates: [] }
   }
-  return plaintext
+  return { language: plaintext, source: "plaintext", candidates: known }
 }
 
 /** File-name patterns deliberately support only *; no platform-specific glob semantics. */

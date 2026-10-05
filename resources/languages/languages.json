@@ -67,7 +67,7 @@
     "id": "c",
     "name": "C",
     "lspId": "c",
-    "extensions": ["c"]
+    "extensions": ["c", "h"]
   },
   {
     "id": "cpp",
