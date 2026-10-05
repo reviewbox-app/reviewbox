@@ -5,6 +5,7 @@ import type { editor } from "monaco-editor"
 import * as monaco from "monaco-editor/editor/editor.api"
 import { useEffect, useLayoutEffect, useRef } from "react"
 import styles from "./editor-surface.module.css"
+import { useTheme } from "next-themes"
 import { useCodeTheme } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
@@ -22,7 +23,10 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
     originalLanguageDocument,
     modifiedLanguageDocument
   )
-  const theme = useCodeTheme(!props.theme?.endsWith("light"))
+  const { resolvedTheme } = useTheme()
+  const theme = useCodeTheme(
+    props.theme ? !props.theme.endsWith("light") : resolvedTheme !== "light"
+  )
   useEffect(() => {
     void ensureCodeLanguage(props.language).catch(() => {})
   }, [props.language])
