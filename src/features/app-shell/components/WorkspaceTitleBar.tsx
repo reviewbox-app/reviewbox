@@ -84,6 +84,7 @@ export function WorkspaceTitleBar({
                 Review
               </TabsTrigger>
               <TabsTrigger value="understand">Code Editor</TabsTrigger>
+              <TabsTrigger value="terminal">Terminal</TabsTrigger>
             </TabsList>
           </Tabs>
           {reviewControl && (

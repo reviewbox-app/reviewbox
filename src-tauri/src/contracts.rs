@@ -514,6 +514,9 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
+        TerminalSession::decl(&cfg),
+        TerminalEvent::decl(&cfg),
+        TerminalLink::decl(&cfg),
         LanguageSetupRequest::decl(&cfg),
         LanguageSetupFile::decl(&cfg),
         LanguageSetupCommand::decl(&cfg),
@@ -915,4 +918,41 @@ pub struct ProviderSettings {
 
 fn default_helper_model() -> String {
     "gpt-6-luna".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSession {
+    pub id: String,
+    pub repository_id: String,
+    pub shell: String,
+    pub cwd: String,
+    pub exited: bool,
+    pub exit_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TerminalEvent {
+    Data {
+        id: String,
+        sequence: u32,
+        bytes: Vec<u8>,
+    },
+    Exit {
+        id: String,
+        code: Option<u32>,
+    },
+    Error {
+        id: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalLink {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
 }

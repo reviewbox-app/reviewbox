@@ -219,19 +219,30 @@ pub fn editor_dirty(state: State<'_, EditorState>, dirty: bool) {
     state.dirty.store(dirty, Ordering::SeqCst);
 }
 #[tauri::command]
-pub fn editor_exit(app: tauri::AppHandle, state: State<'_, EditorState>) {
+pub async fn editor_exit(app: tauri::AppHandle, state: State<'_, EditorState>) -> AppResult<()> {
+    use tauri::Manager;
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        handle.state::<crate::terminals::Terminals>().stop_all()
+    })
+    .await
+    .map_err(|error| AppError::new("terminal_shutdown", error.to_string()))?;
     state.allow_exit.store(true, Ordering::SeqCst);
     app.exit(0);
+    Ok(())
 }
 pub(crate) fn confirm_exit(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
     let state = app.state::<EditorState>();
-    if state.dirty.load(Ordering::SeqCst) && !state.allow_exit.load(Ordering::SeqCst) {
+    let terminals = app.state::<crate::terminals::Terminals>().active_count();
+    if (state.dirty.load(Ordering::SeqCst) || terminals > 0)
+        && !state.allow_exit.load(Ordering::SeqCst)
+    {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
             let _ = window.set_focus();
         }
-        let _ = app.emit("reviewbox:editor-confirm-exit", ());
+        let _ = app.emit("reviewbox:editor-confirm-exit", terminals);
         true
     } else {
         false

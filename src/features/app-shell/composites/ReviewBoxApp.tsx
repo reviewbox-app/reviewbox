@@ -26,6 +26,8 @@ import { ResumeReviews } from "@/features/review/composites/ResumeReviews"
 import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
 import { CodeEditorWorkspace } from "@/features/code-editor/composites/CodeEditorWorkspace"
 import { EditorLifecycle } from "@/features/code-editor/composites/EditorLifecycle"
+import { TerminalWorkspace } from "@/features/terminal/composites/TerminalWorkspace"
+import { terminalOwnsKey } from "@/features/terminal/services/terminal.helpers"
 import { useReviewNotifications } from "@/features/notifications/hooks/useReviewNotifications"
 import { useRepositoryGitMenu } from "@/features/source-control/hooks/useRepositoryGitMenu"
 import { useSourceControl } from "@/features/source-control/hooks/useSourceControl"
@@ -162,8 +164,15 @@ export function ReviewBoxApp() {
         !!target?.isContentEditable ||
         !!target?.closest("input,textarea,select,[role=combobox]")
       if (event.isComposing) return
+      const inTerminal = !!target?.closest(".xterm")
+      if (inTerminal && terminalOwnsKey(event)) return
       const meta = event.metaKey || event.ctrlKey
       if (document.querySelector("[role=dialog]")) return
+      if (event.ctrlKey && event.key === "`" && repository) {
+        event.preventDefault()
+        setSpace(space === "terminal" ? "understand" : "terminal")
+        return
+      }
       if (meta && event.key.toLowerCase() === "o") {
         event.preventDefault()
         void choose()
@@ -179,14 +188,16 @@ export function ReviewBoxApp() {
       ) {
         event.preventDefault()
         setPalette(true)
-      } else if (meta && ["1", "2", "3"].includes(event.key)) {
+      } else if (meta && ["1", "2", "3", "4"].includes(event.key)) {
         event.preventDefault()
         setSpace(
           event.key === "1"
             ? "resume"
             : event.key === "2"
               ? "review"
-              : "understand"
+              : event.key === "3"
+                ? "understand"
+                : "terminal"
         )
       } else if (meta && event.key === "\\") {
         event.preventDefault()
@@ -518,7 +529,7 @@ export function ReviewBoxApp() {
             ])
           )}
         />
-      ) : local ? (
+      ) : space === "terminal" ? null : local ? (
         <LocalChanges
           key={repository.id}
           git={git}
@@ -569,6 +580,10 @@ export function ReviewBoxApp() {
           onStart={() => setNewReview(true)}
         />
       )}
+      <TerminalWorkspace
+        repositoryId={repository?.id}
+        visible={!!repository && space === "terminal"}
+      />
       {!repository && (
         <footer className="flex h-10 shrink-0 items-center justify-end gap-4 border-t px-5 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">

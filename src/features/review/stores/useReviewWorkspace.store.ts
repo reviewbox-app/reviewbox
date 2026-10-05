@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import type { ReadingLevel } from "@/lib/desktop/contracts.generated"
 
-type Space = "understand" | "review" | "resume"
+export type Space = "understand" | "review" | "resume" | "terminal"
 type ReaderView = "document" | "code"
 interface WorkspaceState {
   space: Space

@@ -22,13 +22,14 @@ import {
 } from "@/components/ui/command"
 import { FileIcon } from "@/features/file-icons/components/FileIcon"
 import type { Workspace } from "@/lib/desktop/contracts.generated"
+import type { Space } from "@/features/review/stores/useReviewWorkspace.store"
 
 export interface PaletteActions {
   step: (direction: number) => void
   /** Switches the review between the document and the code. */
   view: () => void
   openChange: (changeId: string) => void
-  space: (space: "understand" | "review" | "resume") => void
+  space: (space: Space) => void
   newReview: () => void
   openRepository: () => void
   settings: () => void
@@ -101,6 +102,11 @@ export function CommandPalette({
             </CommandGroup>
           )}
           <CommandGroup heading="ReviewBox">
+            <CommandItem onSelect={run(() => actions.space("terminal"))}>
+              <HugeiconsIcon icon={CodeIcon} />
+              Terminal
+              <CommandShortcut>⌘4</CommandShortcut>
+            </CommandItem>
             {workspace && (
               <>
                 <CommandItem onSelect={run(() => actions.space("resume"))}>

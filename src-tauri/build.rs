@@ -1,5 +1,13 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "terminal_create",
+        "terminal_list",
+        "terminal_write",
+        "terminal_resize",
+        "terminal_ack",
+        "terminal_close",
+        "terminal_open_url",
+        "terminal_resolve_file",
         "get_app_info",
         "diagnostics_record",
         "diagnostics_read",

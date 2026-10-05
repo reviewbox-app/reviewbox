@@ -30,6 +30,7 @@ mod reviews;
 mod snapshots;
 mod source_control;
 mod storage;
+mod terminals;
 pub use project_storage::schemas as project_schemas;
 use tauri::Manager;
 
@@ -40,6 +41,7 @@ pub fn run() {
     builder
         .manage(illustrations::Illustrations::default())
         .manage(editor::commands::EditorState::default())
+        .manage(terminals::Terminals::default())
         .manage(notifications::Notifications::default())
         .manage(language_servers::live::LiveLanguages::default())
         .manage(language_servers::setup::Setup::default())
@@ -151,6 +153,7 @@ pub fn run() {
                     .stop_all();
             }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<terminals::Terminals>().stop_all();
                 notifications::shutdown(window.app_handle());
                 window
                     .state::<language_servers::setup::Setup>()
@@ -174,6 +177,14 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            terminals::terminal_create,
+            terminals::terminal_list,
+            terminals::terminal_write,
+            terminals::terminal_resize,
+            terminals::terminal_ack,
+            terminals::terminal_close,
+            terminals::terminal_open_url,
+            terminals::terminal_resolve_file,
             app_info::get_app_info,
             diagnostics::diagnostics_record,
             diagnostics::diagnostics_read,
@@ -321,6 +332,7 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 app.state::<language_servers::setup::Setup>().0.stop_all();
+                app.state::<terminals::Terminals>().stop_all();
                 app.state::<language_servers::live::LiveLanguages>()
                     .stop_all();
                 app.state::<preparation::PreparationManager>().stop_all();

@@ -30,6 +30,12 @@ import { observeEditorMenu } from "../services/editorMenu.service"
 /** Lives with the app, so drafts survive leaving the editor or switching checkout. */
 export function EditorLifecycle() {
   const [exit, setExit] = useState(false)
+  const [terminalCount, setTerminalCount] = useState(0)
+  const hasDirty = useEditorStore((state) =>
+    Object.values(state.sessions).some((session) =>
+      session.buffers.some((buffer) => buffer.text !== buffer.baseText)
+    )
+  )
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   useEffect(observeLanguageRegistry, [])
@@ -39,8 +45,12 @@ export function EditorLifecycle() {
   }, [])
   useEffect(() => {
     if (!desktopAvailable()) return
-    const listener = listen("reviewbox:editor-confirm-exit", () =>
-      setExit(true)
+    const listener = listen<number>(
+      "reviewbox:editor-confirm-exit",
+      (event) => {
+        setTerminalCount(event.payload || 0)
+        setExit(true)
+      }
     )
     const subscriptions = new Map<string, () => void>()
     const fallbacks = new Map<string, ReturnType<typeof setTimeout>>()
@@ -172,9 +182,15 @@ export function EditorLifecycle() {
       }}
     >
       <DialogContent>
-        <DialogTitle>Save changes before quitting?</DialogTitle>
+        <DialogTitle>
+          {hasDirty
+            ? "Save changes before quitting?"
+            : "Close terminals and quit?"}
+        </DialogTitle>
         <DialogDescription>
-          Your open files contain unsaved changes.
+          {hasDirty && "Your open files contain unsaved changes. "}
+          {terminalCount > 0 &&
+            `${terminalCount} active terminal${terminalCount === 1 ? "" : "s"} and their running commands will stop.`}
         </DialogDescription>
         {error && (
           <p role="alert" className="text-destructive">
@@ -189,15 +205,17 @@ export function EditorLifecycle() {
           >
             Cancel
           </Button>
-          <Button
-            variant="secondary"
-            disabled={busy}
-            onClick={() => void finish(false)}
-          >
-            Discard changes
-          </Button>
+          {hasDirty && (
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void finish(false)}
+            >
+              Discard changes
+            </Button>
+          )}
           <Button disabled={busy} onClick={() => void finish(true)}>
-            Save all and quit
+            {hasDirty ? "Save all and quit" : "Quit"}
           </Button>
         </DialogFooter>
       </DialogContent>
