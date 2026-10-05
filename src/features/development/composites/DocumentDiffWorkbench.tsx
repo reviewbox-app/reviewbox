@@ -142,6 +142,7 @@ export function DocumentDiffWorkbench() {
         {changes.map((item) => (
           <Button
             key={item.id}
+            disabled={!ready}
             size="sm"
             variant="ghost"
             onClick={() => {
