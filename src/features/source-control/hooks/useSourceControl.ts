@@ -97,18 +97,16 @@ export function useSourceControl(repositoryId: string | undefined) {
     void fetch()
     const unsubscribe = subscribeRepositoryReads(
       repositoryId,
+      () => void refresh(),
       () => void refresh()
     )
-    const timer = setInterval(() => void refresh(), 30000)
     const focus = () => {
       void fetch()
-      void refresh()
     }
     window.addEventListener("focus", focus)
     return () => {
       alive = false
       unsubscribe()
-      clearInterval(timer)
       window.removeEventListener("focus", focus)
     }
   }, [repositoryId, reload, fetch, setError])

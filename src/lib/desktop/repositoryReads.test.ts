@@ -46,3 +46,22 @@ test("overflow becomes bounded full reconciliation, including earlier scopes", (
     full: true,
   })
 })
+
+test("native sequence delivery is immediate, rejects old batches and reconciles gaps", () => {
+  const bus = createRepositoryReadDispatcher()
+  const received: RepositoryReadChange[] = []
+  bus.subscribe("one", (event) => received.push(event))
+  bus.receive({ ...change("one", ["a"]), generation: "g1", sequence: 1 })
+  expect(received).toHaveLength(1)
+  bus.receive({ ...change("one", ["old"]), generation: "g1", sequence: 1 })
+  expect(received).toHaveLength(1)
+  bus.receive({ ...change("one", ["new"]), generation: "g1", sequence: 3 })
+  expect(received.at(-1)?.full).toBe(true)
+  bus.receive({
+    ...change("one", ["new generation"]),
+    generation: "g2",
+    sequence: 1,
+  })
+  expect(received.at(-1)?.full).toBe(true)
+  bus.dispose()
+})

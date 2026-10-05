@@ -1,10 +1,16 @@
-use crate::contracts::{RepositoryReadChange, fingerprint};
-use notify::{Event, EventKind, event::ModifyKind};
+use crate::contracts::{RepositoryPathChange, RepositoryReadChange, fingerprint};
+use notify::{
+    Event, EventKind,
+    event::{ModifyKind, RenameMode},
+};
 use std::path::Path;
 
 pub(super) fn full(root: &Path) -> RepositoryReadChange {
     RepositoryReadChange {
         repository_id: fingerprint(root.to_string_lossy().as_bytes()),
+        generation: None,
+        sequence: None,
+        changes: Some(Vec::new()),
         paths: Vec::new(),
         tree: true,
         git: true,
@@ -22,14 +28,27 @@ pub(super) fn classify(root: &Path, event: notify::Result<Event>) -> Option<Repo
     if event.need_rescan() || event.paths.is_empty() {
         return Some(full(root));
     }
+    let atomic_replace = matches!(
+        event.kind,
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+    ) && event.paths.len() == 2
+        && event.paths[0]
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".reviewbox-save-"));
     let mut change = RepositoryReadChange {
         tree: false,
         git: false,
         full: false,
         ..full(root)
     };
-    for path in &event.paths {
+    for (index, path) in event.paths.iter().enumerate() {
         let relative = path.strip_prefix(root).ok();
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".reviewbox-save-"))
+        {
+            continue;
+        }
         if relative.is_some_and(|p| p.starts_with(".reviewbox")) {
             continue;
         }
@@ -45,8 +64,18 @@ pub(super) fn classify(root: &Path, event: notify::Result<Event>) -> Option<Repo
             {
                 continue;
             }
+            if relative.is_none()
+                && path
+                    .components()
+                    .any(|c| c.as_os_str() == "objects" || c.as_os_str() == "logs")
+            {
+                continue;
+            }
             change.git = true;
-            change.tree = true;
+            // Index/refs changes affect Git views; only exclusion configuration changes the tree.
+            change.tree |= path
+                .file_name()
+                .is_some_and(|name| name == "exclude" || name == "config");
             continue;
         }
         let relative = relative.unwrap();
@@ -59,13 +88,33 @@ pub(super) fn classify(root: &Path, event: notify::Result<Event>) -> Option<Repo
         if change.paths.len() >= 512 {
             return Some(full(root));
         }
-        change.paths.push(name.replace('\\', "/"));
-        change.tree |= !matches!(
-            event.kind,
-            EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_))
-        ) || relative
-            .file_name()
-            .is_some_and(|n| n == ".gitignore" || n == ".ignore");
+        let path = name.replace('\\', "/");
+        let kind = if atomic_replace {
+            "changed"
+        } else {
+            match event.kind {
+                EventKind::Create(_) => "created",
+                EventKind::Remove(_) => "deleted",
+                EventKind::Modify(ModifyKind::Name(RenameMode::From)) => "deleted",
+                EventKind::Modify(ModifyKind::Name(RenameMode::To)) => "created",
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if index == 0 => "deleted",
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => "created",
+                _ => "changed",
+            }
+        };
+        change.changes.as_mut().unwrap().push(RepositoryPathChange {
+            path: path.clone(),
+            kind: kind.into(),
+        });
+        change.paths.push(path);
+        change.tree |= !atomic_replace
+            && !matches!(
+                event.kind,
+                EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_))
+            )
+            || relative
+                .file_name()
+                .is_some_and(|n| n == ".gitignore" || n == ".ignore");
     }
     if change.paths.is_empty() && !change.git {
         None
@@ -91,6 +140,8 @@ pub(super) fn batched(notify: super::Notifier) -> super::Notifier {
         .name("repository-events".into())
         .spawn(move || {
             while let Ok(mut batch) = receiver.recv() {
+                let mut kinds = std::collections::BTreeMap::new();
+                merge_kinds(&mut kinds, batch.changes.take().unwrap_or_default());
                 let deadline = Instant::now() + Duration::from_millis(200);
                 let mut paths = batch
                     .paths
@@ -104,6 +155,7 @@ pub(super) fn batched(notify: super::Notifier) -> super::Notifier {
                     }
                     match receiver.recv_timeout(remaining) {
                         Ok(change) => {
+                            merge_kinds(&mut kinds, change.changes.unwrap_or_default());
                             batch.tree |= change.tree;
                             batch.git |= change.git;
                             batch.full |= change.full;
@@ -119,11 +171,18 @@ pub(super) fn batched(notify: super::Notifier) -> super::Notifier {
                 batch.full |= lost.swap(false, Ordering::AcqRel);
                 if batch.full {
                     batch.paths.clear();
+                    kinds.clear();
                     batch.tree = true;
                     batch.git = true;
                 } else {
                     batch.paths = paths.into_iter().collect();
                 }
+                batch.changes = Some(
+                    kinds
+                        .into_iter()
+                        .map(|(path, kind)| RepositoryPathChange { path, kind })
+                        .collect(),
+                );
                 deliver(batch);
             }
         });
@@ -137,10 +196,28 @@ pub(super) fn batched(notify: super::Notifier) -> super::Notifier {
     })
 }
 
+fn merge_kinds(
+    kinds: &mut std::collections::BTreeMap<String, String>,
+    changes: Vec<RepositoryPathChange>,
+) {
+    for change in changes {
+        let kind = match (
+            kinds.get(&change.path).map(String::as_str),
+            change.kind.as_str(),
+        ) {
+            (Some("created"), "changed") => "created",
+            (Some("deleted"), "created") => "changed",
+            (_, kind) => kind,
+        }
+        .to_owned();
+        kinds.insert(change.path, kind);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{DataChange, RenameMode};
+    use notify::event::DataChange;
     #[test]
     fn content_is_scoped_and_rename_updates_both_paths() {
         let root = Path::new("/checkout");
@@ -212,7 +289,7 @@ mod tests {
             Ok(Event::new(EventKind::Any).add_path(root.join(".git/index"))),
         )
         .unwrap();
-        assert!(change.git && change.tree && !change.full);
+        assert!(change.git && !change.tree && !change.full);
         assert!(change.paths.is_empty());
         assert!(
             classify(root, Err(notify::Error::generic("lost events")))

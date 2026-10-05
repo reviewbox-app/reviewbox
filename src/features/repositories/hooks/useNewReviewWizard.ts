@@ -66,6 +66,7 @@ export function useNewReviewWizard(
   const [advancing, setAdvancing] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const reading = useRef(false)
+  const pendingRefresh = useRef(false)
   const operation = useRef<string | null>(null)
   const disposed = useRef(false)
   const cancelRequested = useRef(false)
@@ -157,7 +158,13 @@ export function useNewReviewWizard(
           setError(errorMessage(e))
         }
       } finally {
-        if (alive) reading.current = false
+        if (alive) {
+          reading.current = false
+          if (pendingRefresh.current && !operation.current) {
+            pendingRefresh.current = false
+            setRefresh((n) => n + 1)
+          }
+        }
       }
     }, 150)
     return () => {
@@ -170,22 +177,12 @@ export function useNewReviewWizard(
   }, [request, refresh])
   useEffect(() => {
     const focus = () => {
-      if (
-        document.visibilityState === "visible" &&
-        !operation.current &&
-        !reading.current
-      ) {
-        setRefresh((n) => n + 1)
+      if (document.visibilityState === "visible" && !operation.current) {
+        if (reading.current) pendingRefresh.current = true
+        else setRefresh((n) => n + 1)
       }
     }
-    const unsubscribe = subscribeRepositoryReads(repositoryId, focus)
-    const interval = window.setInterval(focus, 30000)
-    window.addEventListener("focus", focus)
-    return () => {
-      unsubscribe()
-      window.clearInterval(interval)
-      window.removeEventListener("focus", focus)
-    }
+    return subscribeRepositoryReads(repositoryId, focus, focus)
   }, [repositoryId])
 
   const change = (patch: Partial<CaptureRequest>) => {
