@@ -6,14 +6,15 @@ export default defineConfig({
   testDir: "tests/web",
   outputDir: "artifacts/playwright",
   use: {
-    baseURL: "http://127.0.0.1:1420",
+    baseURL: "http://127.0.0.1:1423",
     viewport: { width: 1440, height: 900 },
   },
   webServer: {
-    // Bun + Turbopack currently mis-resolves Shiki externals in the test server.
-    command: "bun run dev:web --webpack",
-    timeout: 120000,
-    url: "http://127.0.0.1:1420",
-    reuseExistingServer: !process.env.CI,
+    // Export fixtures once: no HMR resets, cold route compilation or dev memory restarts.
+    command:
+      "REVIEWBOX_DEVTOOLS=1 bun run build:web && bun scripts/serve-web-tests.ts",
+    timeout: 180000,
+    url: "http://127.0.0.1:1423",
+    reuseExistingServer: false,
   },
 })

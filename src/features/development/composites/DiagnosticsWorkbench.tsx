@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useSyncExternalStore } from "react"
 import { Button } from "@/components/ui/button"
 import { ReviewPreparationContent } from "@/features/agents/components/ReviewPreparationContent"
 import type { ReviewPreparationView } from "@/features/agents/contracts/preparation.types"
@@ -8,6 +8,7 @@ import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
 import type { Workspace } from "@/lib/desktop/contracts.generated"
 
 const action = () => {}
+const subscribeHydration = () => action
 const error = {
   code: "provider_authentication",
   message:
@@ -56,6 +57,12 @@ const preparation: ReviewPreparationView = {
 /** Development-only page: exercises the shipped components with a failed run. */
 export function DiagnosticsWorkbench() {
   const [settings, setSettings] = useState(false)
+  const hydrated = useSyncExternalStore(
+    subscribeHydration,
+    () => true,
+    () => false
+  )
+  if (!hydrated) return <main role="status">Loading fixture…</main>
   return (
     <main className="min-h-screen p-4">
       <Button variant="ghost" onClick={() => setSettings(true)}>
