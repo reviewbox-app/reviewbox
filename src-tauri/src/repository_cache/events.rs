@@ -49,7 +49,14 @@ pub(super) fn classify(root: &Path, event: notify::Result<Event>) -> Option<Repo
         {
             continue;
         }
-        if relative.is_some_and(|p| p.starts_with(".reviewbox")) {
+        // Internal locks and atomic temporary files do not represent document changes.
+        if relative.is_some_and(|p| p.starts_with(".reviewbox"))
+            && path.file_name().is_some_and(|p| {
+                p == "write.lock"
+                    || p == "transaction.json"
+                    || p.to_string_lossy().starts_with(".tmp")
+            })
+        {
             continue;
         }
         let git_path = relative.and_then(|p| p.strip_prefix(".git").ok());
@@ -271,7 +278,7 @@ mod tests {
     fn metadata_noise_and_git_are_separate() {
         let root = Path::new("/checkout");
         for path in [
-            ".reviewbox/draft.json",
+            ".reviewbox/.local/write.lock",
             ".git/index.lock",
             ".git/objects/ab/cd",
             ".git/logs/HEAD",
@@ -284,6 +291,16 @@ mod tests {
                 .is_none()
             );
         }
+        let metadata = classify(
+            root,
+            Ok(
+                Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                    .add_path(root.join(".reviewbox/CURRENT_CHANGES.md")),
+            ),
+        )
+        .unwrap();
+        assert_eq!(metadata.paths, [".reviewbox/CURRENT_CHANGES.md"]);
+        assert!(!metadata.git && !metadata.tree && !metadata.full);
         let change = classify(
             root,
             Ok(Event::new(EventKind::Any).add_path(root.join(".git/index"))),

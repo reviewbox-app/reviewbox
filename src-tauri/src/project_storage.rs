@@ -128,6 +128,41 @@ pub fn atomic(path: &Path, content: &[u8]) -> AppResult<()> {
     fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
+pub(crate) fn lock_directory(root: &Path) -> AppResult<FileLock> {
+    let path = checked(root, ".local/write.lock")?;
+    fs::create_dir_all(path.parent().unwrap())?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let mut locked = false;
+    for _ in 0..50 {
+        if file.try_lock().is_ok() {
+            locked = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !locked {
+        let mut error = AppError::new(
+            "project_busy",
+            "Another operation is writing this project. Retry shortly.",
+        );
+        error.retryable = true;
+        return Err(error);
+    }
+    Ok(FileLock(file))
+}
+
+/// Explicit human edits of free-form collaboration documents share the project writer lock.
+pub(crate) fn mutate_editor_document(root: &Path, mutation: EditorMutation) -> AppResult<()> {
+    let directory = checked(root, ".reviewbox")?;
+    let _lock = lock_directory(&directory)?;
+    crate::editor::mutate_unlocked(root, mutation)
+}
+
 impl Project {
     pub fn open(root: &Path, repository_id: &str) -> AppResult<Self> {
         let directory = checked(root, ".reviewbox")?;
@@ -167,7 +202,13 @@ impl Project {
             if fs::read_dir(&provisional.root)?
                 .filter_map(Result::ok)
                 .any(|e| {
-                    ![".local", ".gitignore"].contains(&e.file_name().to_string_lossy().as_ref())
+                    ![
+                        ".local",
+                        ".gitignore",
+                        "CURRENT_CHANGES.md",
+                        "REVIEW_COMMENTS.md",
+                    ]
+                    .contains(&e.file_name().to_string_lossy().as_ref())
                 })
             {
                 return Err(AppError::new(
@@ -207,31 +248,7 @@ impl Project {
         Ok(project)
     }
     pub fn lock(&self) -> AppResult<FileLock> {
-        let path = checked(&self.root, ".local/write.lock")?;
-        fs::create_dir_all(path.parent().unwrap())?;
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(path)?;
-        let mut locked = false;
-        for _ in 0..50 {
-            if file.try_lock().is_ok() {
-                locked = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        if !locked {
-            let mut error = AppError::new(
-                "project_busy",
-                "Another operation is writing this project. Retry shortly.",
-            );
-            error.retryable = true;
-            return Err(error);
-        }
-        Ok(FileLock(file))
+        lock_directory(&self.root)
     }
     fn recover(&self) -> AppResult<()> {
         let manifest: Manifest =

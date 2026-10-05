@@ -14,6 +14,11 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu"
+import {
+  canCreateProjectFile,
+  editableProjectPath,
+  isReviewBoxPath,
+} from "../helpers/editorPaths"
 import { EditorTabs } from "../components/EditorTabs"
 import { useEditorMenu } from "../hooks/useEditorMenu"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -24,8 +29,16 @@ import {
   findEditorFiles,
   indexEditorFiles,
 } from "../helpers/editorSearch.helpers"
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyContent,
+} from "@/components/ui/empty"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { FileTreeSearch } from "@/features/file-tree/components/FileTreeSearch"
 import {
   Dialog,
   DialogContent,
@@ -39,6 +52,7 @@ import {
 } from "@/components/ui/context-menu"
 import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import { FileMenu } from "@/features/file-tree/components/FileMenu"
+import { useFileTreeNavigation } from "@/features/file-tree/hooks/useFileTreeNavigation"
 import { FileTree } from "@/features/file-tree/components/FileTree"
 import type { GitFileStatus } from "@/lib/git/file-status"
 import { CodeDiffEditor } from "../components/CodeDiffEditor"
@@ -78,6 +92,12 @@ export function CodeEditorWorkspace({
   const query = session?.filter.trim() ?? ""
   const deferredQuery = useDeferredValue(query)
   const searching = !!query
+  const {
+    ref: attachTree,
+    onScroll: saveTreeScroll,
+    toggle: toggleTree,
+    update: updateTree,
+  } = useFileTreeNavigation(id, "editor", searching)
   const searchMode = session?.searchMode ?? "file"
   const fileIndex = useMemo(
     () => indexEditorFiles(entries ?? [], ignoredPaths ?? new Set()),
@@ -192,23 +212,15 @@ export function CodeEditorWorkspace({
           aria-label="Code Editor files"
           className="relative flex w-[clamp(180px,var(--explain-files-width,272px),30%)] shrink-0 flex-col gap-2"
         >
-          <div className="flex items-center gap-1">
-            <Input
-              aria-label="Filter files"
-              placeholder={
-                searchMode === "content"
-                  ? "Search file contents"
-                  : "Filter files"
-              }
-              onKeyDown={(event) => {
-                if (event.key === "Escape")
-                  updateEditor(id, (s) => ({ ...s, filter: "" }))
-              }}
-              value={session.filter}
-              onChange={(e) =>
-                updateEditor(id, (s) => ({ ...s, filter: e.target.value }))
-              }
-            />
+          <FileTreeSearch
+            label={
+              searching && searchMode === "content"
+                ? "Search file contents"
+                : "Filter files"
+            }
+            value={session.filter}
+            onChange={(filter) => updateEditor(id, (s) => ({ ...s, filter }))}
+          >
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -240,7 +252,7 @@ export function CodeEditorWorkspace({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
+          </FileTreeSearch>
           {searching && (
             <Tabs
               value={searchMode}
@@ -258,6 +270,8 @@ export function CodeEditorWorkspace({
             </Tabs>
           )}
           <nav
+            ref={attachTree}
+            onScroll={saveTreeScroll}
             aria-label="Project files"
             className="min-h-0 flex-1 overflow-auto"
           >
@@ -283,6 +297,7 @@ export function CodeEditorWorkspace({
                   alwaysExpanded={searching}
                   toggledFolders={session.toggledFolders}
                   onToggleFolder={(path) => {
+                    toggleTree(path)
                     const opening = !session.toggledFolders.has(path)
                     updateEditor(id, (s) => {
                       const toggledFolders = new Set(s.toggledFolders)
@@ -314,6 +329,10 @@ export function CodeEditorWorkspace({
                   statuses={statuses}
                   onSelect={(path) => {
                     navigationRequest.current++
+                    updateTree((tree) => ({
+                      ...tree,
+                      selectedPath: path,
+                    }))
                     report(openEditorFile(id, path))
                   }}
                   renderRow={(row, target) => (
@@ -325,6 +344,16 @@ export function CodeEditorWorkspace({
                       before={
                         <>
                           <ContextMenuItem
+                            disabled={
+                              !canCreateProjectFile(
+                                target.folder
+                                  ? target.path
+                                  : target.path.slice(
+                                      0,
+                                      target.path.lastIndexOf("/")
+                                    )
+                              )
+                            }
                             onClick={() =>
                               setAction({
                                 kind: "file",
@@ -342,6 +371,7 @@ export function CodeEditorWorkspace({
                             New file
                           </ContextMenuItem>
                           <ContextMenuItem
+                            disabled={isReviewBoxPath(target.path)}
                             onClick={() =>
                               setAction({
                                 kind: "folder",
@@ -365,6 +395,10 @@ export function CodeEditorWorkspace({
                         <>
                           <ContextMenuSeparator />
                           <ContextMenuItem
+                            disabled={
+                              (target.folder && isReviewBoxPath(target.path)) ||
+                              !editableProjectPath(target.path)
+                            }
                             onClick={() =>
                               report(chooseAction("rename", target.path))
                             }
@@ -373,6 +407,10 @@ export function CodeEditorWorkspace({
                             Rename
                           </ContextMenuItem>
                           <ContextMenuItem
+                            disabled={
+                              (target.folder && isReviewBoxPath(target.path)) ||
+                              !editableProjectPath(target.path)
+                            }
                             onClick={() =>
                               report(chooseAction("trash", target.path))
                             }
@@ -425,11 +463,42 @@ export function CodeEditorWorkspace({
               onConflict={() => setConflict(active.id)}
             />
           ) : (
-            <p role="status" className="p-6 text-sm text-muted-foreground">
-              {session.ready
-                ? "Open a file to start editing."
-                : "Reading project files…"}
-            </p>
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <HugeiconsIcon icon={FileAddIcon} />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {session.ready
+                    ? "Open a file to start editing"
+                    : "Reading project files…"}
+                </EmptyTitle>
+                <EmptyDescription>
+                  Select a file in the explorer or create one in this project.
+                </EmptyDescription>
+              </EmptyHeader>
+              {session.ready && (
+                <EmptyContent className="flex-row justify-center">
+                  <Button
+                    onClick={() =>
+                      setAction({ kind: "file", path: "", revision: "" })
+                    }
+                  >
+                    <HugeiconsIcon icon={FileAddIcon} />
+                    New file
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      setAction({ kind: "folder", path: "", revision: "" })
+                    }
+                  >
+                    <HugeiconsIcon icon={FolderAddIcon} />
+                    New folder
+                  </Button>
+                </EmptyContent>
+              )}
+            </Empty>
           )}
         </main>
       </div>

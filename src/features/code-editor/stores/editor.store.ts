@@ -1,4 +1,9 @@
 "use client"
+import {
+  loadTreeNavigation,
+  treeNavigation,
+  updateTreeNavigation,
+} from "@/features/file-tree/services/navigation.service"
 import { create } from "zustand"
 import { mergeRepositoryChanges } from "@/lib/desktop/repositoryReads"
 import type {
@@ -100,6 +105,8 @@ export async function initializeEditor(id: string) {
   if (pending.has(key)) return pending.get(key)
   updateEditor(id, (s) => s)
   const work = (async () => {
+    await loadTreeNavigation(id)
+    const tree = treeNavigation(id, "editor")
     const recovery = await editorCommands.recovery(id)
     recoveryVersions.set(id, recovery.revision)
     const buffers: EditorBuffer[] = []
@@ -140,6 +147,7 @@ export async function initializeEditor(id: string) {
       ...s,
       buffers,
       active: recovery.active ?? buffers[0]?.path ?? "",
+      toggledFolders: new Set(tree?.expandedPaths ?? []),
       saveActions: recovery.saveActions ?? {},
       autoSave: recovery.autoSave,
       associations: recovery.associations ?? {},
@@ -308,6 +316,21 @@ async function reconcileEditor(id: string, change: RepositoryReadChange) {
       [...before.toggledFolders],
       change
     )
+    const folders = new Set(
+      entries.filter((entry) => entry.directory).map((entry) => entry.path)
+    )
+    const retained = [...before.toggledFolders].filter(
+      (path) =>
+        folders.has(path) ||
+        entries.some((entry) => entry.lazy && path.startsWith(`${entry.path}/`))
+    )
+    if (retained.length !== before.toggledFolders.size) {
+      updateEditor(id, (s) => ({ ...s, toggledFolders: new Set(retained) }))
+      updateTreeNavigation(id, "editor", (tree) => ({
+        ...tree,
+        expandedPaths: retained,
+      }))
+    }
     const ignoredPaths = new Set(
       entries.filter((entry) => entry.ignored).map((entry) => entry.path)
     )

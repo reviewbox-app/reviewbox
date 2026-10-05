@@ -2,7 +2,7 @@
 import { reviewReaderLayout } from "../reader.config"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTheme } from "next-themes"
-import { FileIcon } from "@/features/file-icons/components/FileIcon"
+import { CodeFileHeader } from "@/features/code-editor/components/CodeFileHeader"
 import type { editor } from "monaco-editor"
 import type {
   DocumentReference,
@@ -172,16 +172,11 @@ export function ReviewReferencePane({
   const source = content.source
   return (
     <section className="absolute inset-0" aria-label="Referenced source">
-      <header
-        className="absolute inset-x-0 z-10 flex items-center gap-2 truncate border-b glass-bar px-4 text-xs"
-        style={{
-          top: overlay.top,
-          height: reviewReaderLayout.codeHeaderHeight,
-        }}
-      >
-        <FileIcon path={source.path} />
-        {source.path}
-      </header>
+      <CodeFileHeader
+        path={source.path}
+        className="absolute inset-x-0 z-10 glass-bar"
+        style={{ top: overlay.top }}
+      />
       <CodeEditor
         key={key}
         height="100%"

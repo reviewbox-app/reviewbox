@@ -89,13 +89,19 @@ try {
   await ui.until(
     `document.querySelector('${tree} [data-folder="src"]')?.getAttribute('aria-expanded')==='false'`
   )
-  await ui.fill('[aria-label="Filter files"]', "answer")
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    "answer"
+  )
   await ui.element(file("src/answer.ts"))
   await ui.until(
     `!!document.querySelector(${JSON.stringify(file("src/answer.ts"))})?.getClientRects().length`,
     "matching file is visible in the expanded tree"
   )
-  await ui.fill('[aria-label="Filter files"]', "")
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    ""
+  )
   await ui.until(
     `document.querySelector('${tree} [data-folder="src"]')?.getAttribute('aria-expanded')==='false'`,
     "pre-search closed folder restored"
@@ -113,7 +119,10 @@ try {
   assert.equal(await disk("src/answer.ts"), "export const answer = 43;\n")
   phase = "unsaved content search and targeted refresh"
   await replace("export const answer = 99; // draftNeedle\n")
-  await ui.fill('[aria-label="Filter files"]', "draftNeedle")
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    "draftNeedle"
+  )
   await ui.named("Content", '[aria-label="Search mode"] [role=tab]')
   await ui.element(
     '[aria-label="Content search results"] [title="src/answer.ts"]'
@@ -139,7 +148,10 @@ try {
     false,
     "unrelated events preserve displayed results"
   )
-  await ui.fill('[aria-label="Filter files"]', "")
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    ""
+  )
   await replace("export const answer = 99;\n")
   phase = "drafts and tabs"
   await ui.click(file("src/other.ts"))

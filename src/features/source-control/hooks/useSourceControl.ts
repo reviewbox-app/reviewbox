@@ -1,5 +1,8 @@
 "use client"
-import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
+import {
+  hasSourceChanges,
+  subscribeRepositoryReads,
+} from "@/lib/desktop/repositoryReads"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { LocalGitState } from "@/lib/desktop/contracts.generated"
 import { desktopAvailable, errorMessage } from "@/lib/desktop/review.commands"
@@ -97,7 +100,9 @@ export function useSourceControl(repositoryId: string | undefined) {
     void fetch()
     const unsubscribe = subscribeRepositoryReads(
       repositoryId,
-      () => void refresh(),
+      (change) => {
+        if (hasSourceChanges(change)) void refresh()
+      },
       () => void refresh()
     )
     const focus = () => {

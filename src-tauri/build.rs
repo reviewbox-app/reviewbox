@@ -9,6 +9,8 @@ fn main() {
         "terminal_open_url",
         "terminal_resolve_file",
         "get_app_info",
+        "editor_navigation",
+        "editor_store_navigation",
         "diagnostics_record",
         "diagnostics_read",
         "diagnostics_reveal",

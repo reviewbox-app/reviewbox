@@ -177,6 +177,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            editor::commands::editor_navigation,
+            editor::commands::editor_store_navigation,
             terminals::terminal_create,
             terminals::terminal_list,
             terminals::terminal_write,

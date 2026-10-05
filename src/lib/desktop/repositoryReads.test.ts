@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import {
   createRepositoryReadDispatcher,
   mergeRepositoryChanges,
+  hasSourceChanges,
 } from "./repositoryReads"
 import type { RepositoryReadChange } from "./contracts.generated"
 const change = (
@@ -64,4 +65,25 @@ test("native sequence delivery is immediate, rejects old batches and reconciles 
   })
   expect(received.at(-1)?.full).toBe(true)
   bus.dispose()
+})
+
+test("metadata changes reach explorers without invalidating source consumers", () => {
+  const change = {
+    repositoryId: "checkout",
+    paths: [".reviewbox/CURRENT_CHANGES.md"],
+    tree: false,
+    git: false,
+    full: false,
+  }
+  expect(hasSourceChanges(change)).toBe(false)
+  expect(
+    hasSourceChanges({ ...change, paths: [".reviewbox/.gitignore"] })
+  ).toBe(false)
+  expect(
+    hasSourceChanges({
+      ...change,
+      paths: [".reviewbox/CURRENT_CHANGES.md", "src/main.ts"],
+    })
+  ).toBe(true)
+  expect(hasSourceChanges({ ...change, full: true })).toBe(true)
 })

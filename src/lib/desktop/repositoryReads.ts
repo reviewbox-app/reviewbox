@@ -36,6 +36,17 @@ export function mergeRepositoryChanges(
   }
 }
 
+/** Metadata changes are relevant to the explorer, never to captured source readers. */
+export function hasSourceChanges(change: RepositoryReadChange) {
+  return (
+    change.full ||
+    change.git ||
+    change.paths.some(
+      (path) => path !== ".reviewbox" && !path.startsWith(".reviewbox/")
+    )
+  )
+}
+
 /** A shared ordered stream per checkout/window. An optional test/legacy batch stays bounded. */
 export function createRepositoryReadDispatcher(delay = 0) {
   const subscribers = new Map<

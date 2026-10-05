@@ -548,6 +548,8 @@ pub fn typescript() -> String {
         EditorDraft::decl(&cfg),
         EditorSaveActions::decl(&cfg),
         EditorRecovery::decl(&cfg),
+        FileTreeNavigation::decl(&cfg),
+        CheckoutNavigation::decl(&cfg),
         EditorMutation::decl(&cfg),
         AppError::decl(&cfg),
         DiagnosticInput::decl(&cfg),

@@ -249,6 +249,16 @@ export type EditorRecovery = {
   servers: { [key in string]: string }
   saveActions?: { [key in string]: EditorSaveActions }
 }
+export type FileTreeNavigation = {
+  expandedPaths: Array<string>
+  selectedPath: string | null
+  scrollTop: number
+  mode: string
+}
+export type CheckoutNavigation = {
+  revision: number
+  trees: { [key in string]: FileTreeNavigation }
+}
 export type EditorMutation =
   | { kind: "save"; path: string; text: string; expectedRevision: string }
   | { kind: "create"; path: string; directory: boolean }

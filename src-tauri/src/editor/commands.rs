@@ -163,7 +163,17 @@ pub async fn editor_mutate(
     })
     .await
     .map_err(|e| AppError::new("task", e.to_string()))??;
-    live.changed(&changed_root, &notice).await;
+    let source_mutation = match &notice {
+        EditorMutation::Rename {
+            path, destination, ..
+        } => !super::metadata_path(path) || !super::metadata_path(destination),
+        EditorMutation::Save { path, .. }
+        | EditorMutation::Create { path, .. }
+        | EditorMutation::Trash { path, .. } => !super::metadata_path(path),
+    };
+    if source_mutation {
+        live.changed(&changed_root, &notice).await;
+    }
     Ok(())
 }
 #[tauri::command]
@@ -214,6 +224,82 @@ pub fn editor_store_recovery(
     }
     Ok(recovery)
 }
+#[tauri::command]
+pub fn editor_navigation(
+    storage: State<'_, Storage>,
+    repository_id: String,
+) -> AppResult<CheckoutNavigation> {
+    crate::repositories::root(&storage, &repository_id)?;
+    match storage.get("checkout_navigation", &repository_id) {
+        Ok(value) => Ok(value),
+        Err(error) if error.code == "not_found" => Ok(CheckoutNavigation::default()),
+        Err(error) => Err(error),
+    }
+}
+
+#[tauri::command]
+pub fn editor_store_navigation(
+    storage: State<'_, Storage>,
+    state: State<'_, EditorState>,
+    repository_id: String,
+    navigation: CheckoutNavigation,
+) -> AppResult<CheckoutNavigation> {
+    store_navigation(&storage, &state, &repository_id, navigation)
+}
+
+pub(crate) fn store_navigation(
+    storage: &Storage,
+    state: &EditorState,
+    repository_id: &str,
+    mut navigation: CheckoutNavigation,
+) -> AppResult<CheckoutNavigation> {
+    let _guard = state.mutation.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::repositories::root(storage, repository_id)?;
+    if navigation.trees.len() > 128 {
+        return Err(AppError::new(
+            "navigation_limit",
+            "Too many saved file trees.",
+        ));
+    }
+    for (key, tree) in &navigation.trees {
+        if key.len() > 160
+            || tree.expanded_paths.len() > 10_000
+            || !tree.scroll_top.is_finite()
+            || tree.scroll_top < 0.0
+            || !matches!(tree.mode.as_str(), "all" | "changes")
+        {
+            return Err(AppError::new("navigation", "Invalid file tree state."));
+        }
+        for relative in tree.expanded_paths.iter().chain(tree.selected_path.iter()) {
+            super::path(&root, relative)?;
+        }
+    }
+    let previous: Option<CheckoutNavigation> =
+        match storage.get("checkout_navigation", repository_id) {
+            Ok(value) => Some(value),
+            Err(error) if error.code == "not_found" => None,
+            Err(error) => return Err(error),
+        };
+    if navigation.revision != previous.as_ref().map_or(0, |v| v.revision) {
+        return Err(AppError::new(
+            "stale_navigation",
+            "Navigation changed in another window.",
+        ));
+    }
+    if let Some(previous) = previous {
+        navigation.revision = previous.revision + 1;
+        storage.replace(
+            "checkout_navigation",
+            repository_id,
+            previous.revision,
+            &navigation,
+        )?;
+    } else {
+        storage.insert("checkout_navigation", repository_id, &navigation)?;
+    }
+    Ok(navigation)
+}
+
 #[tauri::command]
 pub fn editor_dirty(state: State<'_, EditorState>, dirty: bool) {
     state.dirty.store(dirty, Ordering::SeqCst);

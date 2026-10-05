@@ -4,6 +4,7 @@ import { useTheme } from "next-themes"
 import type { editor } from "monaco-editor"
 import { desktopAvailable } from "@/lib/desktop/review.commands"
 import { Button } from "@/components/ui/button"
+import { CodeFileHeader } from "../components/CodeFileHeader"
 import { CodeEditor } from "../components/CodeEditor"
 import { MarkdownPreviewToggle } from "@/features/markdown/components/MarkdownPreviewToggle"
 import { DocumentDiffView } from "@/features/markdown/components/DocumentDiffView"
@@ -99,13 +100,7 @@ export function EditorFileView({
       aria-label="Project file"
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
-      <header className="flex items-center gap-2 border-b p-1">
-        <span
-          className="min-w-0 flex-1 truncate text-xs opacity-50"
-          title={buffer.path}
-        >
-          {buffer.path}
-        </span>
+      <CodeFileHeader path={buffer.path}>
         {isDocumentFile(buffer.path, buffer.text.split("\n", 1)[0]) && (
           <MarkdownPreviewToggle
             active={buffer.preview}
@@ -128,7 +123,7 @@ export function EditorFileView({
         >
           <HugeiconsIcon icon={Search01Icon} />
         </Button>*/}
-      </header>
+      </CodeFileHeader>
       {buffer.external !== undefined && (
         <div
           role="status"

@@ -11,7 +11,9 @@ test("file search opens results, excludes ignored files and restores folder stat
   page,
 }) => {
   const tree = page.getByRole("navigation", { name: "Project files" })
-  const search = page.getByRole("textbox", { name: "Filter files" })
+  const search = page.getByRole("textbox", {
+    name: /Filter files|Search file contents/,
+  })
   await tree.locator('[data-folder="docs"]').click()
   await expect(tree.locator('[data-folder="docs"]')).toHaveAttribute(
     "aria-expanded",
@@ -45,7 +47,9 @@ test("file search opens results, excludes ignored files and restores folder stat
 test("content search debounces, cancels stale requests and opens matching source", async ({
   page,
 }) => {
-  const search = page.getByRole("textbox", { name: "Filter files" })
+  const search = page.getByRole("textbox", {
+    name: /Filter files|Search file contents/,
+  })
   await search.fill("slow")
   await page.getByRole("tab", { name: "Content", exact: true }).click()
   await expect(page.getByTestId("content-search-requests")).toContainText(
@@ -113,7 +117,9 @@ test("inventory polling neither cancels in-flight content search nor clears comp
   page,
 }) => {
   await page.goto("/dev/editor-chrome/?poll=1")
-  const search = page.getByRole("textbox", { name: "Filter files" })
+  const search = page.getByRole("textbox", {
+    name: /Filter files|Search file contents/,
+  })
   await expect(search).toBeVisible()
   await search.fill("slow")
   await page.getByRole("tab", { name: "Content", exact: true }).click()

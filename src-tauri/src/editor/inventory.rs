@@ -118,9 +118,10 @@ impl Inventory {
             || generation_changed
             || change.git
             || change.paths.iter().any(|p| {
-                Path::new(p)
-                    .file_name()
-                    .is_some_and(|n| n == ".gitignore" || n == ".ignore")
+                !super::metadata_path(p)
+                    && Path::new(p)
+                        .file_name()
+                        .is_some_and(|n| n == ".gitignore" || n == ".ignore")
             })
         {
             *self = Self::new(root);
@@ -157,7 +158,11 @@ impl Inventory {
             let entry = entry?;
             let kind = entry.file_type()?;
             if kind.is_symlink()
-                || matches!(entry.file_name().to_str(), Some(".git" | ".reviewbox"))
+                || (path
+                    .components()
+                    .any(|part| part.as_os_str() == ".reviewbox")
+                    && entry.file_name().to_string_lossy().starts_with(".tmp"))
+                || matches!(entry.file_name().to_str(), Some(".git"))
                 || entry
                     .file_name()
                     .to_string_lossy()
@@ -206,7 +211,7 @@ impl Inventory {
                 .ok_or_else(|| AppError::new("unsupported_path", "A file name is not UTF-8."))?
                 .replace('\\', "/");
             let lazy = child.directory
-                && ignored
+                && (ignored || super::metadata_path(&relative))
                 && !expanded
                     .iter()
                     .any(|p| p == &child.path || p.starts_with(&child.path));
@@ -252,6 +257,39 @@ impl Rules {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reviewbox_is_visible_and_each_metadata_subtree_is_lazy() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join(".reviewbox/published/example")).unwrap();
+        fs::create_dir_all(root.join(".reviewbox/.local")).unwrap();
+        fs::write(root.join(".reviewbox/.gitignore"), ".local/\n").unwrap();
+        fs::write(root.join(".reviewbox/settings.json"), "{}").unwrap();
+        fs::write(
+            root.join(".reviewbox/published/example/content.md"),
+            "capture",
+        )
+        .unwrap();
+        let mut inventories = Inventories::default();
+        let closed = inventories.snapshot(root, true, &[], None, None).unwrap();
+        assert!(
+            closed
+                .iter()
+                .any(|e| e.path == ".reviewbox" && e.lazy == Some(true))
+        );
+        assert!(!closed.iter().any(|e| e.path == ".reviewbox/settings.json"));
+        let opened = inventories
+            .snapshot(root, true, &[".reviewbox".into()], None, None)
+            .unwrap();
+        assert!(opened.iter().any(|e| e.path == ".reviewbox/settings.json"));
+        assert!(
+            opened
+                .iter()
+                .any(|e| e.path == ".reviewbox/published" && e.lazy == Some(true))
+        );
+        assert!(!opened.iter().any(|e| e.path.ends_with("content.md")));
+    }
+
     #[test]
     fn expanded_excluded_directories_are_distinct_from_ignored_only_parents() {
         let temp = tempfile::tempdir().unwrap();

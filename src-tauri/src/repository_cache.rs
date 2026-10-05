@@ -242,7 +242,12 @@ impl RepositoryCache {
                 .changes
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .uncertain = true;
+                .uncertain |= change.full
+                || change.git
+                || change
+                    .paths
+                    .iter()
+                    .any(|path| !crate::editor::metadata_path(path));
             (entry.publish)(change);
         }
     }
@@ -358,7 +363,16 @@ impl RepositoryCache {
                 ));
                 change.sequence = Some(event_sequence.fetch_add(1, Ordering::AcqRel) + 1);
                 if let Some(notify) = &native {
-                    notify(&checkout, &change);
+                    let mut source_change = change.clone();
+                    source_change
+                        .paths
+                        .retain(|path| !crate::editor::metadata_path(path));
+                    if let Some(changes) = &mut source_change.changes {
+                        changes.retain(|item| !crate::editor::metadata_path(&item.path));
+                    }
+                    if source_change.full || source_change.git || !source_change.paths.is_empty() {
+                        notify(&checkout, &source_change);
+                    }
                 }
                 if let Some(notify) = &ui {
                     notify(change);
@@ -457,6 +471,9 @@ fn watch(
             let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
             flags.uncertain |= change.full;
             for path in &change.paths {
+                if crate::editor::metadata_path(path) {
+                    continue;
+                }
                 if flags.paths.len() < 10000 {
                     flags.paths.insert(checkout.join(path));
                 } else {

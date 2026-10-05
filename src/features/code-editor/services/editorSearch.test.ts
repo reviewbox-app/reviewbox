@@ -187,3 +187,23 @@ test("interrupted partial updates requeue their paths and keep unrelated matches
   ])
   operation.dispose()
 })
+
+test("metadata document and ignore edits do not restart source content search", () => {
+  for (const path of [
+    ".reviewbox/CURRENT_CHANGES.md",
+    ".reviewbox/.gitignore",
+    ".reviewbox/.local/REVIEW_COMMENTS.md",
+  ])
+    expect(
+      searchRefreshPaths(
+        {
+          repositoryId: "repo",
+          paths: [path],
+          tree: true,
+          git: false,
+          full: false,
+        },
+        []
+      )
+    ).toEqual([])
+})

@@ -30,7 +30,11 @@ export function searchablePaths(paths: string[], entries: EditorEntry[]) {
     .filter((entry) => entry.directory && (entry.excluded ?? entry.lazy))
     .map((entry) => entry.path)
   return paths.filter(
-    (path) => !ignoredFiles.has(path) && !affected(path, ignoredTrees)
+    (path) =>
+      path !== ".reviewbox" &&
+      !path.startsWith(".reviewbox/") &&
+      !ignoredFiles.has(path) &&
+      !affected(path, ignoredTrees)
   )
 }
 
@@ -42,7 +46,11 @@ export function searchRefreshPaths(
   if (
     change.full ||
     (change.git && change.tree) ||
-    change.paths.some((path) => /(^|\/)(\.gitignore|\.ignore)$/.test(path))
+    change.paths.some(
+      (path) =>
+        !path.startsWith(".reviewbox/") &&
+        /(^|\/)(\.gitignore|\.ignore)$/.test(path)
+    )
   )
     return undefined
   return searchablePaths(change.paths, entries)

@@ -132,3 +132,20 @@ pub enum EditorMutation {
         expected_revision: String,
     },
 }
+
+/// Private navigation for one checkout, independent of source buffers and captures.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileTreeNavigation {
+    pub expanded_paths: Vec<String>,
+    pub selected_path: Option<String>,
+    pub scroll_top: f64,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckoutNavigation {
+    pub revision: u32,
+    pub trees: std::collections::BTreeMap<String, FileTreeNavigation>,
+}

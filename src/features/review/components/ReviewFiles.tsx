@@ -1,13 +1,8 @@
 import { FileMenu } from "@/features/file-tree/components/FileMenu"
 import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import { useScrollEdgeMask } from "@/hooks/use-scroll-edge-mask"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { Search01Icon } from "@hugeicons/core-free-icons"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group"
+import { FileTreeSearch } from "@/features/file-tree/components/FileTreeSearch"
+import { useFileTreeNavigation } from "@/features/file-tree/hooks/useFileTreeNavigation"
 import {
   FileTree,
   type FileMark,
@@ -32,19 +27,27 @@ export function ReviewFiles({
 }) {
   const [filter, setFilter] = useState("")
   const scrollMask = useScrollEdgeMask<HTMLElement>()
+  const navigation = useFileTreeNavigation(
+    workspace.snapshot.repositoryId,
+    `review:${workspace.review.id}`,
+    !!filter.trim()
+  )
+  const attachNavigation = navigation.ref
   const viewport = useRef<HTMLElement | null>(null)
   const attachViewport = useCallback(
     (node: HTMLElement | null) => {
       viewport.current = node
+      attachNavigation(node)
       return scrollMask(node)
     },
-    [scrollMask]
+    [scrollMask, attachNavigation]
   )
   const { review, snapshot } = workspace
   useLayoutEffect(() => {
     const container = viewport.current
     const selected = container?.querySelector('[aria-current="page"]')
-    if (!visible || !container || !selected) return
+    if (!visible || !container || !selected || !navigation.ready) return
+    if (navigation.value.selectedPath === selected.getAttribute("title")) return
     const row = selected.getBoundingClientRect()
     const frame = container.getBoundingClientRect()
     container.scrollTo({
@@ -57,7 +60,14 @@ export function ReviewFiles({
       behavior: "instant",
     })
     // Passive workspace refreshes must not reset a manually scrolled tree.
-  }, [selectedId, visible, filter, snapshot.id])
+  }, [
+    selectedId,
+    visible,
+    filter,
+    snapshot.id,
+    navigation.ready,
+    navigation.value.selectedPath,
+  ])
   const paths = review.files
     .map((file) => file.path)
     .filter((path) => path.toLowerCase().includes(filter.toLowerCase()))
@@ -67,19 +77,14 @@ export function ReviewFiles({
   }
   return (
     <div className="flex h-full flex-col gap-2 p-2">
-      <InputGroup className="w-auto">
-        <InputGroupAddon>
-          <HugeiconsIcon icon={Search01Icon} size={14} />
-        </InputGroupAddon>
-        <InputGroupInput
-          aria-label="Filter files"
-          placeholder={`Filter ${review.files.length} files`}
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-        />
-      </InputGroup>
+      <FileTreeSearch
+        value={filter}
+        onChange={setFilter}
+        placeholder={`Filter ${review.files.length} files`}
+      />
       <nav
         ref={attachViewport}
+        onScroll={navigation.onScroll}
         aria-label="Review files"
         className="min-h-0 flex-1 overflow-auto"
       >
@@ -99,8 +104,11 @@ export function ReviewFiles({
               onError={onError}
             />
           )}
-          alwaysExpanded
+          alwaysExpanded={!!filter.trim()}
+          toggledFolders={new Set(navigation.value.expandedPaths)}
+          onToggleFolder={navigation.toggle}
           onSelect={(path) => {
+            navigation.update((tree) => ({ ...tree, selectedPath: path }))
             const file = review.files.find((item) => item.path === path)
             if (file) onSelect(file.id)
           }}

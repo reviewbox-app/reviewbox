@@ -30,9 +30,10 @@ pub(crate) fn path(root: &Path, relative: &str) -> AppResult<PathBuf> {
                 "The path must stay inside the repository.",
             ));
         };
-        if name.to_str().is_some_and(|name| {
-            name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case(".reviewbox")
-        }) {
+        if name
+            .to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+        {
             return Err(AppError::new(
                 "protected_path",
                 "Application and Git metadata are managed separately.",
@@ -45,6 +46,35 @@ pub(crate) fn path(root: &Path, relative: &str) -> AppResult<PathBuf> {
                 "Open the original file instead of editing through a symbolic link.",
             ));
         }
+    }
+    Ok(result)
+}
+
+pub(crate) fn metadata_path(relative: &str) -> bool {
+    relative
+        .split('/')
+        .next()
+        .is_some_and(|p| p.eq_ignore_ascii_case(".reviewbox"))
+}
+
+pub(crate) fn collaboration_path(relative: &str) -> bool {
+    let Some(name) = relative.strip_prefix(".reviewbox/") else {
+        return false;
+    };
+    let name = name.strip_prefix(".local/").unwrap_or(name);
+    !name.contains('/') && (name == ".gitignore" || name.to_ascii_lowercase().ends_with(".md"))
+}
+
+fn writable_path(root: &Path, relative: &str) -> AppResult<PathBuf> {
+    let result = path(root, relative)?;
+    if metadata_path(relative)
+        && (!collaboration_path(relative)
+            || fs::symlink_metadata(&result).is_ok_and(|metadata| !metadata.is_file()))
+    {
+        return Err(AppError::new(
+            "protected_path",
+            "ReviewBox metadata and captured reviews are read-only.",
+        ));
     }
     Ok(result)
 }
@@ -74,7 +104,13 @@ pub(crate) fn revision(path: &Path) -> AppResult<String> {
 
 pub(crate) fn read(root: &Path, relative: &str) -> AppResult<EditorFile> {
     let target = path(root, relative)?;
-    read_file(&target, relative.to_owned(), false)
+    let mut file = read_file(&target, relative.to_owned(), false)?;
+    if metadata_path(relative) && !collaboration_path(relative) {
+        file.read_only = true;
+        file.reason =
+            Some("ReviewBox manages this file. It is available for inspection only.".into());
+    }
+    Ok(file)
 }
 
 pub(crate) fn read_file(target: &Path, display: String, external: bool) -> AppResult<EditorFile> {
@@ -135,9 +171,7 @@ pub(crate) fn inventory(root: &Path, ignored: bool) -> AppResult<Vec<EditorEntry
         .git_exclude(!ignored)
         .git_global(!ignored)
         .follow_links(false)
-        .filter_entry(|e| {
-            e.depth() == 0 || !matches!(e.file_name().to_str(), Some(".git" | ".reviewbox"))
-        });
+        .filter_entry(|e| e.depth() == 0 || !matches!(e.file_name().to_str(), Some(".git")));
     for entry in walk.build() {
         let entry = entry.map_err(|e| AppError::new("inventory", e.to_string()))?;
         if entry.depth() == 0 || entry.file_type().is_some_and(|t| t.is_symlink()) {
@@ -176,13 +210,31 @@ fn expect_revision(target: &Path, expected: &str) -> AppResult<()> {
 }
 
 pub(crate) fn mutate(root: &Path, mutation: EditorMutation) -> AppResult<()> {
+    let paths = match &mutation {
+        EditorMutation::Save { path, .. }
+        | EditorMutation::Create { path, .. }
+        | EditorMutation::Trash { path, .. } => vec![path.as_str()],
+        EditorMutation::Rename {
+            path, destination, ..
+        } => vec![path.as_str(), destination.as_str()],
+    };
+    if paths.iter().any(|path| metadata_path(path)) {
+        for relative in &paths {
+            writable_path(root, relative)?;
+        }
+        return crate::project_storage::mutate_editor_document(root, mutation);
+    }
+    mutate_unlocked(root, mutation)
+}
+
+pub(crate) fn mutate_unlocked(root: &Path, mutation: EditorMutation) -> AppResult<()> {
     match mutation {
         EditorMutation::Save {
             path: relative,
             text,
             expected_revision,
         } => {
-            let target = path(root, &relative)?;
+            let target = writable_path(root, &relative)?;
             expect_revision(&target, &expected_revision)?;
             if read(root, &relative)?.read_only {
                 return Err(AppError::new("read_only", "This file cannot be edited."));
@@ -226,8 +278,14 @@ pub(crate) fn mutate(root: &Path, mutation: EditorMutation) -> AppResult<()> {
             path: relative,
             directory,
         } => {
-            let target = path(root, &relative)?;
+            let target = writable_path(root, &relative)?;
             if directory {
+                if metadata_path(&relative) {
+                    return Err(AppError::new(
+                        "protected_path",
+                        "ReviewBox manages its own folders.",
+                    ));
+                }
                 fs::create_dir(target)?;
             } else {
                 fs::OpenOptions::new()
@@ -241,8 +299,15 @@ pub(crate) fn mutate(root: &Path, mutation: EditorMutation) -> AppResult<()> {
             destination,
             expected_revision,
         } => {
-            let target = path(root, &relative)?;
-            let destination = path(root, &destination)?;
+            let metadata_document = metadata_path(&relative) || metadata_path(&destination);
+            let target = writable_path(root, &relative)?;
+            if metadata_document && !fs::symlink_metadata(&target)?.is_file() {
+                return Err(AppError::new(
+                    "protected_path",
+                    "Only regular collaboration files can be moved into ReviewBox metadata.",
+                ));
+            }
+            let destination = writable_path(root, &destination)?;
             expect_revision(&target, &expected_revision)?;
             if destination.exists() {
                 return Err(AppError::new(
@@ -262,7 +327,7 @@ pub(crate) fn mutate(root: &Path, mutation: EditorMutation) -> AppResult<()> {
             path: relative,
             expected_revision,
         } => {
-            let target = path(root, &relative)?;
+            let target = writable_path(root, &relative)?;
             expect_revision(&target, &expected_revision)?;
             trash::delete(target).map_err(|e| AppError::new("trash", e.to_string()))?;
         }
