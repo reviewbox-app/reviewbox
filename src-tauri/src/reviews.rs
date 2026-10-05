@@ -154,6 +154,11 @@ pub fn apply(
     }
     let workspace = prepare_action(storage, current, revision, action)?;
     storage.replace("review", id, revision, &workspace.review)?;
+    if workspace.review.publication.is_complete() {
+        // Cleanup is best-effort and never reverses a durable human completion.
+        // Per-file failures remain visible through review_working_context and can be retried.
+        let _ = crate::working_context::cleanup(storage, &workspace.review);
+    }
     publish_if_ready(storage, workspace)
 }
 

@@ -196,6 +196,7 @@ fn streaming_counters_preserve_meaningful_events_and_ignore_superseded_runs() {
 #[test]
 fn checkpoint_resume_requires_identical_sources_prompts_and_provider() {
     let checkpoint = Checkpoint {
+        working_context: None,
         revision: 0,
         review_revision: 0,
         repository_id: "repo".into(),
@@ -224,11 +225,98 @@ fn checkpoint_resume_requires_identical_sources_prompts_and_provider() {
 }
 
 #[test]
+fn legacy_editorial_checkpoint_recalculates_results_but_keeps_capture_guards() {
+    let mut checkpoint = Checkpoint {
+        working_context: None,
+        revision: 0,
+        review_revision: 0,
+        repository_id: "repo".into(),
+        state: state(),
+        source_hash: "source".into(),
+        prompt_hash: "old-topics".into(),
+        provider_hash: "provider".into(),
+        helper_model: None,
+        definitions: BTreeMap::new(),
+        measurements: vec![],
+        results: BTreeMap::from([
+            ("outline".into(), json!({"topics":[]})),
+            ("step:old".into(), json!({"essential":{"body":"old"}})),
+        ]),
+    };
+    checkpoint.reconcile_editorial_contract("journeys");
+    assert!(checkpoint.results.is_empty());
+    assert!(checkpoint.definitions.is_empty());
+    compatible(&checkpoint, "source", "journeys", "provider").unwrap();
+    assert!(compatible(&checkpoint, "changed", "journeys", "provider").is_err());
+    assert!(compatible(&checkpoint, "source", "journeys", "changed").is_err());
+}
+
+#[test]
+fn contextless_checkpoint_migration_requires_exact_legacy_capture_and_recalculates_results() {
+    let legacy = Checkpoint {
+        working_context: None,
+        revision: 3,
+        review_revision: 7,
+        repository_id: "repository".into(),
+        state: state(),
+        source_hash: "legacy-capture".into(),
+        prompt_hash: "old-prompt".into(),
+        provider_hash: "provider".into(),
+        helper_model: None,
+        definitions: BTreeMap::new(),
+        results: BTreeMap::from([("outline".into(), json!({"topics":[]}))]),
+        measurements: vec![],
+    };
+    let mut checkpoint = legacy.clone();
+    assert!(checkpoint.reconcile_contextless_checkpoint(
+        true,
+        "legacy-capture",
+        "capture-and-context"
+    ));
+    assert!(checkpoint.results.is_empty());
+    assert!(checkpoint.definitions.is_empty());
+    assert_eq!(checkpoint.review_revision, 7);
+    checkpoint.reconcile_editorial_contract("new-prompt");
+    compatible(&checkpoint, "capture-and-context", "new-prompt", "provider").unwrap();
+    assert!(
+        compatible(
+            &checkpoint,
+            "capture-and-context",
+            "new-prompt",
+            "different-provider"
+        )
+        .is_err()
+    );
+    assert!(!checkpoint.reconcile_contextless_checkpoint(
+        false,
+        "capture-and-context",
+        "different-context"
+    ));
+    assert!(compatible(&checkpoint, "different-context", "new-prompt", "provider").is_err());
+
+    let mut changed = legacy.clone();
+    assert!(!changed.reconcile_contextless_checkpoint(
+        true,
+        "another-capture",
+        "capture-and-context"
+    ));
+    assert_eq!(changed.source_hash, legacy.source_hash);
+    assert_eq!(changed.results, legacy.results);
+    assert!(compatible(&changed, "capture-and-context", "old-prompt", "provider").is_err());
+
+    let mut fresh = legacy;
+    fresh.source_hash.clear();
+    fresh.results.clear();
+    assert!(!fresh.reconcile_contextless_checkpoint(true, "legacy-capture", "capture-and-context"));
+}
+
+#[test]
 fn restart_marks_checkpoints_interrupted_without_starting_provider_work() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("private");
     let storage = Storage::open(root.clone()).unwrap();
     let checkpoint = Checkpoint {
+        working_context: None,
         revision: 0,
         review_revision: 0,
         repository_id: "repo".into(),
@@ -317,8 +405,8 @@ if '--input-format' in sys.argv:
 prompt=sys.stdin.read()
 assert 'Keep the three variants of a reading step with one helper' not in prompt
 if '# Write three distinct reading levels' in prompt:
-    assert 'Write the complete Technical document yourself' in prompt
-    assert 'launch two helpers concurrently' in prompt
+    assert '--tools' in sys.argv and sys.argv[sys.argv.index('--tools')+1]=='Bash'
+    assert 'sole writer' in prompt
     assert 'correction.items[].previousResult' in prompt
 else:
     assert 'Delegate as much independent discovery and research as possible' in prompt
@@ -334,10 +422,12 @@ for item in batch['items']:
  if kind=='outline':
      manifest=json.loads(pathlib.Path(context['reviewManifest']).read_text())
      change=json.loads(pathlib.Path(manifest['changes'][0]['metadata']).read_text())
-     result={'topics':[{'title':'Adjust the amount','brief':'The amount is updated.','steps':[{'draftId':'0:0','title':'Understand the new amount','writingBrief':'Explain the changed amount, its previous and current value and its public effect.','contextSourceIds':[],'anchors':[change['anchors'][0]]}]}]}
+     result={'steps':[{'draftId':'0:0','title':'Understand the new amount','writingBrief':'Explain the changed amount, its previous and current value and its public effect.','contextSourceIds':[],'anchors':[change['anchors'][0]]}]}
  else:
      result={level:{'body':body,'readingSeconds':30,'references':[],'terms':[]} for level,body in [('essential','The remembered amount changes.'),('explained','The stored amount is updated to the requested value.'),('technical','The assignment now uses the new amount while preserving its structure.')]}
      if (base/'invalid').exists(): result={'bad':'shape'}
+ if kind=='outline':
+     for step in result['steps']:step['analysis']=dict(before='Previous value',after='Updated value',relationships='The exported value is used by its callers.',consequences='Callers observe the new amount.',uncertainties=[],evidence=[dict(fact='The captured file defines the value.',sourceId=next(s['sourceId'] for s in manifest['sources'] if s['sourceId'].startswith('change:'+step['anchors'][0]['changeId']+':') and s['sourceId'].endswith(':after')),startLine=1,endLine=1)])
  results.append({'id':item['id'],'result':result})
 result={'items':results}
 if (base/'outline-pause').exists() and kind=='outline':
@@ -362,7 +452,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
         (dir, storage, workspace)
     }
     #[test]
-    fn claude_previews_complete_steps_without_finishing_analysis() {
+    fn claude_waits_for_final_analysis_before_writing() {
         let (dir, storage, workspace) = fixture();
         fs::write(dir.path().join("outline-pause"), "").unwrap();
         let manager = PreparationManager::default();
@@ -382,18 +472,9 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
                 .get(&storage, &workspace.review.id, None)
                 .unwrap()
                 .unwrap();
-            if state
-                .steps
-                .first()
-                .is_some_and(|s| s.status == PreparationStepStatus::Ready)
-            {
+            if !state.active_batches.is_empty() {
                 assert_eq!(state.phase, PreparationPhase::Outline);
-                assert_eq!(state.steps[0].status, PreparationStepStatus::Ready);
-                assert!(
-                    !serde_json::to_string(&state)
-                        .unwrap()
-                        .contains("writingBrief")
-                );
+                assert!(state.steps.is_empty());
                 break;
             }
             assert!(
@@ -411,7 +492,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
                 .unwrap();
             if state.status != PreparationStatus::Running {
                 assert_eq!(state.status, PreparationStatus::Cancelled);
-                assert_eq!(state.steps[0].status, PreparationStepStatus::Ready);
+                assert!(state.steps.is_empty());
                 break;
             }
             assert!(started.elapsed() < Duration::from_secs(25));
@@ -476,6 +557,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
         state.review_id = workspace.review.id.clone();
         state.snapshot_id = workspace.snapshot.id.clone();
         let checkpoint = Checkpoint {
+            working_context: None,
             revision: 0,
             review_revision: workspace.review.revision,
             repository_id: repository.id,
@@ -533,6 +615,7 @@ print(json.dumps({'type':'result','is_error':False,'result':json.dumps(result)})
         state.snapshot_id = workspace.snapshot.id.clone();
         state.status = PreparationStatus::Ready;
         let checkpoint = Checkpoint {
+            working_context: None,
             revision: 0,
             review_revision: workspace.review.revision,
             repository_id: workspace.review.repository_id.clone(),

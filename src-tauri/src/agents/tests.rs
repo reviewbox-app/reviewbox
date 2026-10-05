@@ -386,3 +386,42 @@ for line in sys.stdin:
     assert!(!Path::new(&repository.path).join("protocol").exists());
     });
 }
+
+#[test]
+fn preparation_tree_is_bounded_and_terminal_manifest_keeps_frozen_sources() {
+    let (_directory, storage, _repository, mut workspace, request) = fixture();
+    let original = workspace.snapshot.files[0].clone();
+    for i in 0..10_000 {
+        workspace.snapshot.files.push(SnapshotFile {
+            path: format!("packages/project-{i}/src/file.ts"),
+            content: original.content.clone(),
+        });
+    }
+    let summary = capture_summary(&workspace.snapshot);
+    assert!(summary.to_string().len() < 20 * 1024);
+    assert!(summary["omittedTreeEntries"].as_u64().unwrap() > 0);
+    assert_eq!(summary["tree"].as_array().unwrap().len(), 100);
+    assert!(summary.get("sources").is_none());
+    let exploration =
+        exploration::materialize(&storage, &workspace, &request, &AtomicBool::new(false)).unwrap();
+    let path = exploration.directory.join("manifest.json");
+    let manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let source = manifest["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["path"] == "packages/project-9999/src/file.ts")
+        .unwrap();
+    assert_eq!(source["sourceId"], "file:packages/project-9999/src/file.ts");
+    assert_eq!(
+        fs::read(source["contentPath"].as_str().unwrap()).unwrap(),
+        storage.read_blob(&original.content.hash).unwrap()
+    );
+    let change: Value = serde_json::from_slice(
+        &fs::read(manifest["changes"][0]["metadata"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert!(!change["anchors"].as_array().unwrap().is_empty());
+    drop(exploration);
+    assert!(!path.exists());
+}

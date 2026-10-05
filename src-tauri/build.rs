@@ -12,6 +12,8 @@ fn main() {
         "project_skill_preferences",
         "configure_project_skills",
         "import_project_skills",
+        "review_working_context",
+        "retry_working_context_cleanup",
         "editor_navigation",
         "editor_store_navigation",
         "diagnostics_record",

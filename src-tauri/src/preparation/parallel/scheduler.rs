@@ -35,8 +35,8 @@ struct Scheduler {
     tasks: JoinSet<(String, u64, AppResult<()>)>,
     queue: VecDeque<Unit>,
     failures: BTreeMap<(String, u64), AppError>,
-    inline: BTreeMap<String, String>,
     confirmed: bool,
+    reading_plan: Value,
 }
 
 pub(super) async fn schedule(
@@ -57,8 +57,8 @@ pub(super) async fn schedule(
         tasks: JoinSet::new(),
         queue: VecDeque::new(),
         failures: BTreeMap::new(),
-        inline: BTreeMap::new(),
         confirmed: false,
+        reading_plan: Value::Null,
     };
     let result = scheduler.drive(run, rx).await;
     // Never abort the Rust futures: transports must finish killing their owned
@@ -125,9 +125,9 @@ impl Scheduler {
             "outline".into(),
             "Organizing the reading path".into(),
             PreparationPhase::Outline,
-            json!({"sources": self.sources, "files":reader::files(&self.worker.workspace.snapshot),
-                "previousDefinitions":run.checkpoint.definitions.values().map(|d| &d.candidate).collect::<Vec<_>>(),
-                "previousReview":self.baseline.as_ref().map(|old|json!({"id":old.review.id,"topics":old.review.topics.iter().map(|t|json!({"id":t.id,"title":t.title,"brief":t.brief,"steps":t.steps.iter().map(|s|json!({"id":s.id,"title":s.title,"anchors":s.anchors})).collect::<Vec<_>>()})).collect::<Vec<_>>()})),
+            json!({"capture": agents::capture_summary(&self.worker.workspace.snapshot),
+                "previousDefinitions":run.checkpoint.definitions.values().map(|d| d.candidate.step()).collect::<Vec<_>>(),
+                "previousReview":self.baseline.as_ref().map(|old|json!({"id":old.review.id,"steps":old.review.topics.iter().flat_map(|t| &t.steps).map(|s|json!({"id":s.id,"title":s.title,"anchors":s.anchors})).collect::<Vec<_>>()})),
                 "comparison":self.baseline.as_ref().map(|old|adaptation::comparison(&old.snapshot,&self.worker.workspace.snapshot))}),
             if self.baseline.is_some() {
                 Kind::Adaptation
@@ -149,20 +149,6 @@ impl Scheduler {
             run.check_cancel()?;
             while let Ok(update) = rx.try_recv() {
                 match update {
-                    WorkUpdate::Preview(candidates) if !self.confirmed => {
-                        // A partial retry never removes prior definitions. Ambiguous
-                        // duplicate identities wait for the authoritative correction.
-                        let mut counts = BTreeMap::new();
-                        for c in &candidates {
-                            *counts.entry(c.key()).or_insert(0) += 1;
-                        }
-                        for candidate in candidates {
-                            if counts[&candidate.key()] == 1 {
-                                self.upsert(run, candidate).await?;
-                            }
-                        }
-                    }
-                    WorkUpdate::Preview(_) => {}
                     WorkUpdate::Status(key, version, status) => {
                         if self.current(run, &key, version) {
                             run.update(|state| {
@@ -257,6 +243,9 @@ impl Scheduler {
         Ok(())
     }
     async fn confirm(&mut self, run: &mut Run, outline: Outline) -> AppResult<()> {
+        self.reading_plan = json!(outline.topics.iter().flat_map(|topic| &topic.steps)
+            .map(|step| json!({"draftId":step.draft_id,"title":step.title,"writingBrief":step.writing_brief}))
+            .collect::<Vec<_>>());
         let keys: HashSet<_> = outline
             .topics
             .iter()
@@ -334,6 +323,7 @@ impl Scheduler {
         // generation configuration are inside it, including supplemental sources.
         let hash = fingerprint(&serde_json::to_vec(&json!([
             candidate.topic,
+            self.reading_plan,
             self.signature,
             run.checkpoint.source_hash
         ]))?);
@@ -396,19 +386,14 @@ impl Scheduler {
         );
         self.rows(run);
         run.persist().await?;
-        self.evidence(run, candidate.step()).await?;
         let mut document = unit(
             key.clone(),
             candidate.step().title.clone(),
             PreparationPhase::Documents,
-            document_input(
-                &candidate.topic,
-                candidate.step(),
-                &self.sources,
-                &self.inline,
-            ),
+            document_input(&candidate.topic, candidate.step(), &self.sources),
             Kind::Documents,
         );
+        document.input["readingPlan"] = self.reading_plan.clone();
         document.version = version;
         if let Some(value) = value.filter(|v| {
             document
@@ -424,36 +409,6 @@ impl Scheduler {
         } else {
             run.checkpoint.results.remove(&key);
             self.spawn(document);
-        }
-        Ok(())
-    }
-    async fn evidence(&mut self, run: &Run, step: &OutlineStep) -> AppResult<()> {
-        let mut remaining = 64 * 1024;
-        for source in self.sources.iter().filter(|s| {
-            step.context_source_ids.contains(&s.source_id)
-                || step
-                    .anchors
-                    .iter()
-                    .any(|a| s.source_id.starts_with(&format!("change:{}:", a.change_id)))
-        }) {
-            run.check_cancel()?;
-            if source.size > remaining {
-                continue;
-            }
-            remaining -= source.size;
-            if self.inline.contains_key(&source.hash) {
-                continue;
-            }
-            let storage = run.storage.clone();
-            let snapshot = self.worker.workspace.snapshot.clone();
-            let id = source.source_id.clone();
-            let frozen =
-                tokio::task::spawn_blocking(move || reader::source(&storage, &snapshot, &id))
-                    .await
-                    .map_err(|e| AppError::new("task", e.to_string()))??;
-            if let Some(text) = frozen.text {
-                self.inline.insert(source.hash.clone(), text);
-            }
         }
         Ok(())
     }

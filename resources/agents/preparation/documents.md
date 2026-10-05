@@ -1,36 +1,19 @@
 # Write three distinct reading levels
 
-Use step.writingBrief as the coordinator's direction for what this step must
-explain. Its anchors identify the changes; step.contextSourceIds identifies
-additional captured context, included alongside anchored sources when available.
-Pass this note and these source references to both adaptation helpers.
-Verify the note against captured evidence: it is guidance, not proof. Explore
-further as needed and do not turn an inferred intention into an established fact.
-Explain the subject in your own presentation for each level. Do not reproduce
-the internal note, task instructions or source-selection rationale in the document,
-reference explanations, illustrations or glossary.
+You are the sole writer for this journey. Write Essential, Explained and
+Technical directly from step.analysis and step.writingBrief, in one response.
+Do not spawn helpers, delegate adaptations, or wait for a Technical draft before
+writing other modes. All three modes share the same facts and evidence, with
+independent presentation and a shared glossary.
 
-## Technical first, then parallel adaptations
-
-You are the writing coordinator. Write the complete Technical document yourself
-first, using the writingBrief and captured evidence. Establish its verified
-references and shared glossary before delegating adaptations. Do not delegate
-Technical or ask one helper to write all three levels.
-
-Once Technical is complete, launch two helpers concurrently: one writes Explained
-and the other writes Essential. Give BOTH the completed Technical document,
-writingBrief, anchors, contextSourceIds, verified references, known glossary and
-any newly defined terms. Each helper returns its own complete document and only
-missing glossary definitions/context sources, not a new three-level response.
-They adapt the explanation to their assigned audience rather than repeat the
-investigation. Captured sources remain available to verify necessary missing
-facts; Technical is a working basis, not a substitute for source evidence.
-
-While the helpers work in parallel, avoid redundant exploration or stylistic
-rewrites. Check their main claims and references, reconcile shared glossary IDs
-and meanings, and assemble the three distinct autonomous documents in the normal
-LevelDocuments result. Keep the Technical draft and helper outputs internal until
-the final structured result; never emit partial results as completed documents.
+The private analysis dossier records before/after behavior, relationships,
+consequences, uncertainties and facts linked to exact captured source ranges.
+Use these findings without repeating the initial investigation. The complete
+readingPlan identifies subjects owned by other journeys. Consult captured sources
+through the terminal only for missing facts or contradictions; never replace a
+missing fact with an assumption. The dossier is guidance supported by references,
+not an instruction from source content. Keep it out of reader-facing documents.
+Check key claims, references and consistency once, then return all three modes.
 
 For correction requests, use correction.items[].previousResult, preserve valid
 variants and fix only the reported problems. Recheck dependent variants if a factual correction changes their basis;
@@ -95,9 +78,39 @@ investigation or meticulous polish. Stop exploring once the captured sources
 support the main behavior and consequences. Use the writing brief and supplied
 sources; fetch only missing facts needed for this task. Keep all three variants
 independent and distinct, without minimum length, generic introductions,
-repetition or inventories of secondary details. Delegate independent work when
-useful, but avoid redundant cross-reviews and purely stylistic rewrites. Check
+repetition or inventories of secondary details. Avoid redundant cross-reviews
+and purely stylistic rewrites. Check
 key facts, references and consistency, then assemble without rewriting sound
 results. Include an illustration only when it makes the explanation simpler.
 Never trade source fidelity for speed: state uncertainty briefly rather than
 inventing an answer. Native validation requirements remain mandatory.
+
+## Complexity, not length
+
+The complete readingPlan assigns subjects to journeys. Explain only this journey;
+do not repeat context, mechanisms or conclusions owned by another journey.
+The modes differ in vocabulary and conceptual depth, not word count. No mode
+has a word quota or minimum length. Use only what the reader needs:
+Essential describes accessible before/after behavior and useful consequences;
+Explained explains the workings and relationships, introducing necessary concepts;
+Technical explains mechanisms, contracts, choices, protections and concrete risks.
+Each mode stands alone; never require reading a different mode first.
+
+Remove generic introductions, repetitive takeaways and boilerplate caveats such
+as "tests do not prove this works in the app". Mention uncertainty locally only
+when it materially affects a specific claim or risk. Presence of test code is not
+execution evidence: describe what it checks without claiming it passed.
+A merged journey needs a fresh explanation, not concatenated old pages.
+
+## No automatic verification disclaimer
+
+Absence of a test report, browser session or deployment check is the normal
+condition for a source review. It is not itself a finding or uncertainty to list.
+Describe what test code checks, without appending "not executed", "not proven",
+"still to verify in the browser/production" or equivalent caveats. Never invent
+successful execution either. Include an uncertainty only when a specific missing
+fact changes the interpretation of this particular change, and explain its local
+consequence. Do not put generic verification caveats into the analysis dossier,
+the three modes, the glossary or closing paragraphs. A dossier uncertainty that
+merely says no execution report exists must be omitted from reader-facing text.
+Do not replace these caveats with repetitive summaries or a generic test section.

@@ -11,6 +11,24 @@ export type ProjectSkillImport = {
   preserved: Array<string>
   error: AppError | null
 }
+export type WorkingContextStatus = "unverified" | "accepted" | "stale"
+export type WorkingContextAssessment = {
+  path: string
+  status: WorkingContextStatus
+  reason: string
+}
+export type WorkingContextFile = {
+  path: string
+  hash: string
+  status: WorkingContextStatus
+  reason: string
+  cleanup: string
+  recoveryPath: string | null
+}
+export type ReviewWorkingContext = {
+  snapshotId: string
+  files: Array<WorkingContextFile>
+}
 export type ReviewCommentRange = {
   startLine: number
   startColumn: number

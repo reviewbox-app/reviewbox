@@ -33,6 +33,7 @@ mod snapshots;
 mod source_control;
 mod storage;
 mod terminals;
+mod working_context;
 pub use project_storage::schemas as project_schemas;
 use tauri::Manager;
 
@@ -182,6 +183,8 @@ pub fn run() {
             project_skills::project_skill_preferences,
             project_skills::configure_project_skills,
             project_skills::import_project_skills,
+            working_context::review_working_context,
+            working_context::retry_working_context_cleanup,
             review_comments::read_review_comments,
             review_comments::mutate_review_comment,
             editor::commands::editor_navigation,

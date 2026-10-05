@@ -2,9 +2,38 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Provider contract; legacy topic containers remain a storage detail.
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct JourneyOutline {
+    #[serde(default)]
+    pub working_context_assessments: Vec<WorkingContextAssessment>,
+    #[serde(default)]
+    pub removed_steps: Vec<String>,
+    pub steps: Vec<OutlineStep>,
+}
+impl JourneyOutline {
+    pub(super) fn into_outline(self) -> Outline {
+        Outline {
+            working_context_assessments: self.working_context_assessments,
+            removed_steps: self.removed_steps,
+            topics: self
+                .steps
+                .into_iter()
+                .map(|step| OutlineTopic {
+                    title: step.title.clone(),
+                    brief: step.writing_brief.clone(),
+                    steps: vec![step],
+                })
+                .collect(),
+        }
+    }
+}
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Outline {
+    #[serde(default)]
+    pub working_context_assessments: Vec<WorkingContextAssessment>,
     #[serde(default)]
     pub removed_steps: Vec<String>,
     pub topics: Vec<OutlineTopic>,
@@ -26,8 +55,106 @@ pub(super) struct OutlineStep {
     pub reuse: bool,
     pub title: String,
     pub writing_brief: String,
+    // Missing only in legacy checkpoints; current provider output is validated below.
+    #[serde(default)]
+    pub analysis: Option<JourneyAnalysis>,
     pub context_source_ids: Vec<String>,
     pub anchors: Vec<CodeAnchor>,
+}
+
+impl OutlineStep {
+    pub(super) fn context_sources(&self) -> Vec<String> {
+        self.context_source_ids
+            .iter()
+            .cloned()
+            .chain(
+                self.analysis
+                    .iter()
+                    .flat_map(|a| a.evidence.iter().map(|e| e.source_id.clone())),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct JourneyAnalysis {
+    pub before: String,
+    pub after: String,
+    pub relationships: String,
+    pub consequences: String,
+    pub uncertainties: Vec<String>,
+    pub evidence: Vec<AnalysisEvidence>,
+}
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct AnalysisEvidence {
+    pub fact: String,
+    pub source_id: String,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+pub(super) fn validate_analysis(
+    outline: &Outline,
+    snapshot: &Snapshot,
+    storage: &Storage,
+) -> AppResult<()> {
+    let mut lengths = BTreeMap::new();
+    for step in outline.topics.iter().flat_map(|topic| &topic.steps) {
+        let analysis = step
+            .analysis
+            .as_ref()
+            .ok_or_else(|| invalid("Every journey needs a private analysis dossier."))?;
+        for text in [
+            &analysis.before,
+            &analysis.after,
+            &analysis.relationships,
+            &analysis.consequences,
+        ] {
+            short_text(text, usize::MAX)?;
+        }
+        let has_text_changes = step.anchors.iter().any(|anchor| {
+            snapshot
+                .changes
+                .iter()
+                .find(|change| change.id == anchor.change_id)
+                .and_then(|change| change.passages.iter().find(|p| p.id == anchor.passage_id))
+                .is_some_and(|passage| passage.old_lines > 0 || passage.new_lines > 0)
+        });
+        if analysis.evidence.is_empty() && has_text_changes {
+            return Err(invalid(
+                "Analysis of textual changes needs exact source evidence.",
+            ));
+        }
+        for evidence in &analysis.evidence {
+            short_text(&evidence.fact, usize::MAX)?;
+            let length = if let Some(length) = lengths.get(&evidence.source_id) {
+                *length
+            } else {
+                let source = reader::source(storage, snapshot, &evidence.source_id)
+                    .map_err(|_| invalid("Analysis references an unavailable captured source."))?;
+                let text = source
+                    .text
+                    .as_deref()
+                    .ok_or_else(|| invalid("Analysis references unavailable source text."))?;
+                let length = line_count(text);
+                lengths.insert(evidence.source_id.clone(), length);
+                length
+            };
+            if evidence.start_line == 0
+                || evidence.end_line < evidence.start_line
+                || evidence.end_line as usize > length
+            {
+                return Err(invalid(
+                    "Analysis evidence range is outside the frozen source.",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn validate_outline(outline: &Outline, snapshot: &Snapshot) -> AppResult<()> {
@@ -38,7 +165,7 @@ pub(super) fn validate_outline(outline: &Outline, snapshot: &Snapshot) -> AppRes
     let mut identities = BTreeSet::new();
     for topic in &outline.topics {
         short_text(&topic.title, usize::MAX)?;
-        short_text(&topic.brief, 4000)?;
+        short_text(&topic.brief, usize::MAX)?;
         if topic.steps.is_empty() {
             return Err(invalid("Every topic needs a step."));
         }

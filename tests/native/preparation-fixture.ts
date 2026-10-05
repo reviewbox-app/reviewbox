@@ -67,7 +67,8 @@ for await(const line of createInterface({input:process.stdin})){
  if(kind==='outline'){
   const manifest=JSON.parse(readFileSync(context.reviewManifest,'utf8'));
   const changes=manifest.changes.map(c=>JSON.parse(readFileSync(c.metadata,'utf8')));
-  result={topics:[{title:'Captured behavior',brief:'Understand the changed behavior.',steps:Array.from({length:${stepCount}},(_,index)=>({draftId:'0:'+index,title:index===0?'The new amount':index===1?'The other value':'Behavior '+(index+1),writingBrief:'Private direction '+(index+1)+': explain the value before and after the change and its effect on associated files.',contextSourceIds:input.sources.filter(s=>s.path==='src/other.ts'&&s.sourceId.endsWith(':after')).map(s=>s.sourceId),anchors:[changes.find(c=>c.change.path===(index%3===2?'src/other.ts':'src/answer.ts')).anchors[0]]}))}]};
+  result={steps:Array.from({length:${stepCount}},(_,index)=>({draftId:'0:'+index,title:index===0?'The new amount':index===1?'The other value':'Behavior '+(index+1),writingBrief:'Private direction '+(index+1)+': explain the value before and after the change and its effect on associated files.',contextSourceIds:manifest.sources.filter(s=>s.path==='src/other.ts'&&s.sourceId.endsWith(':after')).map(s=>s.sourceId),anchors:[changes.find(c=>c.change.path===(index%3===2?'src/other.ts':'src/answer.ts')).anchors[0]]}))};
+  for(const step of result.steps)step.analysis={before:'Previous value',after:'Updated value',relationships:'The exported value is consumed by callers.',consequences:'Callers observe the new value.',uncertainties:[],evidence:[{fact:'Captured value',sourceId:manifest.sources[0].sourceId,startLine:1,endLine:1}]};
  }else{
   const source=input.sources.find(s=>s.sourceId.endsWith(':after'))??input.sources[0];
   const reference={id:'value',label:'value',explanation:'The value made available by this file.',sourceId:source.sourceId,startLine:1,endLine:1};
@@ -89,8 +90,8 @@ for await(const line of createInterface({input:process.stdin})){
  const finalText=JSON.stringify({items:results});
  event('item/started',{type:'agentMessage',id:'final',phase:'final_answer'});
  let start=0;
- if(results[0]?.id==='outline'&&results[0].result.topics[0]?.steps.length){
-  const first=JSON.stringify(results[0].result.topics[0].steps[0]);
+ if(results[0]?.id==='outline'&&results[0].result.steps.length){
+  const first=JSON.stringify(results[0].result.steps[0]);
   start=finalText.indexOf(first)+first.length;
   send({method:'item/agentMessage/delta',params:{itemId:'final',delta:finalText.slice(0,start)}});
   while(readFileSync(${JSON.stringify(outlineMode)},'utf8')==='wait')await Bun.sleep(100);

@@ -16,7 +16,10 @@ import type { WizardStep } from "../components/NewReviewStepper"
 import { useReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 import { creationCommands } from "../services/creation.commands"
 
-import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
+import {
+  hasSourceChanges,
+  subscribeRepositoryReads,
+} from "@/lib/desktop/repositoryReads"
 import { SessionReadCache } from "@/lib/desktop/sessionReadCache"
 
 const previews = new SessionReadCache<ReviewPreview>(24)
@@ -182,7 +185,13 @@ export function useNewReviewWizard(
         else setRefresh((n) => n + 1)
       }
     }
-    return subscribeRepositoryReads(repositoryId, focus, focus)
+    return subscribeRepositoryReads(
+      repositoryId,
+      (change) => {
+        if (hasSourceChanges(change)) focus()
+      },
+      focus
+    )
   }, [repositoryId])
 
   const change = (patch: Partial<CaptureRequest>) => {

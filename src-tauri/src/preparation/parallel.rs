@@ -34,6 +34,7 @@ impl Unit {
             Kind::Outline | Kind::Adaptation => {
                 let outline: Outline = serde_json::from_value(value.clone())?;
                 validate_outline(&outline, &workspace.snapshot)?;
+                validate_analysis(&outline, &workspace.snapshot, storage)?;
                 if matches!(self.kind, Kind::Adaptation) {
                     let update = workspace
                         .review
@@ -67,7 +68,7 @@ impl Unit {
     fn schema(&self) -> Value {
         let mut result = match self.kind {
             Kind::Outline | Kind::Adaptation => {
-                serde_json::to_value(schemars::schema_for!(Outline))
+                serde_json::to_value(schemars::schema_for!(JourneyOutline))
             }
             Kind::Documents => serde_json::to_value(schemars::schema_for!(LevelDocuments)),
         }
@@ -130,7 +131,6 @@ fn strict_schema(value: &mut Value) {
 }
 enum WorkUpdate {
     Completed(Completed),
-    Preview(Vec<scheduler::Candidate>),
     Status(String, u64, PreparationStepStatus),
 }
 struct Completed {
@@ -139,6 +139,7 @@ struct Completed {
 }
 #[derive(Clone)]
 struct Worker {
+    working_context_review_id: String,
     runtime: Arc<agents::PreparationRuntime>,
     manager: PreparationManager,
     operation: String,
@@ -172,7 +173,9 @@ impl Worker {
         }
     }
     async fn work(&self, units: Vec<Unit>) -> AppResult<()> {
+        let queued = std::time::Instant::now();
         let _permit = self.permit(self.manager.slots.clone()).await?;
+        let queue_ms = queued.elapsed().as_millis() as u64;
         let batch_id = id();
         if let Ok(mut active) = self.manager.active.lock()
             && let Some(operation) = active.get_mut(&self.operation)
@@ -191,7 +194,7 @@ impl Worker {
                 status: PreparationBatchStatus::Running,
             });
         }
-        let result = self.run_groups(units, &batch_id).await;
+        let result = self.run_groups(units, &batch_id, queue_ms).await;
         if let Ok(mut active) = self.manager.active.lock()
             && let Some(operation) = active.get_mut(&self.operation)
             && operation.state.id == self.run_id
@@ -210,9 +213,10 @@ impl Worker {
                 .send(WorkUpdate::Status(unit.key.clone(), unit.version, status));
         }
     }
-    async fn run_groups(&self, units: Vec<Unit>, batch_id: &str) -> AppResult<()> {
+    async fn run_groups(&self, units: Vec<Unit>, batch_id: &str, queue_ms: u64) -> AppResult<()> {
         let mut groups = VecDeque::from([units]);
         let mut serial = 0;
+        let mut backoff_ms = 0_u64;
         while let Some(mut pending) = groups.pop_front() {
             let mut feedback = json!({});
             let mut transient_retries = 0;
@@ -220,12 +224,14 @@ impl Worker {
                 if self.cancel.load(Ordering::Relaxed) {
                     return Err(AppError::new("cancelled", "Preparation stopped."));
                 }
+                let waiting = std::time::Instant::now();
                 let _retry = if self.manager.throttled.load(Ordering::Relaxed) {
                     self.batch_status(batch_id, PreparationBatchStatus::WaitingForProvider);
                     Some(self.permit(self.manager.retry_slot.clone()).await?)
                 } else {
                     None
                 };
+                let provider_wait_ms = waiting.elapsed().as_millis() as u64;
                 self.batch_status(batch_id, PreparationBatchStatus::Running);
                 serial += 1;
                 let manager = self.manager.clone();
@@ -235,7 +241,14 @@ impl Worker {
                 let cancel = self.cancel.clone();
                 let observations = Arc::new(Mutex::new(BTreeMap::<String, Value>::new()));
                 let observed = observations.clone();
+                let timing = Arc::new(Mutex::new(metrics::ActivityTiming::default()));
+                let observed_timing = timing.clone();
+                let started_at = now();
+                let started = std::time::Instant::now();
                 let callback = Arc::new(move |mut event: AgentEvent| {
+                    if let Ok(mut timing) = observed_timing.lock() {
+                        timing.observe(&event, started.elapsed().as_millis() as u64);
+                    }
                     if cancel.load(Ordering::Relaxed) {
                         return;
                     }
@@ -262,43 +275,6 @@ impl Worker {
                 for unit in &pending {
                     self.step_status(unit, PreparationStepStatus::Writing);
                 }
-                let outline_observer: Option<agents::OutlineObserver> =
-                    if matches!(pending[0].kind, Kind::Outline | Kind::Adaptation) {
-                        self.completed
-                            .send(WorkUpdate::Preview(vec![]))
-                            .map_err(|_| state_error())?;
-                        let tx = self.completed.clone();
-                        let workspace = self.workspace.clone();
-                        let cancel = self.cancel.clone();
-                        Some(Arc::new(move |items: Vec<agents::OutlineItem>| {
-                            if cancel.load(Ordering::Relaxed) {
-                                return;
-                            }
-                            let steps = items
-                                .into_iter()
-                                .filter_map(|item| {
-                                    let step: OutlineStep =
-                                        serde_json::from_value(item.value).ok()?;
-                                    let outline = Outline {
-                                        removed_steps: vec![],
-                                        topics: vec![OutlineTopic {
-                                            title: item.title.clone(),
-                                            brief: item.brief.clone(),
-                                            steps: vec![step.clone()],
-                                        }],
-                                    };
-                                    validate_outline(&outline, &workspace.snapshot).ok()?;
-                                    Some(scheduler::Candidate {
-                                        topic: outline.topics.into_iter().next()?,
-                                        order: (item.topic, item.step),
-                                    })
-                                })
-                                .collect();
-                            let _ = tx.send(WorkUpdate::Preview(steps));
-                        }))
-                    } else {
-                        None
-                    };
                 let model = self.model.clone();
                 let known_glossary = self
                     .glossary
@@ -309,6 +285,16 @@ impl Worker {
                     .cloned()
                     .collect::<Vec<_>>();
                 let variables = BTreeMap::from([
+                    (
+                        "working_context".into(),
+                        serde_json::to_string(&crate::working_context::prompt_context(
+                            &self.storage,
+                            &self.workspace.review.repository_id,
+                            &self.working_context_review_id,
+                            &self.workspace.snapshot.id,
+                            !matches!(pending[0].kind, Kind::Documents),
+                        )?)?,
+                    ),
                     ("language".into(), self.language.clone()),
                     ("helper_model".into(), self.helper.clone()),
                     (
@@ -328,7 +314,6 @@ impl Worker {
                     self.templates[pending[0].template()],
                     self.coordination
                 );
-                let started = std::time::Instant::now();
                 let response = self
                     .runtime
                     .run(
@@ -336,7 +321,7 @@ impl Worker {
                         variables,
                         pending[0].schema(),
                         callback,
-                        outline_observer,
+                        !matches!(pending[0].kind, Kind::Documents),
                         self.cancel.clone(),
                     )
                     .await;
@@ -356,7 +341,7 @@ impl Worker {
                     && let Some(operation) = active.get_mut(&self.operation)
                     && operation.state.id == self.run_id
                 {
-                    operation.measurements.push(json!({"batchId":batch_id,"attempt":serial,"model":model,"phase":pending[0].phase,"items":pending.iter().map(|unit|unit.key.as_str()).collect::<Vec<_>>(),"durationMs":started.elapsed().as_millis(),"responseBytes":response.as_ref().ok().map(String::len),"errorCode":response.as_ref().err().map(|error|error.code.as_str()),"observations":observations.lock().map(|values|values.values().cloned().collect::<Vec<_>>()).unwrap_or_default()}));
+                    operation.measurements.push(json!({"batchId":batch_id,"attempt":serial,"model":model,"phase":pending[0].phase,"items":pending.iter().map(|unit|unit.key.as_str()).collect::<Vec<_>>(),"startedAt":started_at,"endedAt":now(),"durationMs":started.elapsed().as_millis(),"queueWaitMs":if serial == 1 {queue_ms} else {0},"providerWaitMs":provider_wait_ms + backoff_ms,"activity":timing.lock().ok().map(|t|t.value(started.elapsed().as_millis() as u64)),"responseBytes":response.as_ref().ok().map(String::len),"errorCode":response.as_ref().err().map(|error|error.code.as_str()),"observations":observations.lock().map(|values|values.values().cloned().collect::<Vec<_>>()).unwrap_or_default()}));
                     if operation.measurements.len() > 2000 {
                         operation.measurements.remove(0);
                     }
@@ -377,12 +362,14 @@ impl Worker {
                         };
                         event.batch_id = Some(batch_id.into());
                         self.manager.event(&self.operation, event, batch_id);
+                        let backoff = std::time::Instant::now();
                         for _ in 0..if transient_retries == 1 { 20 } else { 50 } {
                             if self.cancel.load(Ordering::Relaxed) {
                                 return Err(AppError::new("cancelled", "Preparation stopped."));
                             }
                             tokio::time::sleep(Duration::from_millis(100)).await;
                         }
+                        backoff_ms = backoff.elapsed().as_millis() as u64;
                         continue;
                     }
                     Err(error) if error.code == "output_limit" && pending.len() > 1 => {
@@ -394,6 +381,7 @@ impl Worker {
                     Err(error) if error.code != "output_limit" => return Err(error),
                     other => other,
                 };
+                backoff_ms = 0;
                 let parsed = response
                     .as_ref()
                     .ok()
@@ -410,6 +398,15 @@ impl Worker {
                         let value = matches.next()?;
                         matches.next().is_none().then(|| value["result"].clone())
                     });
+                    if matches!(unit.kind, Kind::Outline | Kind::Adaptation) {
+                        value = value.and_then(|candidate| {
+                            serde_json::from_value::<JourneyOutline>(candidate)
+                                .ok()
+                                .and_then(|outline| {
+                                    serde_json::to_value(outline.into_outline()).ok()
+                                })
+                        });
+                    }
                     if matches!(unit.kind, Kind::Documents)
                         && let Some(candidate) = &value
                         && let Ok(mut documents) =
@@ -422,8 +419,24 @@ impl Worker {
                         let item = unit.clone();
                         let workspace = self.workspace.clone();
                         let storage = self.storage.clone();
+                        let context_review_id = self.working_context_review_id.clone();
                         tokio::task::spawn_blocking(move || {
-                            item.validate(&value, &workspace, &storage)
+                            item.validate(&value, &workspace, &storage)?;
+                            if matches!(item.kind, Kind::Outline | Kind::Adaptation)
+                                && let Some(context) = crate::working_context::load(
+                                    &storage,
+                                    &workspace.review.repository_id,
+                                    &context_review_id,
+                                    &workspace.snapshot.id,
+                                )?
+                            {
+                                let outline: Outline = serde_json::from_value(value)?;
+                                crate::working_context::validate_assessments(
+                                    &context,
+                                    &outline.working_context_assessments,
+                                )?;
+                            }
+                            Ok(())
                         })
                         .await
                         .map_err(|e| AppError::new("task", e.to_string()))?
@@ -499,33 +512,15 @@ fn unit(key: String, label: String, phase: PreparationPhase, input: Value, kind:
         version: 0,
     }
 }
-// Inline complete small sources, with explicit manifest lookups for larger ones.
-// Never send a truncated source as though it were the complete captured file.
-fn document_evidence(
-    sources: &[&SourceDescriptor],
-    inline: &BTreeMap<String, String>,
-) -> Vec<Value> {
-    let mut remaining = 64 * 1024;
-    sources.iter().map(|source| {
-        if let Some(text) = inline.get(&source.hash) && text.len() <= remaining {
-            remaining -= text.len();
-            json!({"sourceId":source.source_id,"hash":source.hash,"startLine":1,"text":text,"complete":true})
-        } else {
-            json!({"sourceId":source.source_id,"hash":source.hash,"complete":false,"readFromManifest":true})
-        }
-    }).collect()
-}
-
-fn document_input(
-    topic: &OutlineTopic,
-    step: &OutlineStep,
-    sources: &[SourceDescriptor],
-    inline: &BTreeMap<String, String>,
-) -> Value {
+fn document_input(topic: &OutlineTopic, step: &OutlineStep, sources: &[SourceDescriptor]) -> Value {
     let relevant: Vec<_> = sources
         .iter()
         .filter(|source| {
             step.context_source_ids.contains(&source.source_id)
+                || step
+                    .analysis
+                    .as_ref()
+                    .is_some_and(|a| a.evidence.iter().any(|e| e.source_id == source.source_id))
                 || step.anchors.iter().any(|anchor| {
                     source
                         .source_id
@@ -533,7 +528,10 @@ fn document_input(
                 })
         })
         .collect();
-    let evidence = document_evidence(&relevant, inline);
+    let evidence: Vec<_> = relevant
+        .iter()
+        .map(|s| json!({"sourceId":s.source_id,"hash":s.hash,"readFromManifest":true}))
+        .collect();
     json!({"scope":"readingStep","topic":topic.title,"brief":topic.brief,"step":step,"sources":relevant,"capturedSources":evidence})
 }
 
@@ -568,6 +566,8 @@ impl Run {
         }
         self.checkpoint.helper_model = Some(helper.clone());
         self.persist().await?;
+        let context_started_at = now();
+        let context_started = std::time::Instant::now();
         let runtime = Arc::new(
             agents::PreparationRuntime::new(
                 self.storage.clone(),
@@ -583,11 +583,17 @@ impl Run {
             )
             .await?,
         );
+        if let Ok(mut active) = self.manager.active.lock()
+            && let Some(operation) = active.get_mut(&self.key)
+        {
+            operation.measurements.push(json!({"phase":"context","attempt":1,"startedAt":context_started_at,"endedAt":now(),"durationMs":context_started.elapsed().as_millis()}));
+        }
         let coordination =
             std::fs::read_to_string(self.resources.join("preparation/coordination.md"))?;
         let workspace = Arc::new(workspace);
         let (tx, mut rx) = mpsc::unbounded_channel();
         let worker = Worker {
+            working_context_review_id: self.checkpoint.state.review_id.clone(),
             runtime: runtime.clone(),
             manager: self.manager.clone(),
             operation: self.key.clone(),
@@ -626,6 +632,8 @@ impl Run {
         let reused_steps =
             scheduler::schedule(self, worker, sources, baseline, &signature, rx).await?;
         self.check_cancel()?;
+        let finalization_started_at = now();
+        let finalization_started = std::time::Instant::now();
         let outline: Outline = serde_json::from_value(self.checkpoint.results["outline"].clone())?;
         let mut topics = Vec::new();
         for (ti, topic) in outline.topics.into_iter().enumerate() {
@@ -637,7 +645,7 @@ impl Run {
                 adaptation::attach_dependencies(
                     &mut documents,
                     &step.anchors,
-                    &step.context_source_ids,
+                    &step.context_sources(),
                     &workspace.snapshot,
                     &signature,
                 )?;
@@ -672,7 +680,7 @@ impl Run {
         let target_review = workspace.review.id.clone();
         let revision = workspace.review.revision;
         let cancel = self.cancel.clone();
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             if cancel.load(Ordering::Relaxed) {
                 return Err(AppError::new(
                     "cancelled",
@@ -694,10 +702,27 @@ impl Run {
             Ok::<_, AppError>(())
         })
         .await
-        .map_err(|e| AppError::new("task", e.to_string()))??;
-        Ok(())
+        .map_err(|e| AppError::new("task", e.to_string()))
+        .and_then(|result| result);
+        if let Ok(mut active) = self.manager.active.lock()
+            && let Some(operation) = active.get_mut(&self.key)
+        {
+            operation.measurements.push(json!({"phase":"finalization","attempt":1,"startedAt":finalization_started_at,"endedAt":now(),"durationMs":finalization_started.elapsed().as_millis(),"errorCode":result.as_ref().err().map(|e| &e.code)}));
+        }
+        self.persist().await?;
+        result
     }
     async fn record(&mut self, completed: Completed) -> AppResult<()> {
+        if matches!(completed.unit.kind, Kind::Outline | Kind::Adaptation)
+            && let Some(context) = &mut self.checkpoint.working_context
+        {
+            let outline: Outline = serde_json::from_value(completed.value.clone())?;
+            crate::working_context::assess(
+                &self.storage,
+                context,
+                &outline.working_context_assessments,
+            )?;
+        }
         let key = completed.unit.key;
         self.checkpoint.results.insert(key.clone(), completed.value);
         if let Some(operation) = self

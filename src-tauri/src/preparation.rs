@@ -3,7 +3,10 @@ mod adaptation;
 #[cfg(all(test, unix))]
 mod adaptation_tests;
 mod batches;
+mod metrics;
 mod parallel;
+#[cfg(all(test, unix))]
+mod replay_tests;
 #[cfg(test)]
 mod tests;
 
@@ -27,6 +30,8 @@ const MAX_COORDINATORS: usize = 8;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Checkpoint {
+    #[serde(default)]
+    working_context: Option<crate::working_context::FrozenContext>,
     revision: u32,
     review_revision: u32,
     repository_id: String,
@@ -43,6 +48,35 @@ struct Checkpoint {
     measurements: Vec<Value>,
 }
 impl Checkpoint {
+    fn reconcile_contextless_checkpoint(
+        &mut self,
+        was_contextless: bool,
+        legacy_source_hash: &str,
+        source_hash: &str,
+    ) -> bool {
+        if !was_contextless || self.source_hash.is_empty() || self.source_hash != legacy_source_hash
+        {
+            return false;
+        }
+        // The legacy hash proves that this is the same immutable capture. Recompute
+        // its preparation with the newly frozen brief instead of reusing old output.
+        self.source_hash = source_hash.into();
+        self.results.clear();
+        self.definitions.clear();
+        self.state.steps.clear();
+        self.state.completed_batches = 0;
+        self.state.total_batches = 1;
+        true
+    }
+    fn reconcile_editorial_contract(&mut self, prompt_hash: &str) {
+        if !self.prompt_hash.is_empty() && self.prompt_hash != prompt_hash {
+            // Never mix documents or definitions authored under different instructions.
+            self.results.clear();
+            self.definitions.clear();
+            self.state.steps.clear();
+            self.prompt_hash.clear();
+        }
+    }
     fn key(&self) -> String {
         format!("{}:{}", self.repository_id, self.state.review_id)
     }
@@ -255,6 +289,7 @@ impl PreparationManager {
             can_resume: false,
         };
         let checkpoint = Checkpoint {
+            working_context: None,
             revision: previous.as_ref().map_or(0, |old| old.revision + 1),
             review_revision: review.revision,
             repository_id: review.repository_id,
@@ -846,9 +881,55 @@ impl Run {
             })
             .await
             .map_err(|error| AppError::new("task", error.to_string()))??;
-        let source_hash = fingerprint(&serde_json::to_vec(&workspace.snapshot)?);
-        let prompt_hash = fingerprint(&serde_json::to_vec(&(&templates, &language))?);
+        let was_contextless = self.checkpoint.working_context.is_none();
+        if was_contextless {
+            let storage = self.storage.clone();
+            let repository_id = workspace.review.repository_id.clone();
+            let review_id = self.checkpoint.state.review_id.clone();
+            let snapshot_id = workspace.snapshot.id.clone();
+            self.checkpoint.working_context = Some(
+                tokio::task::spawn_blocking(move || {
+                    crate::working_context::freeze(
+                        &storage,
+                        &repository_id,
+                        &review_id,
+                        &snapshot_id,
+                    )
+                })
+                .await
+                .map_err(|error| AppError::new("task", error.to_string()))??,
+            );
+        }
+        let context_hash = self
+            .checkpoint
+            .working_context
+            .as_ref()
+            .map(|context| context.identity())
+            .transpose()?;
+        let source_hash = fingerprint(&serde_json::to_vec(&(&workspace.snapshot, context_hash))?);
+        let legacy_source_hash = fingerprint(&serde_json::to_vec(&workspace.snapshot)?);
+        if self.checkpoint.reconcile_contextless_checkpoint(
+            was_contextless,
+            &legacy_source_hash,
+            &source_hash,
+        ) {
+            self.update(|state| {
+                state.steps.clear();
+                state.completed_batches = 0;
+                state.total_batches = 1;
+            });
+            self.notice("The saved preparation predates work-brief support. Recalculating its analysis on the same captured source.");
+        }
+        let coordination =
+            std::fs::read_to_string(self.resources.join("preparation/coordination.md"))?;
+        let prompt_hash = fingerprint(&serde_json::to_vec(&(
+            &templates,
+            &language,
+            "single-writer-evidence-v1",
+            coordination,
+        ))?);
         let provider_hash = fingerprint(&serde_json::to_vec(&config)?);
+        self.checkpoint.reconcile_editorial_contract(&prompt_hash);
         compatible(&self.checkpoint, &source_hash, &prompt_hash, &provider_hash)?;
         self.checkpoint.source_hash = source_hash;
         self.checkpoint.prompt_hash = prompt_hash;
@@ -864,13 +945,14 @@ impl Run {
 fn templates(root: &Path) -> AppResult<BTreeMap<String, String>> {
     let common = std::fs::read_to_string(root.join("preparation/common.md"))?;
     let reading_skill = std::fs::read_to_string(root.join("skills/review/SKILL.md"))?;
+    let working_context = std::fs::read_to_string(root.join("preparation/working-context.md"))?;
     ["outline", "documents", "adaptation"]
         .into_iter()
         .map(|name| {
             Ok((
                 name.to_owned(),
                 format!(
-                    "{common}\n\n{reading_skill}\n\n{}",
+                    "{common}\n\n{reading_skill}\n\n{working_context}\n\n{}",
                     std::fs::read_to_string(root.join(format!("preparation/{name}.md")))?
                 ),
             ))

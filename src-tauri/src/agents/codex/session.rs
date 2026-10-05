@@ -45,6 +45,15 @@ impl Session {
         prepared: Prepared,
         cancel: Arc<AtomicBool>,
     ) -> AppResult<Self> {
+        Self::start_with_delegation(root, config, prepared, cancel, true).await
+    }
+    pub(in crate::agents) async fn start_with_delegation(
+        root: &std::path::Path,
+        config: &ProviderConfig,
+        prepared: Prepared,
+        cancel: Arc<AtomicBool>,
+        allow_delegation: bool,
+    ) -> AppResult<Self> {
         let mut command = providers::command(&providers::resolve_executable(&config.executable));
         command
             .args(["app-server", "--listen", "stdio://"])
@@ -64,6 +73,9 @@ impl Session {
                     "agents.default_subagent_model={}",
                     serde_json::to_string(helper)?
                 ));
+        }
+        if !allow_delegation {
+            command.args(["-c", "agents.enabled=false"]);
         }
         let mut transport = Transport::new(command, cancel)?;
         transport.send(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"reviewbox","title":"ReviewBox","version":env!("CARGO_PKG_VERSION")}}})).await?;
@@ -363,12 +375,14 @@ fn planning_configuration(effective: &Value) -> Value {
     let mut config = json!({"features.apps": false, "features.plugins": false, "features.multi_agent": false, "agents.enabled": false, "apps._default.enabled": false});
     for category in ["mcp_servers", "plugins", "apps"] {
         if let Some(entries) = effective[category].as_object() {
-            for name in entries.keys() {
-                config[format!(
-                    "{category}.{}.enabled",
-                    serde_json::to_string(name).expect("JSON key")
-                )] = json!(false);
-            }
+            // App-server splits override paths on dots; it does not parse TOML
+            // quoting. Nested objects preserve literal connector names and merge
+            // only this flag into their existing transport configuration.
+            config[category] = entries
+                .keys()
+                .map(|name| (name.clone(), json!({"enabled": false})))
+                .collect::<serde_json::Map<String, Value>>()
+                .into();
         }
     }
     config
@@ -393,11 +407,15 @@ mod planning_tests {
     }
     #[test]
     fn disables_configured_connectors_and_delegation_without_writing_preferences() {
-        let source = json!({"mcp_servers":{"files":{"command":"test"}},"apps":{"writer":{"enabled":true}},"plugins":{"tool@local":{"enabled":true}}});
+        let source = json!({"mcp_servers":{"files":{"command":"test"}, "files.with.dots":{"url":"https://example.test/mcp"}},"apps":{"writer":{"enabled":true}},"plugins":{"tool@local":{"enabled":true}}});
         let config = planning_configuration(&source);
-        assert_eq!(config["mcp_servers.\"files\".enabled"], false);
-        assert_eq!(config["apps.\"writer\".enabled"], false);
-        assert_eq!(config["plugins.\"tool@local\".enabled"], false);
+        assert_eq!(config["mcp_servers"]["files"], json!({"enabled": false}));
+        assert_eq!(
+            config["mcp_servers"]["files.with.dots"],
+            json!({"enabled": false})
+        );
+        assert_eq!(config["apps"]["writer"]["enabled"], false);
+        assert_eq!(config["plugins"]["tool@local"]["enabled"], false);
         assert_eq!(config["features.multi_agent"], false);
         assert_eq!(source["apps"]["writer"]["enabled"], true);
     }

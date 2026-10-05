@@ -13,6 +13,7 @@ import { PreparationProgress } from "./PreparationProgress"
 import { PreparationSteps } from "./PreparationSteps"
 import { PreparedReview } from "./PreparedReview"
 import { ReviewPreparationError } from "./ReviewPreparationError"
+import { WorkingContextStatus } from "./WorkingContextStatus"
 
 export function ReviewPreparationContent({
   workspace,
@@ -88,6 +89,11 @@ export function ReviewPreparationContent({
           removed
         </p>
       )}
+      <WorkingContextStatus
+        repositoryId={workspace.review.repositoryId}
+        reviewId={workspace.review.id}
+        revision={`${state?.phase}:${state?.status}:${state?.completedBatches}`}
+      />
       <PreparationPhases preparation={preparation} failed={failed} />
       {state && (
         <p className="text-xs text-muted-foreground">

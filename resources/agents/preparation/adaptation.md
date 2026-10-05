@@ -17,7 +17,7 @@ work for a trivial change. Stop once the evidence suffices, without exhaustive
 file reading or a step per file. Verify reuse decisions against old documents and
 new captured evidence before returning the updated tour.
 
-Return the normal outline (topics and steps), plus removedSteps.
+Return the normal flat outline (steps and removedSteps), without topic groups.
 Every retained, rewritten or new step must include a concise writingBrief in the
 project's language and contextSourceIds (possibly empty). Explain the intended
 before/after behavior, consequences and relationships between associated files.
@@ -27,7 +27,7 @@ If this direction calls for information absent from the old documents, set
 reuse=false even if the code anchors have not changed.
 For every step that continues an existing context, set previousStepId to its old
 ID. Set reuse=true only when its explanation in ALL three reading modes, title,
-topic context and glossary meanings remain valid without rewriting. Otherwise
+journey context and glossary meanings remain valid without rewriting. Otherwise
 set reuse=false. New steps have previousStepId=null and reuse=false. List removed
 old IDs in removedSteps. Account for each old step exactly once. Choose the final
 order by behavior and context; do not create a step per file or filler steps.
@@ -36,7 +36,7 @@ title, set reuse=false; never claim unchanged reuse after retitling a step.
 
 Use anchors from the NEW capture, never old capture IDs. The application checks
 all reuse claims and rewrites steps whose source references cannot be rebound.
-Keep unchanged topic titles and briefs so reusable explanations keep their context.
+Preserve the context of reusable explanations.
 The previous three documents are available through previousReviewManifest; consult
 them to assess reuse, not just their titles. Request new writing only where useful.
 
@@ -58,6 +58,56 @@ inventing an answer. Native validation requirements remain mandatory.
 
 Give each step a unique stable draftId, distinct from previousStepId. Preserve
 these draft IDs across corrections, changes of order and resumed analysis; use
-previousDefinitions when supplied. Emit each topic title and brief BEFORE its
-steps so writers have complete context immediately. You may revise a definition;
-only its current version will be used. Return all final steps in the final outline.
+previousDefinitions when supplied. Return all final steps in the final outline.
+
+Use one step per coherent modification journey, spanning related files and layers.
+There is no target number. Group tests with their behavior unless the testing
+infrastructure changes independently. Finalize the entire plan before writers start.
+Give each writingBrief clear ownership and the subjects covered elsewhere.
+When merging old steps, create a new draftId, previousStepId=null and reuse=false;
+list ALL absorbed old IDs in removedSteps. Write a new coherent explanation,
+never concatenate the old documents or transfer their human validations.
+
+Organize at the scale of a complete reader/user journey, not each independently
+implemented capability. Changes to the same screen or workflow belong together:
+for example, a dashboard's recent content and personal shortcuts form one dashboard
+journey; browsing, contextual actions and manual editing form one editing journey.
+Separate a durable cross-interface processing lifecycle when it merits its own
+explanation. Small visual changes belong in the relevant journey, never a standalone
+page. A small ancillary test-runner fix belongs as a short supporting note in a
+relevant journey; only a substantial independent testing-infrastructure change
+justifies a separate step. Independence of files, services or implementation
+details alone never justifies another page. Before finalizing, merge adjacent
+steps that share the same user goal and would repeat context.
+
+## Private evidence handoff
+
+Every step must include analysis: {"before":"observed previous behavior",
+"after":"observed new behavior","relationships":"how files cooperate",
+"consequences":"useful effects","uncertainties":[],"evidence":[
+{"fact":"verified finding","sourceId":"exact captured source ID",
+"startLine":1,"endLine":4}]}.
+Reuse discoveries from analysis helpers in this dossier; do not repeat their
+investigation. Associate the important claims with exact captured source ranges.
+Include real uncertainties explicitly. Before/after sources are distinct.
+The dossier is private, concise factual prose, not copied source code. Writers
+will use it to produce all three modes without redoing discovery. Keep the plan
+and dossier proportional to the changes, without quotas or exhaustive inventories.
+
+## No automatic verification disclaimer
+
+Absence of a test report, browser session or deployment check is the normal
+condition for a source review. It is not itself a finding or uncertainty to list.
+Describe what test code checks, without appending "not executed", "not proven",
+"still to verify in the browser/production" or equivalent caveats. Never invent
+successful execution either. Include an uncertainty only when a specific missing
+fact changes the interpretation of this particular change, and explain its local
+consequence. Do not put generic verification caveats into the analysis dossier,
+the three modes, the glossary or closing paragraphs. A dossier uncertainty that
+merely says no execution report exists must be omitted from reader-facing text.
+Do not replace these caveats with repetitive summaries or a generic test section.
+
+For a journey containing only binary or metadata changes (captured anchors have
+zero text lines), analysis.evidence may be empty. Explain only the captured
+metadata supported by those anchors; never invent text line references or infer
+binary contents. Textual changes still require exact source evidence.

@@ -13,6 +13,7 @@ import { ReviewPublicationDetails } from "./ReviewPublicationDetails"
 import { reviewIsComplete } from "../helpers/publication.helpers"
 import type { ReviewCommentsSession } from "../hooks/useReviewComments"
 import { ReviewCommentsSummary } from "./ReviewCommentsSummary"
+import { WorkingContextStatus } from "@/features/agents/components/WorkingContextStatus"
 
 export function ReviewSummary({
   workspace,
@@ -52,6 +53,12 @@ export function ReviewSummary({
         review={workspace.review}
         busy={busy}
         onAction={onAction}
+      />
+      <WorkingContextStatus
+        repositoryId={workspace.review.repositoryId}
+        reviewId={workspace.review.id}
+        revision={workspace.review.revision}
+        completed={complete}
       />
       <div className="flex flex-wrap gap-2">
         <Button variant={complete ? "secondary" : "default"} onClick={onReturn}>

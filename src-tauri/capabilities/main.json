@@ -4,6 +4,8 @@
   "description": "Local review operations in the main application window.",
   "windows": ["main", "settings"],
   "permissions": [
+    "allow-review-working-context",
+    "allow-retry-working-context-cleanup",
     "allow-editor-navigation",
     "allow-editor-store-navigation",
     "allow-configure-editor-menu",

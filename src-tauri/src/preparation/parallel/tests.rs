@@ -40,12 +40,11 @@ for line in sys.stdin:
   elif isinstance(schema,list):
    for child in schema:check_schema(child)
  check_schema(params['outputSchema'])
- assert 'agents.enabled=true' in args and 'agents.max_concurrent_threads_per_session=3' in args
  prompt=params['input'][0]['text']
  assert 'Keep the three variants of a reading step with one helper' not in prompt
  if '# Write three distinct reading levels' in prompt:
-  assert 'Write the complete Technical document yourself' in prompt
-  assert 'launch two helpers concurrently' in prompt
+  assert 'agents.enabled=false' in args
+  assert 'sole writer' in prompt
   assert 'correction.items[].previousResult' in prompt
  else:
   assert 'Delegate as much independent discovery and research as possible' in prompt
@@ -68,10 +67,12 @@ for line in sys.stdin:
   key=item['id'];data=item['input']
   if key=='outline':
    manifest=json.loads(pathlib.Path(context['reviewManifest']).read_text());change=json.loads(pathlib.Path(manifest['changes'][0]['metadata']).read_text())
-   result={'topics':[{'title':'Amount','brief':'The amount changes.','steps':[{'draftId':'0:'+str(i),'title':'Explain amount '+str(i),'writingBrief':'Private direction '+str(i)+': explain the amount before and after this change.','contextSourceIds':[],'anchors':[change['anchors'][0]]} for i in range(int((base/'step-count').read_text()) if (base/'step-count').exists() else 4)]}]}
+   result={'steps':[{'draftId':'0:'+str(i),'title':'Explain amount '+str(i),'writingBrief':'Private direction '+str(i)+': explain the amount before and after this change.','contextSourceIds':[],'anchors':[change['anchors'][0]]} for i in range(int((base/'step-count').read_text()) if (base/'step-count').exists() else 4)]}
   else:
    assert data['step']['writingBrief'].startswith('Private direction '+key.rsplit(':',1)[1]+': explain the amount before and after this change.')
    assert data['step']['contextSourceIds']==[]
+   assert len(data['readingPlan']) > 0
+   assert any(s['draftId']==data['step']['draftId'] for s in data['readingPlan'])
    record('writing',id=key,brief=data['step']['writingBrief'])
    if (base/'descendants').exists():
     import subprocess
@@ -80,6 +81,11 @@ for line in sys.stdin:
    if (base/'repair').exists() and key=='step:0:1':
     flag=base/'repaired'
     if not flag.exists():flag.write_text('1');result={'invalid':True}
+  if key=='outline':
+   for step in result['steps']:step['analysis']=dict(before='Previous value',after='Updated value',relationships='The exported value is used by its callers.',consequences='Callers observe the new amount.',uncertainties=[],evidence=[dict(fact='The captured file defines the value.',sourceId=next(s['sourceId'] for s in manifest['sources'] if s['sourceId'].startswith('change:'+step['anchors'][0]['changeId']+':') and s['sourceId'].endswith(':after')),startLine=1,endLine=1)])
+  else:
+   assert data['step']['analysis']['evidence']
+   assert all('text' not in s for s in data['capturedSources'])
   results.append({'id':key,'result':result})
  if (base/'pause').exists() and any(i['id'].startswith('step:') for i in batch['items']):
   while (base/'pause').exists():time.sleep(.03)
@@ -91,7 +97,7 @@ for line in sys.stdin:
    send({'method':'item/agentMessage/delta','params':{'threadId':thread,'turnId':turn,'itemId':'final','delta':text[offset:offset+30]}});time.sleep(.003)
   while (base/'outline-pause').exists():time.sleep(.03)
   if (base/'revise-outline').exists():
-   steps=payload['items'][0]['result']['topics'][0]['steps']
+   steps=payload['items'][0]['result']['steps']
    steps[0]['writingBrief']+=' Revised.'
    steps.pop(1);steps.reverse()
   if (base/'outline-fails').exists():
@@ -161,6 +167,29 @@ fn schedules_parallel_batches_isolates_children_and_repairs_only_invalid_items()
     assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
     assert_eq!(state.steps.len(), 4);
     assert_eq!(state.completed_batches, state.total_batches);
+    let checkpoint: Checkpoint = storage
+        .get(
+            KIND,
+            &format!("{}:{}", workspace.review.repository_id, workspace.review.id),
+        )
+        .unwrap();
+    assert!(
+        checkpoint
+            .measurements
+            .iter()
+            .any(|m| m["phase"] == "context")
+    );
+    assert!(
+        checkpoint
+            .measurements
+            .iter()
+            .any(|m| m["phase"] == "finalization")
+    );
+    for measurement in &checkpoint.measurements {
+        assert!(measurement["startedAt"].as_str().is_some());
+        assert!(measurement["endedAt"].as_str().is_some());
+        assert!(measurement["durationMs"].as_u64().is_some());
+    }
     assert!(state.events.iter().any(|event| matches!(&event.progress, Some(AgentProgress::Delegation { model: Some(model), .. }) if model == "gpt-6-luna")));
     assert!(state.events.iter().any(|event| matches!(&event.progress, Some(AgentProgress::Delegation { id, model: Some(model), .. }) if id.ends_with("new-child") && model == "gpt-6-luna")));
     let calls = calls(dir.path());
@@ -199,7 +228,10 @@ fn schedules_parallel_batches_isolates_children_and_repairs_only_invalid_items()
         }
     }
     assert_eq!(maximum, 4);
-    assert!(processes.len() <= 4);
+    assert!(
+        processes.len() <= 5,
+        "Analysis and writer processes have separate delegation policies"
+    );
     assert_eq!(counts["step:0:0"], 1);
     assert_eq!(counts["step:0:1"], 2);
     assert_eq!(counts["outline"], 1);
@@ -405,6 +437,7 @@ fn free_outline_accepts_empty_and_large_tours_and_long_documents() {
         passage_id: change.passages[0].id.clone(),
     };
     let mut outline = Outline {
+        working_context_assessments: vec![],
         removed_steps: vec![],
         topics: vec![],
     };
@@ -418,6 +451,7 @@ fn free_outline_accepts_empty_and_large_tours_and_long_documents() {
                 previous_step_id: None,
                 reuse: false,
                 title: format!("Step {i} {}", "explanation ".repeat(40)),
+                analysis: None,
                 writing_brief: format!("Explain behavior {i} before and after the change."),
                 context_source_ids: vec![],
                 anchors: vec![anchor.clone()],
@@ -579,7 +613,7 @@ fn preparation_needs_only_the_project_and_selected_helper_models() {
 }
 
 #[test]
-fn writing_briefs_validate_and_context_uses_the_shared_evidence_budget() {
+fn writing_briefs_validate_and_source_content_is_never_injected() {
     let (_dir, _storage, mut workspace) = fixture();
     let change = &workspace.snapshot.changes[0];
     let mut content = change.after.clone().unwrap();
@@ -596,6 +630,7 @@ fn writing_briefs_validate_and_context_uses_the_shared_evidence_budget() {
     });
     let context_id = "file:context.ts".to_owned();
     let mut outline = Outline {
+        working_context_assessments: vec![],
         removed_steps: vec![],
         topics: vec![OutlineTopic {
             title: "Amounts".into(),
@@ -605,6 +640,7 @@ fn writing_briefs_validate_and_context_uses_the_shared_evidence_budget() {
                 previous_step_id: None,
                 reuse: false,
                 title: "New amount".into(),
+                analysis: None,
                 writing_brief:
                     "Private note: explain the old and new amount and the effect of context.ts."
                         .into(),
@@ -623,6 +659,15 @@ fn writing_briefs_validate_and_context_uses_the_shared_evidence_budget() {
         Kind::Outline,
     )
     .schema();
+    assert!(
+        schema["properties"]["items"]["items"]["properties"]["result"]["properties"]["steps"]
+            .is_object()
+    );
+    assert!(
+        schema["properties"]["items"]["items"]["properties"]["result"]["properties"]
+            .get("topics")
+            .is_none()
+    );
     let required = schema["$defs"]["OutlineStep"]["required"]
         .as_array()
         .unwrap();
@@ -636,53 +681,15 @@ fn writing_briefs_validate_and_context_uses_the_shared_evidence_budget() {
     assert!(serde_json::from_value::<Outline>(missing_note).is_err());
 
     let sources = reader::sources(&workspace.snapshot);
-    let inline = BTreeMap::from([("supplemental-content".into(), "x".repeat(65_537))]);
-    let input = document_input(&outline.topics[0], step, &sources, &inline);
+    let input = document_input(&outline.topics[0], step, &sources);
     assert_eq!(input["step"]["writingBrief"], step.writing_brief);
-    assert!(
-        input["sources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s["sourceId"] == context_id)
-    );
     let evidence = input["capturedSources"].as_array().unwrap();
-    let supplemental = evidence
-        .iter()
-        .find(|s| s["sourceId"] == context_id)
-        .unwrap();
-    assert_eq!(supplemental["readFromManifest"], true);
-    assert!(
-        supplemental.get("text").is_none(),
-        "Never truncate oversized context"
-    );
-    let small = BTreeMap::from([(
-        "supplemental-content".into(),
-        "Useful captured context".into(),
-    )]);
-    let supplied = document_input(&outline.topics[0], step, &sources, &small);
-    assert!(
-        supplied["capturedSources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s["text"] == "Useful captured context")
-    );
-    let full_text: BTreeMap<_, _> = sources
-        .iter()
-        .map(|s| (s.hash.clone(), "x".repeat(40_000)))
-        .collect();
-    let bounded = document_input(&outline.topics[0], step, &sources, &full_text);
-    let evidence = bounded["capturedSources"].as_array().unwrap();
+    assert!(evidence.iter().any(|s| s["sourceId"] == context_id));
     assert!(
         evidence
             .iter()
-            .filter_map(|s| s["text"].as_str())
-            .map(str::len)
-            .sum::<usize>()
-            <= 64 * 1024
+            .all(|s| s["readFromManifest"] == true && s.get("text").is_none())
     );
-    assert!(evidence.iter().any(|s| s["readFromManifest"] == true));
 
     let mut docs = LevelDocuments::default();
     adaptation::attach_dependencies(
@@ -744,205 +751,63 @@ fn writing_briefs_validate_and_context_uses_the_shared_evidence_budget() {
 }
 
 #[test]
-fn eight_writers_and_complete_outline_previews_are_independent_of_final_output() {
+fn writers_wait_for_the_final_plan_and_receive_its_final_order() {
     let (dir, storage, workspace) = fixture();
-    fs::write(dir.path().join("step-count"), "12").unwrap();
-    for flag in ["stream-outline", "outline-pause", "pause"] {
+    for flag in ["stream-outline", "outline-pause", "pause", "revise-outline"] {
         fs::write(dir.path().join(flag), "").unwrap();
     }
     let manager = PreparationManager::default();
     start(&manager, &storage, &workspace);
-    let preview = wait(&manager, &storage, &workspace.review.id, |s| {
-        !s.steps.is_empty() && s.steps.len() < 12
+    wait(&manager, &storage, &workspace.review.id, |s| {
+        !s.active_batches.is_empty()
     });
-    assert!(
-        !serde_json::to_string(&preview)
-            .unwrap()
-            .contains("Private direction")
-    );
-    let complete = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.steps.len() == 12
-    });
-    assert_eq!(complete.phase, PreparationPhase::Outline);
-    let concurrent = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.active_batches.len() == 8
-            && s.steps
-                .iter()
-                .filter(|s| s.status == PreparationStepStatus::Writing)
-                .count()
-                == 7
-    });
-    assert!(
-        concurrent
-            .active_batches
-            .iter()
-            .any(|b| b.phase == PreparationPhase::Outline)
-    );
-    assert!(calls(dir.path()).iter().any(|c| c["event"] == "writing"));
-    assert!(
-        reviews::load(&storage, &workspace.review.id)
-            .unwrap()
-            .review
-            .topics
-            .is_empty()
-    );
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!calls(dir.path()).iter().any(|c| c["event"] == "writing"));
     fs::remove_file(dir.path().join("outline-pause")).unwrap();
     let writing = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.active_batches.len() == 8
+        s.steps.len() == 3
             && s.steps
                 .iter()
-                .filter(|s| s.status == PreparationStepStatus::Writing)
-                .count()
-                == 8
-    });
-    assert!(
-        writing
-            .steps
-            .iter()
-            .all(|s| s.status != PreparationStepStatus::Ready)
-    );
-    assert_eq!(
-        writing
-            .steps
-            .iter()
-            .filter(|s| s.status == PreparationStepStatus::Writing)
-            .count(),
-        8
-    );
-    fs::remove_file(dir.path().join("pause")).unwrap();
-    let ready = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.status != PreparationStatus::Running
-    });
-    assert_eq!(ready.status, PreparationStatus::Ready, "{:?}", ready.error);
-    assert!(
-        ready
-            .steps
-            .iter()
-            .all(|s| s.status == PreparationStepStatus::Ready)
-    );
-}
-
-#[test]
-fn changed_and_removed_definitions_cancel_only_their_jobs_and_descendants() {
-    let (dir, storage, workspace) = fixture();
-    for flag in [
-        "stream-outline",
-        "outline-pause",
-        "pause",
-        "revise-outline",
-        "descendants",
-    ] {
-        fs::write(dir.path().join(flag), "").unwrap();
-    }
-    let manager = PreparationManager::default();
-    start(&manager, &storage, &workspace);
-    wait(&manager, &storage, &workspace.review.id, |_| {
-        calls(dir.path())
-            .iter()
-            .filter(|c| c["event"] == "descendant")
-            .count()
-            == 4
-    });
-    let original = calls(dir.path());
-    fs::remove_file(dir.path().join("outline-pause")).unwrap();
-    let revised = wait(&manager, &storage, &workspace.review.id, |s| {
-        s.steps.len() == 3
-            && s.active_batches.len() == 3
-            && calls(dir.path())
-                .iter()
-                .filter(|c| c["event"] == "writing" && c["id"] == "step:0:0")
-                .count()
-                == 2
+                .all(|s| s.status == PreparationStepStatus::Writing)
     });
     assert_eq!(
-        revised
+        writing
             .steps
             .iter()
             .map(|s| s.id.as_str())
             .collect::<Vec<_>>(),
         vec!["step:0:3", "step:0:2", "step:0:0"]
     );
-    for call in original.iter().filter(|c| c["event"] == "descendant") {
-        let alive = |pid: &Value| {
-            let status = std::process::Command::new("ps")
-                .args(["-o", "stat=", "-p", &pid.to_string()])
-                .output()
-                .unwrap();
-            let status = String::from_utf8_lossy(&status.stdout);
-            !status.trim().is_empty() && !status.trim().starts_with('Z')
-        };
-        if matches!(call["id"].as_str(), Some("step:0:0" | "step:0:1")) {
-            assert!(
-                !alive(&call["pid"]),
-                "obsolete coordinator survives: {call}"
-            );
-            assert!(!alive(&call["child"]), "obsolete helper survives: {call}");
-        } else {
-            assert!(alive(&call["pid"]), "unrelated writer was interrupted");
-        }
-    }
     fs::remove_file(dir.path().join("pause")).unwrap();
     let ready = wait(&manager, &storage, &workspace.review.id, |s| {
         s.status != PreparationStatus::Running
     });
     assert_eq!(ready.status, PreparationStatus::Ready, "{:?}", ready.error);
-    let checkpoint: Checkpoint = storage
-        .get(
-            KIND,
-            &format!("{}:{}", workspace.review.repository_id, workspace.review.id),
-        )
-        .unwrap();
-    assert!(!checkpoint.results.contains_key("step:0:1"));
-    assert_eq!(
-        calls(dir.path())
+    assert!(
+        !calls(dir.path())
             .iter()
-            .filter(|c| c["event"] == "writing" && c["id"] == "step:0:2")
-            .count(),
-        1
+            .any(|c| c["event"] == "writing" && c["id"] == "step:0:1")
     );
-    assert_eq!(
-        reviews::load(&storage, &workspace.review.id)
-            .unwrap()
-            .review
-            .topics[0]
-            .steps
-            .len(),
-        3
-    );
+    let review = reviews::load(&storage, &workspace.review.id)
+        .unwrap()
+        .review;
+    assert_eq!(review.topics.len(), 3);
+    assert!(review.topics.iter().all(|t| t.steps.len() == 1));
 }
 
 #[test]
-fn failed_final_analysis_cannot_publish_early_ready_documents() {
+fn failed_final_analysis_never_starts_writers() {
     let (dir, storage, workspace) = fixture();
-    for flag in ["stream-outline", "outline-pause", "outline-fails"] {
+    for flag in ["stream-outline", "outline-fails"] {
         fs::write(dir.path().join(flag), "").unwrap();
     }
     let manager = PreparationManager::default();
     start(&manager, &storage, &workspace);
-    wait(&manager, &storage, &workspace.review.id, |s| {
-        s.steps.len() == 4
-            && s.steps
-                .iter()
-                .all(|s| s.status == PreparationStepStatus::Ready)
-    });
-    assert!(
-        reviews::load(&storage, &workspace.review.id)
-            .unwrap()
-            .review
-            .topics
-            .is_empty()
-    );
-    fs::remove_file(dir.path().join("outline-pause")).unwrap();
     let failed = wait(&manager, &storage, &workspace.review.id, |s| {
         s.status != PreparationStatus::Running
     });
     assert_eq!(failed.status, PreparationStatus::Failed);
-    assert!(
-        failed
-            .steps
-            .iter()
-            .all(|s| s.status == PreparationStepStatus::Ready)
-    );
+    assert!(!calls(dir.path()).iter().any(|c| c["event"] == "writing"));
     assert!(
         reviews::load(&storage, &workspace.review.id)
             .unwrap()
@@ -953,42 +818,23 @@ fn failed_final_analysis_cannot_publish_early_ready_documents() {
 }
 
 #[test]
-fn two_live_analyses_share_eight_slots_with_their_early_writers() {
+fn two_finalized_plans_share_eight_writer_slots() {
     let (a, sa, wa) = fixture();
     let (b, sb, wb) = fixture();
     for dir in [&a, &b] {
         fs::write(dir.path().join("step-count"), "12").unwrap();
-        for flag in ["stream-outline", "outline-pause", "pause"] {
-            fs::write(dir.path().join(flag), "").unwrap();
-        }
+        fs::write(dir.path().join("pause"), "").unwrap();
     }
     let manager = PreparationManager::default();
     start(&manager, &sa, &wa);
     start(&manager, &sb, &wb);
     wait(&manager, &sa, &wa.review.id, |left| {
         let right = manager.get(&sb, &wb.review.id, None).unwrap().unwrap();
-        let batches: Vec<_> = left
-            .active_batches
-            .iter()
-            .chain(&right.active_batches)
-            .collect();
-        assert!(batches.len() <= 8);
-        batches.len() == 8
-            && batches
-                .iter()
-                .filter(|b| b.phase == PreparationPhase::Outline)
-                .count()
-                == 2
-            && left
-                .steps
-                .iter()
-                .chain(&right.steps)
-                .filter(|s| s.status == PreparationStepStatus::Writing)
-                .count()
-                == 6
+        let count = left.active_batches.len() + right.active_batches.len();
+        assert!(count <= 8);
+        count == 8
     });
     for dir in [&a, &b] {
-        fs::remove_file(dir.path().join("outline-pause")).unwrap();
         fs::remove_file(dir.path().join("pause")).unwrap();
     }
     for (storage, workspace) in [(&sa, &wa), (&sb, &wb)] {
@@ -997,4 +843,98 @@ fn two_live_analyses_share_eight_slots_with_their_early_writers() {
         });
         assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
     }
+}
+
+#[test]
+fn analysis_dossier_validates_sources_ranges_and_legacy_decoding() {
+    let (_dir, storage, workspace) = fixture();
+    let change = &workspace.snapshot.changes[0];
+    let source = reader::sources(&workspace.snapshot)
+        .into_iter()
+        .find(|s| s.source_id.ends_with(":after"))
+        .unwrap();
+    let mut outline = Outline {
+        working_context_assessments: vec![],
+        removed_steps: vec![],
+        topics: vec![OutlineTopic {
+            title: "Value".into(),
+            brief: "Value".into(),
+            steps: vec![OutlineStep {
+                draft_id: "value".into(),
+                previous_step_id: None,
+                reuse: false,
+                title: "Value".into(),
+                writing_brief: "Explain value".into(),
+                context_source_ids: vec![],
+                anchors: vec![CodeAnchor {
+                    snapshot_id: workspace.snapshot.id.clone(),
+                    change_id: change.id.clone(),
+                    passage_id: change.passages[0].id.clone(),
+                }],
+                analysis: Some(JourneyAnalysis {
+                    before: "Old value".into(),
+                    after: "New value".into(),
+                    relationships: "Caller receives value".into(),
+                    consequences: "Updated result".into(),
+                    uncertainties: vec![],
+                    evidence: vec![AnalysisEvidence {
+                        fact: "The value is updated".into(),
+                        source_id: source.source_id.clone(),
+                        start_line: 1,
+                        end_line: 1,
+                    }],
+                }),
+            }],
+        }],
+    };
+    validate_analysis(&outline, &workspace.snapshot, &storage).unwrap();
+    let input = document_input(
+        &outline.topics[0],
+        &outline.topics[0].steps[0],
+        &reader::sources(&workspace.snapshot),
+    );
+    assert_eq!(
+        input["step"]["analysis"]["evidence"][0]["fact"],
+        "The value is updated"
+    );
+    outline.topics[0].steps[0]
+        .analysis
+        .as_mut()
+        .unwrap()
+        .evidence[0]
+        .end_line = 9999;
+    assert!(validate_analysis(&outline, &workspace.snapshot, &storage).is_err());
+    outline.topics[0].steps[0]
+        .analysis
+        .as_mut()
+        .unwrap()
+        .evidence[0]
+        .source_id = "missing".into();
+    assert!(validate_analysis(&outline, &workspace.snapshot, &storage).is_err());
+    outline.topics[0].steps[0]
+        .analysis
+        .as_mut()
+        .unwrap()
+        .evidence
+        .clear();
+    assert!(
+        validate_analysis(&outline, &workspace.snapshot, &storage).is_err(),
+        "Text changes still need exact evidence"
+    );
+    let mut metadata = workspace.snapshot.clone();
+    for passage in &mut metadata.changes[0].passages {
+        passage.old_lines = 0;
+        passage.new_lines = 0;
+    }
+    validate_outline(&outline, &metadata).unwrap();
+    validate_analysis(&outline, &metadata, &storage).unwrap();
+    metadata.changes[0].binary = true;
+    validate_analysis(&outline, &metadata, &storage).unwrap();
+    let mut legacy = serde_json::to_value(&outline).unwrap();
+    legacy["topics"][0]["steps"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("analysis");
+    let legacy: Outline = serde_json::from_value(legacy).unwrap();
+    assert!(validate_analysis(&legacy, &workspace.snapshot, &storage).is_err());
 }

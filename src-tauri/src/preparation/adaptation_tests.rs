@@ -43,21 +43,23 @@ fn setup() -> (tempfile::TempDir, Storage, Workspace) {
     let workspace = reviews::refresh(&storage, &old.review.id, old.review.revision).unwrap();
     let path = dir.path().join("claude");
     let script = fs::read_to_string(&path).unwrap().replace("batch=value;results=[]", "batch=value;results=[]\nwith (base/'batch-calls').open('a') as output: output.write('batch\\n')");
-    let start = script.find("     result={'topics'").unwrap();
+    let start = script.find("     result={'steps'").unwrap();
     let end = script[start..].find("\n else:").unwrap() + start;
     let replacement = r#"     manifest=json.loads(pathlib.Path(context['reviewManifest']).read_text())
      changes=[json.loads(pathlib.Path(c['metadata']).read_text()) for c in manifest['changes']]
      previous=value.get('previousReview')
      steps=[];removed=[]
      if previous:
-      for topic in previous['topics']:
-       for step in topic['steps']:
+       for step in previous['steps']:
         match=next((c for c in changes if c['change']['path']==step['title']),None)
         if match:steps.append(dict(draftId=step['id'],title=step['title'],writingBrief='Explain the changes to '+step['title'],contextSourceIds=[],anchors=match['anchors'],previousStepId=step['id'],reuse=True))
         else:removed.append(step['id'])
      else:steps=[dict(draftId=c['change']['id'],title=c['change']['path'],writingBrief='Explain the changes to '+c['change']['path'],contextSourceIds=[],anchors=c['anchors']) for c in changes]
-     if (base/'empty-tour').exists():removed=[s['id'] for t in previous['topics'] for s in t['steps']];steps=[]
-     result={'removedSteps':removed,'topics':[{'title':'Features','brief':'How these changes work together.','steps':steps}] if steps else []}"#;
+     if (base/'empty-tour').exists():removed=[s['id'] for s in previous['steps']];steps=[]
+     if (base/'merge-tour').exists() and previous:
+      removed=[s['id'] for s in previous['steps']]
+      steps=[dict(draftId='merged',title='One coherent journey',writingBrief='Explain these related changes together without repetition.',contextSourceIds=[],anchors=[a for c in changes for a in c['anchors']],previousStepId=None,reuse=False)]
+     result={'removedSteps':removed,'steps':steps}"#;
     let script = format!("{}{}{}", &script[..start], replacement, &script[end..]);
     // Feature 0 has an indirect dependency on feature 1, beyond its own anchors.
     let script=script.replace("     if (base/'invalid').exists():",r#"     result['contextSources']=[s['sourceId'] for s in json.loads(pathlib.Path(context['reviewManifest']).read_text())['sources'] if s['path']=='feature1.ts'] if value['step']['title']=='feature0.ts' else []
@@ -209,18 +211,20 @@ fn incremental_ten_steps_reuses_verified_documents_and_only_carries_unchanged_de
             .all(|d| d.carried_from.as_ref().unwrap().review_id == old.review.id)
     );
     assert_eq!(
-        new.review.topics[0]
-            .steps
+        new.review
+            .topics
             .iter()
+            .flat_map(|t| &t.steps)
             .map(|s| &s.id)
             .collect::<Vec<_>>(),
-        old.review.topics[0]
-            .steps
+        old.review
+            .topics
             .iter()
+            .flat_map(|t| &t.steps)
             .map(|s| &s.id)
             .collect::<Vec<_>>()
     );
-    for step in &new.review.topics[0].steps {
+    for step in new.review.topics.iter().flat_map(|t| &t.steps) {
         reader::validate_documents_with_glossary(
             &storage,
             &new.snapshot,
@@ -627,10 +631,10 @@ fn rebinding_never_guesses_after_path_layer_mode_range_or_ambiguous_changes() {
     let manager = PreparationManager::default();
     prepare(&manager, &storage, &workspace.review.id);
     let mut old = reviews::load(&storage, &workspace.review.id).unwrap();
-    let initial = &old.review.topics[0].steps[2];
+    let initial = &old.review.topics[2].steps[0];
     let old_change = initial.anchors[0].change_id.clone();
     let previous_source = format!("change:{old_change}:after");
-    old.review.topics[0].steps[2]
+    old.review.topics[2].steps[0]
         .documents
         .technical
         .references
@@ -642,13 +646,13 @@ fn rebinding_never_guesses_after_path_layer_mode_range_or_ambiguous_changes() {
             start_line: 1,
             end_line: 1,
         });
-    old.review.topics[0].steps[2]
+    old.review.topics[2].steps[0]
         .documents
         .technical
         .body
         .push_str(" [Value](reviewbox:ref/ref)");
-    let previous = &old.review.topics[0];
-    let old_step = &previous.steps[2];
+    let previous = &old.review.topics[2];
+    let old_step = &previous.steps[0];
     let mut next = old.snapshot.clone();
     next.id = id();
     for c in &mut next.changes {
@@ -662,6 +666,7 @@ fn rebinding_never_guesses_after_path_layer_mode_range_or_ambiguous_changes() {
         previous_step_id: Some(old_step.id.clone()),
         reuse: true,
         title: old_step.title.clone(),
+        analysis: None,
         writing_brief: "Retain the explanation of this behavior and its effects.".into(),
         context_source_ids: vec![],
         anchors: old_step
@@ -702,6 +707,25 @@ fn rebinding_never_guesses_after_path_layer_mode_range_or_ambiguous_changes() {
         .unwrap();
     with_context.context_source_ids = vec![new_context.source_id];
     assert!(adaptation::reuse_documents(&old, &next, &topic, &with_context, signature).is_none());
+    let mut with_analysis = step.clone();
+    with_analysis.analysis = Some(JourneyAnalysis {
+        before: "Before".into(),
+        after: "After".into(),
+        relationships: "Related".into(),
+        consequences: "Effect".into(),
+        uncertainties: vec![],
+        evidence: vec![AnalysisEvidence {
+            fact: "New external evidence".into(),
+            source_id: with_context.context_source_ids[0].clone(),
+            start_line: 1,
+            end_line: 1,
+        }],
+    });
+    assert!(
+        adaptation::reuse_documents(&old, &next, &topic, &with_analysis, signature).is_none(),
+        "An analysis dossier cannot silently add unverified external dependencies"
+    );
+
     assert_ne!(reused.technical.references[0].source_id, previous_source);
     reader::validate_documents(&storage, &next, &reused).unwrap();
     assert_eq!(
@@ -933,4 +957,50 @@ fn orphan_candidate_recovers_and_committed_result_is_idempotent_after_lost_final
             .revision,
         new.review.revision
     );
+}
+
+#[test]
+fn merged_journey_rewrites_documents_without_carrying_human_decisions() {
+    let (dir, storage, workspace) = setup();
+    let manager = PreparationManager::default();
+    prepare(&manager, &storage, &workspace.review.id);
+    let old = validate(
+        &storage,
+        reviews::load(&storage, &workspace.review.id).unwrap(),
+        9,
+    );
+    fs::write(
+        dir.path().join("repo/feature1.ts"),
+        "export const value1 = 2;\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("merge-tour"), "").unwrap();
+    manager
+        .adapt(
+            storage.clone(),
+            resources(),
+            &old.review.id,
+            old.review.revision,
+            "claude".into(),
+        )
+        .unwrap();
+    let state = wait(&manager, &storage, &old.review.id, |s| {
+        s.status != PreparationStatus::Running
+    });
+    assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
+    let next = reviews::load(&storage, &old.review.id).unwrap();
+    assert_eq!(next.review.topics.len(), 1);
+    assert_eq!(next.review.topics[0].steps.len(), 1);
+    assert!(next.review.decisions.is_empty());
+    assert!(
+        !old.review
+            .topics
+            .iter()
+            .flat_map(|t| &t.steps)
+            .any(|s| s.id == next.review.topics[0].steps[0].id)
+    );
+    assert_eq!(state.adaptation.unwrap().removed_steps, 10);
+    let exported = reader::summary(&next, ReadingLevel::Explained);
+    assert_eq!(exported.matches("One coherent journey").count(), 1);
+    assert!(!exported.contains("### "));
 }

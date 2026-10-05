@@ -29,6 +29,41 @@ pub(super) async fn run_policy(
     stream: &mut Stream,
     read_only: bool,
 ) -> AppResult<()> {
+    run_configured(root, prompt, config, cancel, stream, read_only, false).await
+}
+pub(super) async fn run_terminal(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+) -> AppResult<()> {
+    run_configured(root, prompt, config, cancel, stream, false, true).await
+}
+pub(super) async fn run_preparation(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+    allow_delegation: bool,
+) -> AppResult<()> {
+    // Writers expose only the native terminal, excluding Agent/Task and connectors.
+    if allow_delegation {
+        run(root, prompt, config, cancel, stream).await
+    } else {
+        run_terminal(root, prompt, config, cancel, stream).await
+    }
+}
+async fn run_configured(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+    read_only: bool,
+    terminal_only: bool,
+) -> AppResult<()> {
     let effort = models::effort(config, cancel.clone()).await?;
     let mut command = providers::command(&providers::resolve_executable(&config.executable));
     // The harness owns discovery, context compaction and its configured tools.
@@ -56,6 +91,17 @@ pub(super) async fn run_policy(
             "--strict-mcp-config",
             "--tools",
             "Read,Glob,Grep,WebSearch,WebFetch",
+        ]);
+    }
+    if terminal_only {
+        command.args([
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "{\"mcpServers\":{}}",
+            "--tools",
+            "Bash",
+            "--disable-slash-commands",
         ]);
     }
     if let Some(model) = config.model.as_ref().filter(|m| !m.is_empty()) {

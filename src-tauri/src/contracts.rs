@@ -31,6 +31,8 @@ mod diagnostics;
 pub use diagnostics::*;
 mod project_skills;
 pub use project_skills::*;
+mod working_context;
+pub use working_context::*;
 mod provider_setup;
 mod publication;
 pub use creation::*;
@@ -520,6 +522,10 @@ pub fn typescript() -> String {
     let declarations = [
         ProjectSkillPreferences::decl(&cfg),
         ProjectSkillImport::decl(&cfg),
+        WorkingContextStatus::decl(&cfg),
+        WorkingContextAssessment::decl(&cfg),
+        WorkingContextFile::decl(&cfg),
+        ReviewWorkingContext::decl(&cfg),
         ReviewCommentRange::decl(&cfg),
         ReviewCommentAnchor::decl(&cfg),
         ReviewCommentStatus::decl(&cfg),

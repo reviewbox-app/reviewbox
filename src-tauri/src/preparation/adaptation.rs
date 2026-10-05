@@ -174,6 +174,7 @@ pub(super) fn recover_checkpoint(
         return Ok(previous);
     }
     let checkpoint = Checkpoint {
+        working_context: None,
         revision: previous.as_ref().map_or(0, |old| old.revision + 1),
         review_revision: update.source_revision,
         repository_id: review.repository_id.clone(),
@@ -360,16 +361,35 @@ pub(super) fn reuse_documents(
     }
     let mapping = source_map(&source.snapshot, target);
     let mut docs = old_step.documents.clone();
-    // Newly requested context needs a writer unless it was already a verified
-    // dependency of the previous explanation. Never enlarge reused evidence silently.
-    if step.context_source_ids.iter().any(|id| {
-        !docs.dependencies.as_ref().is_some_and(|dependencies| {
+    // Explicit additional context still needs a previously verified dependency.
+    // Evidence about an unchanged anchored change is already covered by the
+    // anchor mapping, including legacy documents without a dependency index.
+    let known_dependency = |id: &String| {
+        docs.dependencies.as_ref().is_some_and(|dependencies| {
             dependencies
                 .sources
                 .iter()
                 .any(|source| mapping.get(&source.source_id) == Some(id))
         })
-    }) {
+    };
+    if step
+        .context_source_ids
+        .iter()
+        .any(|id| !known_dependency(id))
+        || step
+            .analysis
+            .iter()
+            .flat_map(|analysis| &analysis.evidence)
+            .any(|evidence| {
+                !known_dependency(&evidence.source_id)
+                    && !old_step.anchors.iter().any(|anchor| {
+                        ["before", "after"].iter().any(|side| {
+                            mapping.get(&format!("change:{}:{side}", anchor.change_id))
+                                == Some(&evidence.source_id)
+                        })
+                    })
+            })
+    {
         return None;
     }
     if let Some(dependencies) = &docs.dependencies {
@@ -416,7 +436,7 @@ pub(super) fn reuse_documents(
     attach_dependencies(
         &mut docs,
         &step.anchors,
-        &step.context_source_ids,
+        &step.context_sources(),
         target,
         signature,
     )
@@ -599,6 +619,13 @@ pub(super) fn finish(
         && done.review.preparation_id.as_deref() == Some(&state.id)
         && done.review.update_origin.is_none()
     {
+        crate::working_context::transfer(
+            storage,
+            &done.review.repository_id,
+            &state.review_id,
+            &update.destination_review_id,
+            &done.snapshot.id,
+        )?;
         return Ok(done);
     }
     if source.review.revision != update.source_revision || source.snapshot.id != update.snapshot_id
@@ -609,6 +636,13 @@ pub(super) fn finish(
         ));
     }
     let mut next = reviews::load(storage, &update.candidate_review_id)?;
+    crate::working_context::transfer(
+        storage,
+        &next.review.repository_id,
+        &state.review_id,
+        &update.destination_review_id,
+        &next.snapshot.id,
+    )?;
     next.review.id = update.destination_review_id.clone();
     next.review.revision = if next.review.id == source.review.id {
         source.review.revision + 1

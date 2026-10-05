@@ -19,6 +19,7 @@ import { PreparationPhases } from "./PreparationPhases"
 import { PreparationWorkers } from "./PreparationWorkers"
 import { PreparationProgress } from "./PreparationProgress"
 import { ReviewPreparationError } from "./ReviewPreparationError"
+import { WorkingContextStatus } from "./WorkingContextStatus"
 
 function duration(from: number, to: number) {
   const seconds = Math.max(0, Math.round((to - from) / 1000))
@@ -232,6 +233,11 @@ export function PreparedReview({
         </p>
       )}
       <ReviewPreparationError workspace={workspace} preparation={preparation} />
+      <WorkingContextStatus
+        repositoryId={workspace.review.repositoryId}
+        reviewId={workspace.review.id}
+        revision={workspace.review.revision}
+      />
       {reviewStatus ? (
         <div
           className="flex items-center justify-end gap-2 pt-2"
