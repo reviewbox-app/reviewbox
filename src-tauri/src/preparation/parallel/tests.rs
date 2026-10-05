@@ -258,8 +258,13 @@ fn cancellation_keeps_results_and_resume_does_not_repeat_completed_batches() {
 }
 #[test]
 fn two_preparations_share_category_and_global_limits() {
-    let (_a, first, wa) = fixture();
-    let (_b, second, wb) = fixture();
+    let (a_dir, first, wa) = fixture();
+    let (b_dir, second, wb) = fixture();
+    // Hold document responses until all global slots are observed. A fixed
+    // subprocess sleep cannot guarantee overlap on a loaded CI runner.
+    fs::write(a_dir.path().join("pause"), "").unwrap();
+    fs::write(b_dir.path().join("pause"), "").unwrap();
+    let mut released = false;
     let manager = PreparationManager::default();
     start(&manager, &first, &wa);
     start(&manager, &second, &wb);
@@ -279,6 +284,11 @@ fn two_preparations_share_category_and_global_limits() {
             .sum();
         assert!(count <= MAX_COORDINATORS);
         max = max.max(count);
+        if count == MAX_COORDINATORS && !released {
+            fs::remove_file(a_dir.path().join("pause")).unwrap();
+            fs::remove_file(b_dir.path().join("pause")).unwrap();
+            released = true;
+        }
         if a.status != PreparationStatus::Running && b.status != PreparationStatus::Running {
             assert_eq!(a.status, PreparationStatus::Ready, "{:?}", a.error);
             assert_eq!(b.status, PreparationStatus::Ready, "{:?}", b.error);
@@ -287,7 +297,7 @@ fn two_preparations_share_category_and_global_limits() {
         assert!(start.elapsed() < Duration::from_secs(20));
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(max, 8);
+    assert_eq!(max, MAX_COORDINATORS);
 }
 
 #[test]
