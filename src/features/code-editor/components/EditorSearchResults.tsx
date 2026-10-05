@@ -57,7 +57,7 @@ export function EditorSearchResults({
         </Button>
       </div>
       <p className="px-2 pb-2 text-xs text-muted-foreground">
-        Searches saved files · ignored files excluded
+        Includes unsaved changes · ignored files excluded
       </p>
       {result?.truncated && (
         <p role="status" className="px-2 pb-2 text-xs text-muted-foreground">

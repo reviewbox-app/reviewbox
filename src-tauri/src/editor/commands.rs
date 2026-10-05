@@ -11,38 +11,102 @@ pub struct EditorState {
     pub dirty: Arc<AtomicBool>,
     pub allow_exit: Arc<AtomicBool>,
     pub(crate) searches: super::search::SearchState,
+    inventories: Arc<Mutex<super::inventory::Inventories>>,
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn editor_search_content(
     storage: State<'_, Storage>,
     state: State<'_, EditorState>,
     repository_id: String,
+    owner: String,
     query: String,
     request_id: String,
+    buffers: Vec<EditorSearchBuffer>,
+    paths: Option<Vec<String>>,
+    on_batch: tauri::ipc::Channel<EditorSearchBatch>,
 ) -> AppResult<EditorSearchResult> {
     state
         .searches
-        .search(storage.inner().clone(), repository_id, query, request_id)
+        .search(
+            storage.inner().clone(),
+            repository_id,
+            owner,
+            query,
+            request_id,
+            buffers,
+            paths,
+            Arc::new(move |batch| on_batch.send(batch).is_ok()),
+        )
         .await
 }
-
 #[tauri::command]
-pub fn editor_cancel_search(state: State<'_, EditorState>, request_id: String) {
-    state.searches.cancel(&request_id);
+pub fn editor_cancel_search(
+    state: State<'_, EditorState>,
+    owner: String,
+    repository_id: String,
+    request_id: String,
+) {
+    state.searches.cancel(owner, repository_id, request_id);
 }
 
 #[tauri::command]
-pub async fn editor_inventory(
+pub async fn editor_watch(
     storage: State<'_, Storage>,
     repository_id: String,
-    show_ignored: bool,
-) -> AppResult<Vec<EditorEntry>> {
+    owner: String,
+    release: bool,
+) -> AppResult<EditorWatchStatus> {
     let storage = storage.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let root = crate::repositories::root(&storage, &repository_id)?;
-        storage.repository_cache.entry(&storage, &root)?;
-        inventory(&root, show_ignored)
+        if release {
+            Ok(storage.repository_cache.release_lease(&root, &owner))
+        } else {
+            storage.repository_cache.lease(&storage, &root, &owner)
+        }
+    })
+    .await
+    .map_err(|e| AppError::new("watch_task", e.to_string()))?
+}
+#[tauri::command]
+pub async fn editor_watch_status(
+    storage: State<'_, Storage>,
+    repository_id: String,
+) -> AppResult<EditorWatchStatus> {
+    let storage = storage.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = crate::repositories::root(&storage, &repository_id)?;
+        storage.repository_cache.watch_status(&storage, &root)
+    })
+    .await
+    .map_err(|e| AppError::new("watch_task", e.to_string()))?
+}
+#[tauri::command]
+pub async fn editor_inventory(
+    storage: State<'_, Storage>,
+    state: State<'_, EditorState>,
+    repository_id: String,
+    show_ignored: bool,
+    expanded_paths: Option<Vec<String>>,
+    change: Option<RepositoryReadChange>,
+) -> AppResult<Vec<EditorEntry>> {
+    let storage = storage.inner().clone();
+    let inventories = state.inventories.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = crate::repositories::root(&storage, &repository_id)?;
+        let watch = storage.repository_cache.watch_status(&storage, &root)?;
+        inventories
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot(
+                &root,
+                show_ignored,
+                &expanded_paths.unwrap_or_default(),
+                change.as_ref(),
+                Some(&watch),
+            )
     })
     .await
     .map_err(|e| AppError::new("task", e.to_string()))?

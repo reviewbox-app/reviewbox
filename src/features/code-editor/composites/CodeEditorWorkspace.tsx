@@ -51,6 +51,7 @@ import {
   getEditor,
   initializeEditor,
   openEditorFile,
+  refreshEditor,
   saveAllEditors,
   saveBuffer,
   updateBuffer,
@@ -59,6 +60,7 @@ import {
 } from "../stores/editor.store"
 import { EditorFileView } from "./EditorFileView"
 import { EditorFileDialog, type FileAction } from "./EditorFileDialog"
+import { EditorWatchNotice } from "./EditorWatchNotice"
 import { LanguageEditPreview } from "@/features/language-servers/composites/LanguageEditPreview"
 
 export function CodeEditorWorkspace({
@@ -164,6 +166,9 @@ export function CodeEditorWorkspace({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <LanguageEditPreview />
+      {session.watchHealthy === false && (
+        <EditorWatchNotice repositoryId={id} />
+      )}
       {session.error && (
         <div
           role="alert"
@@ -277,14 +282,30 @@ export function CodeEditorWorkspace({
                 <FileTree
                   alwaysExpanded={searching}
                   toggledFolders={session.toggledFolders}
-                  onToggleFolder={(path) =>
+                  onToggleFolder={(path) => {
+                    const opening = !session.toggledFolders.has(path)
                     updateEditor(id, (s) => {
                       const toggledFolders = new Set(s.toggledFolders)
                       if (toggledFolders.has(path)) toggledFolders.delete(path)
                       else toggledFolders.add(path)
                       return { ...s, toggledFolders }
                     })
-                  }
+                    if (
+                      opening &&
+                      session.entries.some(
+                        (entry) => entry.path === path && entry.lazy
+                      )
+                    )
+                      report(
+                        refreshEditor(id, {
+                          repositoryId: id,
+                          paths: [],
+                          tree: true,
+                          git: false,
+                          full: false,
+                        })
+                      )
+                  }}
                   paths={searching ? fileResults.paths : treePaths}
                   selected={session.active}
                   marks={{}}

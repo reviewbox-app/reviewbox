@@ -1,5 +1,6 @@
 //! Explicit human source editing. Captures, shared content commands and Git stay separate.
 pub(crate) mod commands;
+mod inventory;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 mod search;
@@ -125,6 +126,7 @@ pub(crate) fn read_file(target: &Path, display: String, external: bool) -> AppRe
     })
 }
 
+#[cfg(test)]
 pub(crate) fn inventory(root: &Path, ignored: bool) -> AppResult<Vec<EditorEntry>> {
     let mut result = Vec::new();
     let mut walk = ignore::WalkBuilder::new(root);
@@ -154,6 +156,9 @@ pub(crate) fn inventory(root: &Path, ignored: bool) -> AppResult<Vec<EditorEntry
             path: relative,
             directory,
             revision: String::new(),
+            ignored: None,
+            excluded: None,
+            lazy: None,
         });
     }
     result.sort_by(|a, b| a.path.cmp(&b.path));
@@ -195,11 +200,12 @@ pub(crate) fn mutate(root: &Path, mutation: EditorMutation) -> AppResult<()> {
                 ));
             }
             let original = fs::read(&target)?;
-            let mut temporary = tempfile::NamedTempFile::new_in(
-                target
-                    .parent()
-                    .ok_or_else(|| AppError::new("invalid_path", "Missing parent folder."))?,
-            )?;
+            let mut temporary =
+                tempfile::Builder::new()
+                    .prefix(".reviewbox-save-")
+                    .tempfile_in(target.parent().ok_or_else(|| {
+                        AppError::new("invalid_path", "Missing parent folder.")
+                    })?)?;
             if original.starts_with(&[0xef, 0xbb, 0xbf]) {
                 temporary.write_all(&[0xef, 0xbb, 0xbf])?;
             }

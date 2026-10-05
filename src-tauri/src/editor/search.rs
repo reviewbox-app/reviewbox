@@ -1,8 +1,11 @@
-//! Bounded, read-only content search. Only the latest request may scan a checkout.
+//! Bounded native search, streamed per caller and checkout; buffers replace disk text.
 use crate::{contracts::*, storage::Storage};
-use regex::RegexBuilder;
+use grep_matcher::Matcher;
+use grep_regex::RegexMatcherBuilder;
+use grep_searcher::{SearcherBuilder, sinks::UTF8};
 use std::{
     borrow::Cow,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs::File,
     io::Read,
     path::Path,
@@ -12,117 +15,155 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 const MAX_QUERY_BYTES: usize = 512;
 const FILE_BYTES: u64 = 2 * 1024 * 1024;
 const TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const MATCHES: usize = 1_000;
 const FILE_MATCHES: usize = 100;
-const SCAN_TIME: Duration = Duration::from_secs(3);
-
+const SCAN_ENTRIES: usize = 100_000;
+type Owner = (String, String);
+type Publish = Arc<dyn Fn(EditorSearchBatch) -> bool + Send + Sync>;
 struct Request {
     id: String,
     cancelled: Arc<AtomicBool>,
 }
-
+#[derive(Default)]
+struct Requests {
+    current: BTreeMap<Owner, Request>,
+    // Cancellation can cross IPC before a queued invocation registers.
+    cancelled: VecDeque<(Owner, String)>,
+}
 #[derive(Clone)]
 pub(crate) struct SearchState {
-    current: Arc<Mutex<Option<Request>>>,
-    worker: Arc<Semaphore>,
+    requests: Arc<Mutex<Requests>>,
+    workers: Arc<Semaphore>,
+    changed: Arc<Notify>,
 }
-
 impl Default for SearchState {
     fn default() -> Self {
         Self {
-            current: Arc::default(),
-            worker: Arc::new(Semaphore::new(1)),
+            requests: Arc::default(),
+            workers: Arc::new(Semaphore::new(2)),
+            changed: Arc::new(Notify::new()),
         }
     }
 }
-
 impl SearchState {
-    fn begin(&self, id: String) -> Arc<AtomicBool> {
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let previous = self
-            .current
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .replace(Request {
+    fn begin(&self, owner: Owner, id: String) -> Arc<AtomicBool> {
+        let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        let cancelled = Arc::new(AtomicBool::new(
+            requests.cancelled.contains(&(owner.clone(), id.clone())),
+        ));
+        if let Some(old) = requests.current.insert(
+            owner,
+            Request {
                 id,
                 cancelled: cancelled.clone(),
-            });
-        if let Some(previous) = previous {
-            previous.cancelled.store(true, Ordering::Relaxed);
+            },
+        ) {
+            old.cancelled.store(true, Ordering::Release);
+            self.changed.notify_waiters();
         }
         cancelled
     }
-
-    fn finish(&self, cancelled: &Arc<AtomicBool>) {
-        let mut current = self.current.lock().unwrap_or_else(|e| e.into_inner());
-        if current
-            .as_ref()
-            .is_some_and(|request| Arc::ptr_eq(&request.cancelled, cancelled))
+    fn finish(&self, owner: &Owner, flag: &Arc<AtomicBool>) {
+        let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        if requests
+            .current
+            .get(owner)
+            .is_some_and(|r| Arc::ptr_eq(&r.cancelled, flag))
         {
-            *current = None;
+            requests.current.remove(owner);
         }
     }
-
-    pub(crate) fn cancel(&self, id: &str) {
-        let current = self.current.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(request) = current.as_ref().filter(|request| request.id == id) {
-            request.cancelled.store(true, Ordering::Relaxed);
+    pub(crate) fn cancel(&self, owner: String, repository: String, id: String) {
+        let owner = (owner, repository);
+        let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(request) = requests.current.get(&owner).filter(|r| r.id == id) {
+            request.cancelled.store(true, Ordering::Release);
         }
+        if requests.cancelled.len() >= 256 {
+            requests.cancelled.pop_front();
+        }
+        requests.cancelled.push_back((owner, id));
+        self.changed.notify_waiters();
     }
-
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn search(
         &self,
         storage: Storage,
         repository: String,
+        owner: String,
         query: String,
         request_id: String,
+        buffers: Vec<EditorSearchBuffer>,
+        paths: Option<Vec<String>>,
+        publish: Publish,
     ) -> AppResult<EditorSearchResult> {
-        if request_id.is_empty() || request_id.len() > 128 {
+        if owner.is_empty() || owner.len() > 128 || request_id.is_empty() || request_id.len() > 128
+        {
             return Err(AppError::new(
                 "search_request",
                 "Invalid search request identity.",
             ));
         }
         validate_query(&query)?;
-        let cancelled = self.begin(request_id.clone());
-        // Cancelling spawn_blocking cannot stop running I/O. The token is checked
-        // during traversal, reads and matching; a single permit bounds CPU and I/O.
-        let permit = self.worker.clone().acquire_owned().await.map_err(|_| {
-            AppError::new("search_closed", "Content search is no longer available.")
-        })?;
-        let signal = cancelled.clone();
-        let result = if signal.load(Ordering::Relaxed) || query.is_empty() {
-            Ok(EditorSearchResult {
-                request_id,
-                cancelled: signal.load(Ordering::Relaxed),
-                ..Default::default()
-            })
-        } else {
-            tauri::async_runtime::spawn_blocking(move || {
-                let _permit = permit;
-                if signal.load(Ordering::Relaxed) {
-                    return Ok(EditorSearchResult {
-                        request_id,
-                        cancelled: true,
-                        ..Default::default()
-                    });
-                }
-                let root = crate::repositories::root(&storage, &repository)?;
-                scan(&root, &query, request_id, &signal, Limits::default())
-            })
-            .await
-            .map_err(|e| AppError::new("search_task", e.to_string()))
-            .and_then(|result| result)
+        if buffers.len() > 256
+            || buffers.iter().map(|b| b.text.len()).sum::<usize>() > TOTAL_BYTES as usize
+        {
+            return Err(AppError::new(
+                "search_buffers",
+                "Open buffers exceed the search memory limit.",
+            ));
+        }
+        if paths.as_ref().is_some_and(|p| p.len() > 512) {
+            return Err(AppError::new(
+                "search_paths",
+                "Too many changed search paths.",
+            ));
+        }
+        let key = (owner, repository.clone());
+        let cancelled = self.begin(key.clone(), request_id.clone());
+        let permit = loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if cancelled.load(Ordering::Acquire) {
+                self.finish(&key, &cancelled);
+                return Ok(EditorSearchResult {
+                    request_id,
+                    cancelled: true,
+                    ..Default::default()
+                });
+            }
+            tokio::select! {
+                permit = self.workers.clone().acquire_owned() => break permit.map_err(|_| AppError::new("search_closed", "Search is no longer available."))?,
+                _ = changed => continue,
+            }
         };
-        self.finish(&cancelled);
+        let signal = cancelled.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit;
+            let root = crate::repositories::root(&storage, &repository)?;
+            scan(
+                &root,
+                &query,
+                request_id,
+                &signal,
+                Limits::default(),
+                &buffers,
+                paths.as_deref(),
+                &mut |batch| publish(batch),
+            )
+        })
+        .await
+        .map_err(|e| AppError::new("search_task", e.to_string()))
+        .and_then(|r| r);
+        self.finish(&key, &cancelled);
         result.map(|mut result| {
-            // Cancellation can arrive between the final scan check and completion.
-            if cancelled.load(Ordering::Relaxed) {
+            if cancelled.load(Ordering::Acquire) {
                 result.cancelled = true;
                 result.matches.clear();
             }
@@ -130,7 +171,6 @@ impl SearchState {
         })
     }
 }
-
 fn validate_query(query: &str) -> AppResult<()> {
     if query.len() > MAX_QUERY_BYTES || query.contains(['\0', '\r', '\n']) {
         return Err(AppError::new(
@@ -140,16 +180,14 @@ fn validate_query(query: &str) -> AppResult<()> {
     }
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 struct Limits {
     file_bytes: u64,
     total_bytes: u64,
     matches: usize,
     file_matches: usize,
-    time: Duration,
+    entries: usize,
 }
-
 impl Default for Limits {
     fn default() -> Self {
         Self {
@@ -157,106 +195,246 @@ impl Default for Limits {
             total_bytes: TOTAL_BYTES,
             matches: MATCHES,
             file_matches: FILE_MATCHES,
-            time: SCAN_TIME,
+            entries: SCAN_ENTRIES,
         }
     }
 }
-
+struct Stream<'a> {
+    request: String,
+    sequence: u32,
+    from: usize,
+    last: Instant,
+    publish: &'a mut dyn FnMut(EditorSearchBatch) -> bool,
+}
+impl Stream<'_> {
+    fn flush(&mut self, result: &mut EditorSearchResult, force: bool) -> bool {
+        let count = result.matches.len() - self.from;
+        if count == 0 || (!force && count < 64 && self.last.elapsed() < Duration::from_millis(50)) {
+            return true;
+        }
+        self.sequence += 1;
+        let live = (self.publish)(EditorSearchBatch {
+            request_id: self.request.clone(),
+            sequence: self.sequence,
+            matches: result.matches[self.from..].to_vec(),
+        });
+        self.from = result.matches.len();
+        self.last = Instant::now();
+        if !live {
+            result.cancelled = true;
+        }
+        live
+    }
+}
+#[allow(clippy::too_many_arguments)]
 fn scan(
     root: &Path,
     query: &str,
     request_id: String,
     cancelled: &AtomicBool,
     limits: Limits,
+    buffers: &[EditorSearchBuffer],
+    only_paths: Option<&[String]>,
+    publish: &mut dyn FnMut(EditorSearchBatch) -> bool,
 ) -> AppResult<EditorSearchResult> {
     validate_query(query)?;
     let mut result = EditorSearchResult {
-        request_id,
+        request_id: request_id.clone(),
         ..Default::default()
     };
     if query.is_empty() {
         return Ok(result);
     }
-    let pattern = RegexBuilder::new(&regex::escape(query))
+    if cancelled.load(Ordering::Acquire) {
+        result.cancelled = true;
+        return Ok(result);
+    }
+    let pattern = RegexMatcherBuilder::new()
         .case_insensitive(true)
-        .build()
+        .build(&regex::escape(query))
         .map_err(|e| AppError::new("search_query", e.to_string()))?;
-    let start = Instant::now();
-    let mut total_bytes = 0;
-    let mut bytes = Vec::new();
+    let mut searcher = SearcherBuilder::new().line_number(true).build();
+    let mut stream = Stream {
+        request: request_id,
+        sequence: 0,
+        from: 0,
+        last: Instant::now(),
+        publish,
+    };
+    let mut overlays = BTreeMap::new();
+    for buffer in buffers {
+        super::path(root, &buffer.path)?;
+        if overlays.insert(buffer.path.as_str(), buffer).is_some() {
+            return Err(AppError::new(
+                "search_buffers",
+                "A buffer path occurs more than once.",
+            ));
+        }
+    }
+    let mut paths = BTreeSet::new();
+    let mut exclusions = super::inventory::Exclusions::new(root);
+    let selected = only_paths
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|p| super::path(root, p))
+                .collect::<AppResult<Vec<_>>>()
+        })
+        .transpose()?;
+    // Walk from the checkout even for a subtree refresh: an explicitly passed ignored
+    // directory must never bypass its parent's ignore rules.
     let mut walk = ignore::WalkBuilder::new(root);
     walk.hidden(false)
+        .parents(false)
         .follow_links(false)
-        .filter_entry(|entry| {
-            entry.depth() == 0 || !matches!(entry.file_name().to_str(), Some(".git" | ".reviewbox"))
+        .filter_entry(move |entry| {
+            entry.depth() == 0
+                || (!matches!(entry.file_name().to_str(), Some(".git" | ".reviewbox"))
+                    && !entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".reviewbox-save-")
+                    && selected.as_ref().is_none_or(|paths| {
+                        paths.iter().any(|path| {
+                            entry.path().starts_with(path) || path.starts_with(entry.path())
+                        })
+                    }))
         });
-    'files: for entry in walk.build() {
-        if interrupted(&mut result, cancelled, start, limits.time) {
+    let traversed = std::cell::Cell::new(0usize);
+    let traversal_limit = std::cell::Cell::new(false);
+    let candidates = walk
+        .build()
+        .take_while(|_| {
+            if cancelled.load(Ordering::Acquire) {
+                return false;
+            }
+            if traversed.get() >= limits.entries {
+                traversal_limit.set(true);
+                return false;
+            }
+            traversed.set(traversed.get() + 1);
+            true
+        })
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_type().is_some_and(|kind| kind.is_file()) => {
+                Some(Ok(entry.into_path()))
+            }
+            Err(_) => Some(Err(())),
+            _ => None,
+        });
+    let missing_buffers = overlays
+        .keys()
+        .filter(|p| {
+            !root.join(p).is_file()
+                && only_paths.is_none_or(|selected| {
+                    selected
+                        .iter()
+                        .any(|s| *p == s || p.starts_with(&format!("{s}/")))
+                })
+        })
+        .filter_map(|p| {
+            let path = root.join(p);
+            match exclusions.ignored(&path) {
+                Ok(false) => Some(Ok(path)),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut total_bytes = 0u64;
+    let mut bytes = Vec::new();
+    'files: for candidate in candidates.chain(missing_buffers) {
+        if cancelled.load(Ordering::Acquire) || result.cancelled {
+            result.cancelled = true;
             break;
         }
-        let entry = match entry {
-            Ok(entry) => entry,
+        let path = match candidate {
+            Ok(path) => path,
             Err(_) => {
                 result.skipped_files += 1;
                 continue;
             }
         };
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
-        let Some(relative) = entry.path().strip_prefix(root).ok().and_then(Path::to_str) else {
+        let Some(relative) = path.strip_prefix(root).ok().and_then(Path::to_str) else {
             result.skipped_files += 1;
             continue;
         };
         let relative = relative.replace('\\', "/");
-        let file =
-            super::path(root, &relative).and_then(|path| File::open(path).map_err(AppError::from));
-        let Ok(mut file) = file else {
-            result.skipped_files += 1;
-            continue;
-        };
-        let Ok(metadata) = file.metadata() else {
-            result.skipped_files += 1;
-            continue;
-        };
-        if !metadata.is_file() || metadata.len() > limits.file_bytes {
-            result.skipped_files += 1;
+        if paths.len() >= limits.entries {
+            result.truncated = true;
+            break;
+        }
+        if !paths.insert(relative.clone()) {
             continue;
         }
         bytes.clear();
-        let mut chunk = [0; 64 * 1024];
-        loop {
-            if interrupted(&mut result, cancelled, start, limits.time) {
-                break 'files;
+        if let Some(buffer) = overlays.get(relative.as_str()) {
+            if buffer.text.len() as u64 > limits.file_bytes || buffer.text.contains('\0') {
+                result.skipped_files += 1;
+                continue;
             }
-            match file.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(count) => {
-                    total_bytes += count as u64;
-                    if total_bytes > limits.total_bytes {
-                        result.truncated = true;
-                        break 'files;
+            bytes.extend_from_slice(buffer.text.as_bytes());
+            total_bytes += bytes.len() as u64;
+        } else {
+            let file = super::path(root, &relative).and_then(|path| {
+                let metadata = std::fs::symlink_metadata(&path)?;
+                if !metadata.is_file() {
+                    return Err(AppError::new(
+                        "search_file",
+                        "Search only reads regular files.",
+                    ));
+                }
+                File::open(path).map_err(AppError::from)
+            });
+            let Ok(mut file) = file else {
+                result.skipped_files += 1;
+                continue;
+            };
+            let Ok(metadata) = file.metadata() else {
+                result.skipped_files += 1;
+                continue;
+            };
+            if !metadata.is_file() || metadata.len() > limits.file_bytes {
+                result.skipped_files += 1;
+                continue;
+            }
+            let mut chunk = [0; 64 * 1024];
+            loop {
+                if cancelled.load(Ordering::Acquire) {
+                    result.cancelled = true;
+                    break 'files;
+                }
+                match file.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        total_bytes += count as u64;
+                        if total_bytes > limits.total_bytes {
+                            result.truncated = true;
+                            break 'files;
+                        }
+                        if bytes.len() as u64 + count as u64 > limits.file_bytes
+                            || chunk[..count].contains(&0)
+                        {
+                            result.skipped_files += 1;
+                            continue 'files;
+                        }
+                        bytes.extend_from_slice(&chunk[..count]);
                     }
-                    if bytes.len() as u64 + count as u64 > limits.file_bytes
-                        || chunk[..count].contains(&0)
-                    {
+                    Err(_) => {
                         result.skipped_files += 1;
                         continue 'files;
                     }
-                    bytes.extend_from_slice(&chunk[..count]);
-                }
-                Err(_) => {
-                    result.skipped_files += 1;
-                    continue 'files;
                 }
             }
+        }
+        if total_bytes > limits.total_bytes {
+            result.truncated = true;
+            break;
         }
         let Ok(text) = std::str::from_utf8(&bytes) else {
             result.skipped_files += 1;
             continue;
         };
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        // Match the editor's line coordinates, including legacy CR-only files.
         let text = if text.contains('\r') {
             Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
         } else {
@@ -264,65 +442,69 @@ fn scan(
         };
         result.scanned_files += 1;
         let mut file_matches = 0;
-        for (line_index, line) in text.lines().enumerate() {
-            if interrupted(&mut result, cancelled, start, limits.time) {
-                break 'files;
-            }
-            let mut previous_end = 0;
-            let mut column = 1;
-            for found in pattern.find_iter(line) {
-                if interrupted(&mut result, cancelled, start, limits.time) {
-                    break 'files;
-                }
-                if result.matches.len() >= limits.matches {
-                    result.truncated = true;
-                    break 'files;
-                }
-                if file_matches >= limits.file_matches {
-                    result.truncated = true;
-                    continue 'files;
-                }
-                column += line[previous_end..found.start()].encode_utf16().count() as u32;
-                let length = found.as_str().encode_utf16().count() as u32;
-                let (preview, preview_column) = preview(line, found.start(), found.end());
-                result.matches.push(EditorSearchMatch {
-                    path: relative.clone(),
-                    line: line_index as u32 + 1,
-                    column,
-                    length,
-                    preview,
-                    preview_column,
-                });
-                column += length;
-                previous_end = found.end();
-                file_matches += 1;
-            }
+        searcher
+            .search_slice(
+                &pattern,
+                text.as_bytes(),
+                UTF8(|line_number, raw_line| {
+                    let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+                    pattern
+                        .find_iter(line.as_bytes(), |found| {
+                            if cancelled.load(Ordering::Acquire) {
+                                result.cancelled = true;
+                                return false;
+                            }
+                            if result.matches.len() >= limits.matches
+                                || file_matches >= limits.file_matches
+                            {
+                                result.truncated = true;
+                                return false;
+                            }
+                            let (preview, preview_column) =
+                                preview(line, found.start(), found.end());
+                            result.matches.push(EditorSearchMatch {
+                                path: relative.clone(),
+                                line: line_number as u32,
+                                column: 1 + line[..found.start()].encode_utf16().count() as u32,
+                                length: line[found.start()..found.end()].encode_utf16().count()
+                                    as u32,
+                                preview,
+                                preview_column,
+                            });
+                            file_matches += 1;
+                            if file_matches >= limits.file_matches {
+                                result.truncated = true;
+                            }
+                            stream.flush(&mut result, false)
+                        })
+                        .map_err(std::io::Error::other)?;
+                    Ok(!result.cancelled
+                        && result.matches.len() < limits.matches
+                        && file_matches < limits.file_matches)
+                }),
+            )
+            .map_err(|e| AppError::new("search_scan", e.to_string()))?;
+        if !stream.flush(&mut result, stream.sequence == 0) {
+            break;
         }
+        if result.matches.len() >= limits.matches {
+            result.truncated = true;
+            break;
+        }
+    }
+    result.truncated |= traversal_limit.get();
+    if cancelled.load(Ordering::Acquire) {
+        result.cancelled = true;
     }
     if result.cancelled {
         result.matches.clear();
+    } else {
+        stream.flush(&mut result, true);
     }
     result
         .matches
         .sort_by(|a, b| (&a.path, a.line, a.column).cmp(&(&b.path, b.line, b.column)));
     Ok(result)
-}
-
-fn interrupted(
-    result: &mut EditorSearchResult,
-    cancelled: &AtomicBool,
-    start: Instant,
-    time: Duration,
-) -> bool {
-    if cancelled.load(Ordering::Relaxed) {
-        result.cancelled = true;
-        true
-    } else if start.elapsed() >= time {
-        result.truncated = true;
-        true
-    } else {
-        false
-    }
 }
 
 fn preview(line: &str, start: usize, end: usize) -> (String, u32) {

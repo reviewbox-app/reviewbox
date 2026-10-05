@@ -179,7 +179,9 @@ export function FileTree({
                     tabIndex={renderRow ? 0 : undefined}
                     className={cn(
                       row,
-                      ignoredFolders.get(child.path) && "opacity-60"
+                      (ignoredPaths?.has(child.path) ||
+                        ignoredFolders.get(child.path)) &&
+                        "opacity-60"
                     )}
                     style={{ paddingLeft: 6 + depth * 14 }}
                   >
@@ -191,7 +193,9 @@ export function FileTree({
                     aria-expanded={open}
                     className={cn(
                       row,
-                      ignoredFolders.get(child.path) && "opacity-60"
+                      (ignoredPaths?.has(child.path) ||
+                        ignoredFolders.get(child.path)) &&
+                        "opacity-60"
                     )}
                     style={{ paddingLeft: 6 + depth * 14 }}
                     onClick={() => toggle(child.path)}
