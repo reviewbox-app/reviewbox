@@ -19,6 +19,7 @@ mod session;
 pub(crate) mod setup;
 #[cfg(test)]
 mod tests;
+mod vue;
 mod workspace;
 
 pub fn settings(storage: &Storage) -> AppResult<LanguageServerSettings> {

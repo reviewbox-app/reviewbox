@@ -442,5 +442,55 @@
     "arguments": [],
     "stripComponents": 1,
     "dependencies": []
+  },
+  {
+    "id": "slang",
+    "version": "2026.19",
+    "platform": "darwin-aarch64",
+    "url": "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-macos-aarch64.tar.gz",
+    "sha256": "fa46822c92d81404a7951de3746093985c1e6f520f4b533e2aa3bea576f0f2f0",
+    "format": "tar.gz",
+    "executable": "bin/slangd",
+    "stripComponents": 0
+  },
+  {
+    "id": "slang",
+    "version": "2026.19",
+    "platform": "darwin-x86_64",
+    "url": "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-macos-x86_64.tar.gz",
+    "sha256": "490b6447e3ea6c8fa9dfc45b1dc227db7cf80a60981c4390ed0fdc8ddbedee11",
+    "format": "tar.gz",
+    "executable": "bin/slangd",
+    "stripComponents": 0
+  },
+  {
+    "id": "slang",
+    "version": "2026.19",
+    "platform": "linux-aarch64",
+    "url": "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-linux-aarch64-glibc-2.28.tar.gz",
+    "sha256": "f49229eb9606b47b122e1d8789be46a7bcd6bb2ffa94b06fae6d544a4e6df637",
+    "format": "tar.gz",
+    "executable": "bin/slangd",
+    "stripComponents": 0
+  },
+  {
+    "id": "slang",
+    "version": "2026.19",
+    "platform": "linux-x86_64",
+    "url": "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-linux-x86_64-glibc-2.28.tar.gz",
+    "sha256": "bd7afcb0956dee9304f44ed115e9aaa7140704271b5c3294bcb237e3ae67adc7",
+    "format": "tar.gz",
+    "executable": "bin/slangd",
+    "stripComponents": 0
+  },
+  {
+    "id": "slang",
+    "version": "2026.19",
+    "platform": "windows-x86_64",
+    "url": "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-windows-x86_64.zip",
+    "sha256": "fc922f214b5d115f663932e59e80e0f6b6cc6fae140979cf307da6459b6f8f33",
+    "format": "zip",
+    "executable": "bin/slangd.exe",
+    "stripComponents": 0
   }
 ]

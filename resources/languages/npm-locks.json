@@ -50,8 +50,10 @@
         "name": "reviewbox-lsp-vue",
         "version": "1.0.0",
         "dependencies": {
-          "@vue/language-server": "2.2.12",
-          "typescript": "5.9.3"
+          "@vue/language-server": "3.3.12",
+          "@vue/typescript-plugin": "3.3.12",
+          "typescript": "5.9.3",
+          "typescript-language-server": "6.0.1"
         }
       },
       "node_modules/@babel/helper-string-parser": {
@@ -162,23 +164,23 @@
         "license": "MIT"
       },
       "node_modules/@volar/language-core": {
-        "version": "2.4.15",
-        "resolved": "https://registry.npmjs.org/@volar/language-core/-/language-core-2.4.15.tgz",
-        "integrity": "sha512-3VHw+QZU0ZG9IuQmzT68IyN4hZNd9GchGPhbD9+pa8CVv7rnoOZwo7T8weIbrRmihqy3ATpdfXFnqRrfPVK6CA==",
+        "version": "2.4.28",
+        "resolved": "https://registry.npmjs.org/@volar/language-core/-/language-core-2.4.28.tgz",
+        "integrity": "sha512-w4qhIJ8ZSitgLAkVay6AbcnC7gP3glYM3fYwKV3srj8m494E3xtrCv6E+bWviiK/8hs6e6t1ij1s2Endql7vzQ==",
         "license": "MIT",
         "dependencies": {
-          "@volar/source-map": "2.4.15"
+          "@volar/source-map": "2.4.28"
         }
       },
       "node_modules/@volar/language-server": {
-        "version": "2.4.15",
-        "resolved": "https://registry.npmjs.org/@volar/language-server/-/language-server-2.4.15.tgz",
-        "integrity": "sha512-aSzvL3lgQ+RPU3uWA9wW85sfZ0tb+oKplfnOwG/c1iRMuVEJRofmcnjyN0JEOKbBR7GuPSbeUdLAI0AIL+TFew==",
+        "version": "2.4.28",
+        "resolved": "https://registry.npmjs.org/@volar/language-server/-/language-server-2.4.28.tgz",
+        "integrity": "sha512-NqcLnE5gERKuS4PUFwlhMxf6vqYo7hXtbMFbViXcbVkbZ905AIVWhnSo0ZNBC2V127H1/2zP7RvVOVnyITFfBw==",
         "license": "MIT",
         "dependencies": {
-          "@volar/language-core": "2.4.15",
-          "@volar/language-service": "2.4.15",
-          "@volar/typescript": "2.4.15",
+          "@volar/language-core": "2.4.28",
+          "@volar/language-service": "2.4.28",
+          "@volar/typescript": "2.4.28",
           "path-browserify": "^1.0.1",
           "request-light": "^0.7.0",
           "vscode-languageserver": "^9.0.1",
@@ -188,42 +190,30 @@
         }
       },
       "node_modules/@volar/language-service": {
-        "version": "2.4.15",
-        "resolved": "https://registry.npmjs.org/@volar/language-service/-/language-service-2.4.15.tgz",
-        "integrity": "sha512-o7ctGyQNQAZqT15xHamE0fTzPZHeDnHWz0m/KJekSPc2W4AHiEbJ2RNDLzEK4e0EjrpdeEe3FB9KQvOvjq+I6Q==",
+        "version": "2.4.28",
+        "resolved": "https://registry.npmjs.org/@volar/language-service/-/language-service-2.4.28.tgz",
+        "integrity": "sha512-Rh/wYCZJrI5vCwMk9xyw/Z+MsWxlJY1rmMZPsxUoJKfzIRjS/NF1NmnuEcrMbEVGja00aVpCsInJfixQTMdvLw==",
         "license": "MIT",
         "dependencies": {
-          "@volar/language-core": "2.4.15",
+          "@volar/language-core": "2.4.28",
           "vscode-languageserver-protocol": "^3.17.5",
           "vscode-languageserver-textdocument": "^1.0.11",
           "vscode-uri": "^3.0.8"
         }
       },
       "node_modules/@volar/source-map": {
-        "version": "2.4.15",
-        "resolved": "https://registry.npmjs.org/@volar/source-map/-/source-map-2.4.15.tgz",
-        "integrity": "sha512-CPbMWlUN6hVZJYGcU/GSoHu4EnCHiLaXI9n8c9la6RaI9W5JHX+NqG+GSQcB0JdC2FIBLdZJwGsfKyBB71VlTg==",
+        "version": "2.4.28",
+        "resolved": "https://registry.npmjs.org/@volar/source-map/-/source-map-2.4.28.tgz",
+        "integrity": "sha512-yX2BDBqJkRXfKw8my8VarTyjv48QwxdJtvRgUpNE5erCsgEUdI2DsLbpa+rOQVAJYshY99szEcRDmyHbF10ggQ==",
         "license": "MIT"
       },
-      "node_modules/@volar/test-utils": {
-        "version": "2.4.15",
-        "resolved": "https://registry.npmjs.org/@volar/test-utils/-/test-utils-2.4.15.tgz",
-        "integrity": "sha512-TgFzv+0HWKS9ZjA6p4kuXgnzGJR2wt5f+0L97o7LYOdBSaAIn+EgWPqTAYWZC4Z2PYEKS0jkt5waOyak18k6/g==",
-        "license": "MIT",
-        "dependencies": {
-          "@volar/language-core": "2.4.15",
-          "@volar/language-server": "2.4.15",
-          "vscode-languageserver-textdocument": "^1.0.11",
-          "vscode-uri": "^3.0.8"
-        }
-      },
       "node_modules/@volar/typescript": {
-        "version": "2.4.15",
-        "resolved": "https://registry.npmjs.org/@volar/typescript/-/typescript-2.4.15.tgz",
-        "integrity": "sha512-2aZ8i0cqPGjXb4BhkMsPYDkkuc2ZQ6yOpqwAuNwUoncELqoy5fRgOQtLR9gB0g902iS0NAkvpIzs27geVyVdPg==",
+        "version": "2.4.28",
+        "resolved": "https://registry.npmjs.org/@volar/typescript/-/typescript-2.4.28.tgz",
+        "integrity": "sha512-Ja6yvWrbis2QtN4ClAKreeUZPVYMARDYZl9LMEv1iQ1QdepB6wn0jTRxA9MftYmYa4DQ4k/DaSZpFPUfxl8giw==",
         "license": "MIT",
         "dependencies": {
-          "@volar/language-core": "2.4.15",
+          "@volar/language-core": "2.4.28",
           "path-browserify": "^1.0.1",
           "vscode-uri": "^3.0.8"
         }
@@ -270,86 +260,72 @@
           "@vue/shared": "3.5.43"
         }
       },
-      "node_modules/@vue/compiler-vue2": {
-        "version": "2.7.16",
-        "resolved": "https://registry.npmjs.org/@vue/compiler-vue2/-/compiler-vue2-2.7.16.tgz",
-        "integrity": "sha512-qYC3Psj9S/mfu9uVi5WvNZIzq+xnXMhOwbTFKKDD7b1lhpnn71jXSFdTQ+WsIEk0ONCd7VV2IMm7ONl6tbQ86A==",
+      "node_modules/@vue/language-core": {
+        "version": "3.3.12",
+        "resolved": "https://registry.npmjs.org/@vue/language-core/-/language-core-3.3.12.tgz",
+        "integrity": "sha512-k7uIKR0n4CBidk233y7cac9osnDQ5WRidTl6nsrNvpZ3nf8cx9iJxRVsRzVsoPRHbowT/iKgGMTS9RGov3jeIA==",
         "license": "MIT",
         "dependencies": {
-          "de-indent": "^1.0.2",
-          "he": "^1.2.0"
+          "@volar/language-core": "2.4.28",
+          "@vue/compiler-dom": "^3.5.0",
+          "@vue/shared": "^3.5.0",
+          "alien-signals": "^3.2.1",
+          "muggle-string": "^0.4.1",
+          "path-browserify": "^1.0.1",
+          "picomatch": "^4.0.4"
         }
       },
-      "node_modules/@vue/language-core": {
-        "version": "2.2.12",
-        "resolved": "https://registry.npmjs.org/@vue/language-core/-/language-core-2.2.12.tgz",
-        "integrity": "sha512-IsGljWbKGU1MZpBPN+BvPAdr55YPkj2nB/TBNGNC32Vy2qLG25DYu/NBN2vNtZqdRbTRjaoYrahLrToim2NanA==",
+      "node_modules/@vue/language-plugin-pug": {
+        "version": "3.2.9",
+        "resolved": "https://registry.npmjs.org/@vue/language-plugin-pug/-/language-plugin-pug-3.2.9.tgz",
+        "integrity": "sha512-EaRtg3/1TQo9D20nBex1G3NtWElJbSgiiisZe6TwiNKpSCRwFmmvuAkz+AfMmsQc53si3zbkApU8RF0o6ULQag==",
         "license": "MIT",
         "dependencies": {
-          "@volar/language-core": "2.4.15",
-          "@vue/compiler-dom": "^3.5.0",
-          "@vue/compiler-vue2": "^2.7.16",
-          "@vue/shared": "^3.5.0",
-          "alien-signals": "^1.0.3",
-          "minimatch": "^9.0.3",
+          "@volar/source-map": "2.4.28",
           "muggle-string": "^0.4.1",
-          "path-browserify": "^1.0.1"
-        },
-        "peerDependencies": {
-          "typescript": "*"
-        },
-        "peerDependenciesMeta": {
-          "typescript": {
-            "optional": true
-          }
+          "pug-lexer": "^5.0.1",
+          "pug-parser": "^6.0.0",
+          "vscode-languageserver-textdocument": "^1.0.12"
         }
       },
       "node_modules/@vue/language-server": {
-        "version": "2.2.12",
-        "resolved": "https://registry.npmjs.org/@vue/language-server/-/language-server-2.2.12.tgz",
-        "integrity": "sha512-sh64ihjDn1nHmLez5m/UuXiTmiTU10Jt/QvhjMPllPeUwCvck89ndXp1nXkvEDoRGm7xdV9zopZM2IiEZFQTPA==",
+        "version": "3.3.12",
+        "resolved": "https://registry.npmjs.org/@vue/language-server/-/language-server-3.3.12.tgz",
+        "integrity": "sha512-xuI8VPxqtR+V8dxOr30wdtbKDAviuFrB1lkl1+6DBUsG2CtIJVjzDygd8eaSFmgNlvZVXebgqN5Kp9Fo+1fASA==",
         "license": "MIT",
         "dependencies": {
-          "@volar/language-core": "2.4.15",
-          "@volar/language-server": "2.4.15",
-          "@volar/test-utils": "2.4.15",
-          "@vue/language-core": "2.2.12",
-          "@vue/language-service": "2.2.12",
-          "@vue/typescript-plugin": "2.2.12",
-          "vscode-languageserver-protocol": "^3.17.5",
-          "vscode-uri": "^3.0.8"
+          "@volar/language-server": "2.4.28",
+          "@vue/language-core": "3.3.12",
+          "@vue/language-service": "3.3.12",
+          "@vue/typescript-plugin": "3.3.12",
+          "vscode-uri": "^3.1.0"
         },
         "bin": {
           "vue-language-server": "bin/vue-language-server.js"
+        },
+        "peerDependencies": {
+          "typescript": "*"
         }
       },
       "node_modules/@vue/language-service": {
-        "version": "2.2.12",
-        "resolved": "https://registry.npmjs.org/@vue/language-service/-/language-service-2.2.12.tgz",
-        "integrity": "sha512-+YBLP82vyuXzO5Wkw23vMl+EPCZicv1EQtEjp/n/Wt4PjbPBSgR5KCuc4edcIA1rL70fsEPlSna3K+ibyZ2QIA==",
+        "version": "3.3.12",
+        "resolved": "https://registry.npmjs.org/@vue/language-service/-/language-service-3.3.12.tgz",
+        "integrity": "sha512-wwQIdI/guixzxyfhxXyjZrG29T5vZMpwsI1gQeqgd5H3db5lk8/s9nTSTfgcNlMP+LbRPEZcQ7WMWE9ydEdKUQ==",
         "license": "MIT",
         "dependencies": {
-          "@volar/language-core": "2.4.15",
-          "@volar/language-service": "2.4.15",
-          "@volar/typescript": "2.4.15",
-          "@vue/compiler-dom": "^3.5.0",
-          "@vue/language-core": "2.2.12",
+          "@volar/language-service": "2.4.28",
+          "@vue/language-core": "3.3.12",
           "@vue/shared": "^3.5.0",
-          "@vue/typescript-plugin": "2.2.12",
-          "alien-signals": "^1.0.3",
           "path-browserify": "^1.0.1",
-          "volar-service-css": "0.0.64",
-          "volar-service-emmet": "0.0.64",
-          "volar-service-html": "0.0.64",
-          "volar-service-json": "0.0.64",
-          "volar-service-pug": "0.0.64",
-          "volar-service-pug-beautify": "0.0.64",
-          "volar-service-typescript": "0.0.64",
-          "volar-service-typescript-twoslash-queries": "0.0.64",
-          "vscode-css-languageservice": "^6.3.1",
-          "vscode-html-languageservice": "^5.2.0",
-          "vscode-languageserver-textdocument": "^1.0.11",
-          "vscode-uri": "^3.0.8"
+          "volar-service-css": "0.0.71",
+          "volar-service-emmet": "0.0.71",
+          "volar-service-html": "0.0.71",
+          "volar-service-json": "0.0.71",
+          "volar-service-pug": "0.0.71",
+          "volar-service-pug-beautify": "0.0.71",
+          "volar-service-typescript": "0.0.71",
+          "vscode-html-languageservice": "^5.6.2",
+          "vscode-uri": "^3.1.0"
         }
       },
       "node_modules/@vue/shared": {
@@ -359,14 +335,16 @@
         "license": "MIT"
       },
       "node_modules/@vue/typescript-plugin": {
-        "version": "2.2.12",
-        "resolved": "https://registry.npmjs.org/@vue/typescript-plugin/-/typescript-plugin-2.2.12.tgz",
-        "integrity": "sha512-HFByqrJ7+kWDpAoGiTcWe0Gxy9R0MkEtE+QTlLnEgDS7+l7uSaPnK4ZfzpX7rMfNwOZK0fUD58mMvmCWUnBCSQ==",
+        "version": "3.3.12",
+        "resolved": "https://registry.npmjs.org/@vue/typescript-plugin/-/typescript-plugin-3.3.12.tgz",
+        "integrity": "sha512-svxFiW1e+qV3giEJiRej4UpGyjN2LjMxfd8JpQLboCITX8cjCs70PCg5nt2b3RWdJsJ8t8OI45S6ch8MAJgTwg==",
         "license": "MIT",
         "dependencies": {
-          "@volar/typescript": "2.4.15",
-          "@vue/language-core": "2.2.12",
-          "@vue/shared": "^3.5.0"
+          "@volar/typescript": "2.4.28",
+          "@vue/language-core": "3.3.12",
+          "@vue/shared": "^3.5.0",
+          "path-browserify": "^1.0.1",
+          "vue-component-meta": "3.3.12"
         }
       },
       "node_modules/acorn": {
@@ -382,25 +360,10 @@
         }
       },
       "node_modules/alien-signals": {
-        "version": "1.0.13",
-        "resolved": "https://registry.npmjs.org/alien-signals/-/alien-signals-1.0.13.tgz",
-        "integrity": "sha512-OGj9yyTnJEttvzhTUWuscOvtqxq5vrhF7vL9oS0xJ2mK0ItPYP1/y+vCFebfxoEyAz0++1AIwJ5CMr+Fk3nDmg==",
+        "version": "3.2.1",
+        "resolved": "https://registry.npmjs.org/alien-signals/-/alien-signals-3.2.1.tgz",
+        "integrity": "sha512-I8FjmltrfnDFoZedi5CG8DghVYNhzb/Ijluz7tCSJH0xpd0484Kowhbb1XDYOxfJpU1p5wnM2X54dA+IfGyD1g==",
         "license": "MIT"
-      },
-      "node_modules/balanced-match": {
-        "version": "1.0.2",
-        "resolved": "https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz",
-        "integrity": "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==",
-        "license": "MIT"
-      },
-      "node_modules/brace-expansion": {
-        "version": "2.1.7",
-        "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.7.tgz",
-        "integrity": "sha512-uZbew1NqdmPDTMJ8ah1y+b+9QEJrfkXFk3RcTQw3X0jW/xRUvFKsg1CfQdSYGdTbXZWExtU3J3ccxtnfw1Fi0g==",
-        "license": "MIT",
-        "dependencies": {
-          "balanced-match": "^1.0.0"
-        }
       },
       "node_modules/call-bind-apply-helpers": {
         "version": "1.0.2",
@@ -439,12 +402,6 @@
         "dependencies": {
           "is-regex": "^1.0.3"
         }
-      },
-      "node_modules/de-indent": {
-        "version": "1.0.2",
-        "resolved": "https://registry.npmjs.org/de-indent/-/de-indent-1.0.2.tgz",
-        "integrity": "sha512-e/1zu3xH5MQryN2zdVaF0OrdNLUbvWxzMbi+iNA6Bky7l1RoP8a2fIbRocyHclXt/arDrrR6lL3TqFD9pMQTsg==",
-        "license": "MIT"
       },
       "node_modules/dunder-proto": {
         "version": "1.0.1",
@@ -621,15 +578,6 @@
           "node": ">= 0.4"
         }
       },
-      "node_modules/he": {
-        "version": "1.2.0",
-        "resolved": "https://registry.npmjs.org/he/-/he-1.2.0.tgz",
-        "integrity": "sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==",
-        "license": "MIT",
-        "bin": {
-          "he": "bin/he"
-        }
-      },
       "node_modules/is-expression": {
         "version": "4.0.0",
         "resolved": "https://registry.npmjs.org/is-expression/-/is-expression-4.0.0.tgz",
@@ -673,21 +621,6 @@
           "node": ">= 0.4"
         }
       },
-      "node_modules/minimatch": {
-        "version": "9.0.9",
-        "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-9.0.9.tgz",
-        "integrity": "sha512-OBwBN9AL4dqmETlpS2zasx+vTeWclWzkblfZk7KTA5j3jeOONz/tRCnZomUyvNg83wL5Zv9Ss6HMJXAgL8R2Yg==",
-        "license": "ISC",
-        "dependencies": {
-          "brace-expansion": "^2.0.2"
-        },
-        "engines": {
-          "node": ">=16 || 14 >=14.17"
-        },
-        "funding": {
-          "url": "https://github.com/sponsors/isaacs"
-        }
-      },
       "node_modules/muggle-string": {
         "version": "0.4.1",
         "resolved": "https://registry.npmjs.org/muggle-string/-/muggle-string-0.4.1.tgz",
@@ -708,6 +641,18 @@
         "resolved": "https://registry.npmjs.org/path-browserify/-/path-browserify-1.0.1.tgz",
         "integrity": "sha512-b7uo2UCUOYZcnF/3ID0lulOJi/bafxa1xPe7ZPsammBSpjSWQkjNxlt635YGS2MiR9GjvuXCtz2emr3jbsz98g==",
         "license": "MIT"
+      },
+      "node_modules/picomatch": {
+        "version": "4.0.7",
+        "resolved": "https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz",
+        "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+        "license": "MIT",
+        "engines": {
+          "node": ">=12"
+        },
+        "funding": {
+          "url": "https://github.com/sponsors/jonschlinkert"
+        }
       },
       "node_modules/pug-error": {
         "version": "2.1.0",
@@ -755,9 +700,9 @@
         }
       },
       "node_modules/source-map-js": {
-        "version": "1.2.1",
-        "resolved": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz",
-        "integrity": "sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==",
+        "version": "1.2.2",
+        "resolved": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.2.tgz",
+        "integrity": "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==",
         "license": "BSD-3-Clause",
         "engines": {
           "node": ">=0.10.0"
@@ -791,10 +736,22 @@
           "semver": "^7.3.8"
         }
       },
+      "node_modules/typescript-language-server": {
+        "version": "6.0.1",
+        "resolved": "https://registry.npmjs.org/typescript-language-server/-/typescript-language-server-6.0.1.tgz",
+        "integrity": "sha512-c5hEHM/7rdFRbQWoHXuddyJ53oF0M2dKeXQOYdwUek556oarltKeumKJGLp/ZMcGV7gW30mGn1MR3V5GDiLiKg==",
+        "license": "Apache-2.0",
+        "bin": {
+          "typescript-language-server": "lib/cli.mjs"
+        },
+        "engines": {
+          "node": ">=22.22.2"
+        }
+      },
       "node_modules/volar-service-css": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-css/-/volar-service-css-0.0.64.tgz",
-        "integrity": "sha512-BtLq85adIft+Q0PZqllKXMVH7HHk6UmM7Opuj43IhR4AOVkqbNIcsiXhuh12ITVJGTkCGa9xXAPzClorPya6EQ==",
+        "version": "0.0.71",
+        "resolved": "https://registry.npmjs.org/volar-service-css/-/volar-service-css-0.0.71.tgz",
+        "integrity": "sha512-wRRFt9BpjMKCazcgOh67MSjUjiWUCAh99DyYSDIOTuxaRjEtDC7PpB0k1Y1wbJIW/pVtMUSVbpPo3UGSm0Byxw==",
         "license": "MIT",
         "dependencies": {
           "vscode-css-languageservice": "^6.3.0",
@@ -811,12 +768,12 @@
         }
       },
       "node_modules/volar-service-emmet": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-emmet/-/volar-service-emmet-0.0.64.tgz",
-        "integrity": "sha512-cIGKpyOXKB9Dsqz3MJD1DF1GYEPfLE4VBoEtqewfx88qpf0dr/WbDnRhuljZ+VFlavkre4MvELzkCt8m9F6GqA==",
+        "version": "0.0.71",
+        "resolved": "https://registry.npmjs.org/volar-service-emmet/-/volar-service-emmet-0.0.71.tgz",
+        "integrity": "sha512-zqjzt6bN95e3CUstBm0PBFAJnrfz0ZAARka87fart46/gNCLLuP3Vujy8V/J8HEziTFLnfkgIASLFYPUhonJcA==",
         "license": "MIT",
         "dependencies": {
-          "@emmetio/css-parser": "ramya-rao-a/css-parser#vscode",
+          "@emmetio/css-parser": "^0.4.1",
           "@emmetio/html-matcher": "^1.3.0",
           "@vscode/emmet-helper": "^2.9.3",
           "vscode-uri": "^3.0.8"
@@ -831,9 +788,9 @@
         }
       },
       "node_modules/volar-service-html": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-html/-/volar-service-html-0.0.64.tgz",
-        "integrity": "sha512-5xknMYKmZBFzp2399RlsnGce25PfNu9ViXa1s63Q8NP6xeXcF3lInFsV+1o2DWBoXZdnXcuRvWOA+K+JIZLEcA==",
+        "version": "0.0.71",
+        "resolved": "https://registry.npmjs.org/volar-service-html/-/volar-service-html-0.0.71.tgz",
+        "integrity": "sha512-e8tHPhgQ7ooLfudAEIku+kgd9pWkq3SSz8RbnQDI1+Eb8wbenkLGHqoirLqz5ORLV6wIMr2Iv08RWBG5eOcgpw==",
         "license": "MIT",
         "dependencies": {
           "vscode-html-languageservice": "^5.3.0",
@@ -850,9 +807,9 @@
         }
       },
       "node_modules/volar-service-json": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-json/-/volar-service-json-0.0.64.tgz",
-        "integrity": "sha512-kZsqmeDR0w/iVkkoxfp4/DcblYmyFXBImVLzgIgyd685XZrb21wVmKcRsD/V+6l0N7/pGwN6m2scxt/mJmFkGQ==",
+        "version": "0.0.71",
+        "resolved": "https://registry.npmjs.org/volar-service-json/-/volar-service-json-0.0.71.tgz",
+        "integrity": "sha512-behyNhAG5UEXfvbIOWdE62XsPkp/e5W0V3sz3AW6zy7vgWLzgvElR77YSlcu708GwKu7OOFl5m9sUGVfqLIriQ==",
         "license": "MIT",
         "dependencies": {
           "vscode-json-languageservice": "^5.4.0",
@@ -868,24 +825,22 @@
         }
       },
       "node_modules/volar-service-pug": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-pug/-/volar-service-pug-0.0.64.tgz",
-        "integrity": "sha512-rVJ2ySENJFPzzEr4fVlC81ANR4dTh3Axr6Az56KyZ5GV0C9yRk5QqCj5+eOYb2GSoVtnEbzOyYpDTRSuH++lfA==",
+        "version": "0.0.71",
+        "resolved": "https://registry.npmjs.org/volar-service-pug/-/volar-service-pug-0.0.71.tgz",
+        "integrity": "sha512-vG4nkQxRfRTCwJsA1CbQ2hSsZjzsrsLDBGeJTDjIaymtOBfML5UMOROTB3ClVuEZVrtg1rquVzVlGTjhvc2ysg==",
         "license": "MIT",
         "dependencies": {
           "@volar/language-service": "~2.4.0",
-          "muggle-string": "^0.4.1",
-          "pug-lexer": "^5.0.1",
-          "pug-parser": "^6.0.0",
-          "volar-service-html": "0.0.64",
+          "@vue/language-plugin-pug": "~3.2.2",
+          "volar-service-html": "0.0.71",
           "vscode-html-languageservice": "^5.3.0",
           "vscode-languageserver-textdocument": "^1.0.11"
         }
       },
       "node_modules/volar-service-pug-beautify": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-pug-beautify/-/volar-service-pug-beautify-0.0.64.tgz",
-        "integrity": "sha512-HNVTYGjGKaUkvryCQvhN/kYZ6aP6I1ySECMA7I8SpMqraYN/BDKI185tsRsm5tGmPrEyCgRDKn/GGIAsSj7I7A==",
+        "version": "0.0.71",
+        "resolved": "https://registry.npmjs.org/volar-service-pug-beautify/-/volar-service-pug-beautify-0.0.71.tgz",
+        "integrity": "sha512-4oxv7xGwT6TxxuFZdXj9EdqUUUWSd1oz9H47z4s/shT9YVLKwrty+9ACbdQsjyWZTp6ES/EtcuSqKuPhz3Uhaw==",
         "license": "MIT",
         "dependencies": {
           "@johnsoncodehk/pug-beautify": "^0.2.2"
@@ -900,9 +855,9 @@
         }
       },
       "node_modules/volar-service-typescript": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-typescript/-/volar-service-typescript-0.0.64.tgz",
-        "integrity": "sha512-FN2H97iqjR1id8AM4fH7lTXuTx2on9zD6QlUFllaiHKqgNrEITlQwm/9Ujrd9ST7MUzhgIKyUsa2WlanX9kkMg==",
+        "version": "0.0.71",
+        "resolved": "https://registry.npmjs.org/volar-service-typescript/-/volar-service-typescript-0.0.71.tgz",
+        "integrity": "sha512-yTtM/BVT6hoyEYnDtaCyAtNhdNeS/mhTTABlBOdw3NNiRBUin3IznFJpgfjer4c6RYopiPjjQjc9VFhxVl1mLw==",
         "license": "MIT",
         "dependencies": {
           "path-browserify": "^1.0.1",
@@ -910,23 +865,6 @@
           "typescript-auto-import-cache": "^0.3.5",
           "vscode-languageserver-textdocument": "^1.0.11",
           "vscode-nls": "^5.2.0",
-          "vscode-uri": "^3.0.8"
-        },
-        "peerDependencies": {
-          "@volar/language-service": "~2.4.0"
-        },
-        "peerDependenciesMeta": {
-          "@volar/language-service": {
-            "optional": true
-          }
-        }
-      },
-      "node_modules/volar-service-typescript-twoslash-queries": {
-        "version": "0.0.64",
-        "resolved": "https://registry.npmjs.org/volar-service-typescript-twoslash-queries/-/volar-service-typescript-twoslash-queries-0.0.64.tgz",
-        "integrity": "sha512-DQlArCVUwbH3Ym0Uc/qSrgus/ngQa4LbTNbLsIkWMovxwziPA1c2yCFFY7a6s4Qs8pPXO757ryu99IeX0UK+4w==",
-        "license": "MIT",
-        "dependencies": {
           "vscode-uri": "^3.0.8"
         },
         "peerDependencies": {
@@ -1066,6 +1004,25 @@
         "resolved": "https://registry.npmjs.org/vscode-uri/-/vscode-uri-3.2.0.tgz",
         "integrity": "sha512-m2gXo3bn0G1kT9InzMf07fTbqMbGtyckj3bH5ktLO+1Ssv+yiATZ4dhwaQv9UZWxJh6E9IFGnQyjgWVDWVBDrg==",
         "license": "MIT"
+      },
+      "node_modules/vue-component-meta": {
+        "version": "3.3.12",
+        "resolved": "https://registry.npmjs.org/vue-component-meta/-/vue-component-meta-3.3.12.tgz",
+        "integrity": "sha512-UT2ax02yye/xT/eiVBaXjuLDS92spt2V6Aj9C3gJpKKBZg/etrDIGCTLG34M4zGN5qWJEkcpnRjDt3wXBoxOjw==",
+        "license": "MIT",
+        "dependencies": {
+          "@volar/typescript": "2.4.28",
+          "@vue/language-core": "3.3.12",
+          "path-browserify": "^1.0.1"
+        },
+        "peerDependencies": {
+          "typescript": "*"
+        },
+        "peerDependenciesMeta": {
+          "typescript": {
+            "optional": true
+          }
+        }
       }
     }
   },
@@ -3975,6 +3932,64 @@
         "resolved": "https://registry.npmjs.org/vscode-uri/-/vscode-uri-3.2.0.tgz",
         "integrity": "sha512-m2gXo3bn0G1kT9InzMf07fTbqMbGtyckj3bH5ktLO+1Ssv+yiATZ4dhwaQv9UZWxJh6E9IFGnQyjgWVDWVBDrg==",
         "license": "MIT"
+      }
+    }
+  },
+  "tailwind": {
+    "name": "reviewbox-lsp-tailwind",
+    "version": "1.0.0",
+    "lockfileVersion": 3,
+    "requires": true,
+    "packages": {
+      "": {
+        "name": "reviewbox-lsp-tailwind",
+        "version": "1.0.0",
+        "dependencies": {
+          "@tailwindcss/language-server": "0.16.0"
+        }
+      },
+      "node_modules/@tailwindcss/language-server": {
+        "version": "0.16.0",
+        "resolved": "https://registry.npmjs.org/@tailwindcss/language-server/-/language-server-0.16.0.tgz",
+        "integrity": "sha512-ko2xr4nlFIkqwJFnnw7hfdpjbsnK0DOk+QEEI51tvKOCF97OG0RU59iGfadoaOoY6I9xkSMbTW+AAwgnGnLH3w==",
+        "license": "MIT",
+        "bin": {
+          "css-language-server": "bin/css-language-server",
+          "tailwindcss-language-server": "bin/tailwindcss-language-server"
+        },
+        "engines": {
+          "node": ">=18.0.0"
+        }
+      }
+    }
+  },
+  "prettier": {
+    "name": "reviewbox-lsp-prettier",
+    "version": "1.0.0",
+    "lockfileVersion": 3,
+    "requires": true,
+    "packages": {
+      "": {
+        "name": "reviewbox-lsp-prettier",
+        "version": "1.0.0",
+        "dependencies": {
+          "prettier": "3.9.6"
+        }
+      },
+      "node_modules/prettier": {
+        "version": "3.9.6",
+        "resolved": "https://registry.npmjs.org/prettier/-/prettier-3.9.6.tgz",
+        "integrity": "sha512-OpN0zzVdiaiAhxpuuj5efpIS4sY9j7bY6uR5mnj5yPzGkdkjNKSJeUThPb60Jw29QuAZgA4o+/iB49kFiaBX6g==",
+        "license": "MIT",
+        "bin": {
+          "prettier": "bin/prettier.cjs"
+        },
+        "engines": {
+          "node": ">=14"
+        },
+        "funding": {
+          "url": "https://github.com/prettier/prettier?sponsor=1"
+        }
       }
     }
   }

@@ -6,7 +6,7 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
 struct Entry {
@@ -34,6 +34,52 @@ pub struct LiveLanguages(
     Arc<AsyncMutex<()>>,
 );
 impl LiveLanguages {
+    fn peers(&self, root: &std::path::Path, except: &str) -> Vec<Arc<Entry>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter(|e| {
+                e.root == root
+                    && e.id != except
+                    && !e.session.is_stopped()
+                    && matches!(e.session.server.id.as_str(), "typescript" | "vue")
+            })
+            .cloned()
+            .collect()
+    }
+    async fn mirror(&self, entry: &Entry, document: &LiveLanguageDocument) {
+        if !matches!(entry.session.server.id.as_str(), "typescript" | "vue") {
+            return;
+        }
+        let Ok(uri) = uri(entry, &document.path) else {
+            return;
+        };
+        for peer in self.peers(&entry.root, &entry.id) {
+            if !peer.documents.lock().await.contains_key(&document.path) {
+                let _ = peer.session.mirror_document(&uri, document).await;
+            }
+        }
+    }
+    async fn hydrate(&self, session: &Arc<Session>, root: &std::path::Path, id: &str) {
+        if !session.accepts_vue_mirrors() {
+            return;
+        }
+        for peer in self.peers(root, id) {
+            let documents = peer
+                .documents
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for document in documents {
+                if let Ok(uri) = uri(&peer, &document.path) {
+                    let _ = session.mirror_document(&uri, &document).await;
+                }
+            }
+        }
+    }
     pub fn invalidate_project(
         &self,
         root: &std::path::Path,
@@ -129,10 +175,10 @@ impl Session {
                 "general":{"positionEncodings":["utf-16"]}, "window":{"workDoneProgress":true},
                 "workspace":{"configuration":true,"workspaceFolders":true,"applyEdit":false,"workspaceEdit":{"documentChanges":true},"fileOperations":{"dynamicRegistration":true,"didCreate":true,"didRename":true,"didDelete":true},"didChangeWatchedFiles":{"dynamicRegistration":true,"relativePatternSupport":true},"didChangeConfiguration":{"dynamicRegistration":true},"symbol":{"dynamicRegistration":true},"diagnostics":{"refreshSupport":true},"semanticTokens":{"refreshSupport":true}},
                 "textDocument":{
-                    "synchronization":{"didSave":true},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":true,"documentationFormat":["markdown","plaintext"],"resolveSupport":{"properties":["documentation","detail","additionalTextEdits"]}}},
+                    "synchronization":{"didSave":true},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":true,"labelDetailsSupport":true,"insertReplaceSupport":true,"documentationFormat":["markdown","plaintext"],"resolveSupport":{"properties":["documentation","detail","additionalTextEdits"]}}},
                     "hover":{"dynamicRegistration":true,"contentFormat":["markdown","plaintext"]},"signatureHelp":{"dynamicRegistration":true,"signatureInformation":{"documentationFormat":["markdown","plaintext"],"parameterInformation":{"labelOffsetSupport":true}}},
                     "definition":{"dynamicRegistration":true,"linkSupport":true},"references":{"dynamicRegistration":true},"documentSymbol":{"dynamicRegistration":true,"hierarchicalDocumentSymbolSupport":true},"rename":{"dynamicRegistration":true,"prepareSupport":true},
-                    "formatting":{"dynamicRegistration":true},"codeAction":{"dynamicRegistration":true,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source.organizeImports"]}},"resolveSupport":{"properties":["edit"]}},
+                    "formatting":{"dynamicRegistration":true},"rangeFormatting":{"dynamicRegistration":true},"linkedEditingRange":{"dynamicRegistration":true},"colorProvider":{"dynamicRegistration":true},"codeAction":{"dynamicRegistration":true,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source.organizeImports"]}},"resolveSupport":{"properties":["edit"]}},
                     "publishDiagnostics":{"versionSupport":true,"relatedInformation":true},"diagnostic":{"dynamicRegistration":true},
                     "semanticTokens":{"dynamicRegistration":true,"requests":{"full":true},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"]}
                 }
@@ -169,16 +215,46 @@ pub async fn live_language_open(
     language_id: Option<String>,
     server_id: Option<String>,
 ) -> AppResult<LiveLanguageSession> {
-    let _gate = manager.1.lock().await;
+    let installer = app
+        .state::<super::install::LanguageServerInstaller>()
+        .inner()
+        .clone();
     let root = crate::repositories::root(&storage, &repository_id)?;
     crate::editor::path(&root, &path)?;
-    let server = catalog::resolve_language(
+    let mut server = catalog::resolve_language(
         &storage,
         &path,
         language_id.as_deref(),
         server_id.as_deref(),
     )?;
+    // A TypeScript entry point can import SFCs before the first Vue tab is opened.
+    if server.id == "typescript"
+        && super::project::uses_vue(&root, &path)
+        && crate::editor_extensions::enabled(&storage, EditorExtensionId::Vue)?
+        && let Ok(Some(operation)) =
+            crate::editor_extensions::ensure_engine(&storage, &installer, "vue")
+    {
+        loop {
+            if !crate::editor_extensions::enabled(&storage, EditorExtensionId::Vue)? {
+                break;
+            }
+            let current = installer
+                .operations()
+                .into_iter()
+                .find(|o| o.id == operation.id);
+            if current.is_none_or(|o| !matches!(o.status.as_str(), "queued" | "installing")) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+    let _gate = manager.1.lock().await;
     let project = super::project::resolve(&storage, &root, &path, &server.id)?;
+    if server.id == "vue"
+        && let Some(sdk) = project.initialization_options["typescript"]["tsdk"].as_str()
+    {
+        server.arguments.push(format!("--tsdk={sdk}"));
+    }
     let key = fingerprint(
         format!(
             "{repository_id}/{}/{}/{}",
@@ -270,10 +346,15 @@ pub async fn live_language_open(
             session.stop();
             return Err(error);
         }
+        if let Err(error) = crate::editor_extensions::require_engine(&storage, &server.id) {
+            session.stop();
+            return Err(error);
+        }
         if let Err(error) = storage.repository_cache.lease(&storage, &root, &id) {
             session.stop();
             return Err(error);
         }
+        manager.hydrate(&session, &root, &id).await;
         manager
             .0
             .lock()
@@ -319,7 +400,9 @@ pub async fn live_language_sync(
     saved: bool,
 ) -> AppResult<()> {
     let entry = manager.entry(&session_id)?;
-    synchronize(&entry, document, saved).await
+    synchronize(&entry, document.clone(), saved).await?;
+    manager.mirror(&entry, &document).await;
+    Ok(())
 }
 async fn synchronize(entry: &Entry, document: LiveLanguageDocument, saved: bool) -> AppResult<()> {
     if document.text.len() as u64 > crate::editor::MAX_TEXT || document.version < 1 {
@@ -366,6 +449,7 @@ async fn synchronize(entry: &Entry, document: LiveLanguageDocument, saved: bool)
                 .await?;
         }
     } else {
+        entry.session.close_mirrored_document(&uri).await?;
         method = "textDocument/didOpen";
         params = json!({"textDocument":{"uri":uri,"languageId":document.language_id,"version":document.version,"text":document.text}});
         if open_close(&entry.session.capability_data()) {
@@ -478,6 +562,10 @@ async fn query(
             | "textDocument/semanticTokens/full"
             | "textDocument/diagnostic"
             | "textDocument/formatting"
+            | "textDocument/rangeFormatting"
+            | "textDocument/linkedEditingRange"
+            | "textDocument/documentColor"
+            | "textDocument/colorPresentation"
             | "textDocument/prepareRename"
             | "textDocument/rename"
             | "textDocument/codeAction"
@@ -534,10 +622,22 @@ pub async fn live_language_close(
     session_id: String,
     path: String,
 ) -> AppResult<()> {
+    let _gate = manager.1.lock().await;
     let entry = manager.entry(&session_id)?;
     let mut documents = entry.documents.lock().await;
     if documents.remove(&path).is_some() && open_close(&entry.session.capability_data()) {
         entry.session.send(&json!({"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":uri(&entry,&path)?}}})).await?;
+    }
+    let unused = documents.is_empty();
+    drop(documents);
+    let uri = uri(&entry, &path)?;
+    for peer in manager.peers(&entry.root, &entry.id) {
+        let _ = peer.session.close_mirrored_document(&uri).await;
+    }
+    if unused {
+        let mut entries = manager.0.lock().unwrap_or_else(|e| e.into_inner());
+        entries.retain(|_, e| e.id != session_id);
+        entry.session.stop();
     }
     Ok(())
 }
@@ -760,3 +860,6 @@ impl LiveLanguages {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod extension_tests;

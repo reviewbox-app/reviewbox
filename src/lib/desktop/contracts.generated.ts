@@ -895,6 +895,28 @@ export type AppearancePreferences = {
   codeFontFamily: string
   codeFontWeight: number
 }
+export type EditorExtensionId =
+  | "autoRenameTag"
+  | "autoImport"
+  | "npmIntellisense"
+  | "pathIntellisense"
+  | "colorHighlight"
+  | "prettier"
+  | "prisma"
+  | "shaders"
+  | "tailwind"
+  | "vue"
+  | "bracketColorization"
+export type EditorExtensionPreferences = {
+  revision: number
+  prettierOnSave: boolean
+  enabled: { [key in EditorExtensionId]?: boolean }
+}
+export type EditorPathSuggestion = {
+  label: string
+  directory: boolean
+  package: boolean
+}
 export type LanguageSide = "before" | "after"
 export type LanguageDocument = {
   snapshotId: string

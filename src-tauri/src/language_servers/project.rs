@@ -139,6 +139,41 @@ fn read_configuration(path: &Path) -> Option<Vec<u8>> {
     }
     fs::read(path).ok()
 }
+fn configuration_fingerprint(path: &Path) -> Option<String> {
+    if let Some(content) = read_configuration(path) {
+        return Some(fingerprint(&content));
+    }
+    // Monorepo lockfiles can exceed the bounded configuration reader. Track
+    // their metadata rather than silently retaining sessions after an install.
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    Some(fingerprint(
+        format!("{}:{:?}", metadata.len(), metadata.modified().ok()).as_bytes(),
+    ))
+}
+pub(super) fn uses_vue(checkout: &Path, path: &str) -> bool {
+    let Ok(file) = crate::editor::path(checkout, path) else {
+        return false;
+    };
+    file.ancestors()
+        .skip(1)
+        .take_while(|p| p.starts_with(checkout))
+        .any(|directory| {
+            read_configuration(&directory.join("package.json"))
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|package| {
+                    ["dependencies", "devDependencies", "peerDependencies"]
+                        .iter()
+                        .any(|section| {
+                            ["vue", "nuxt", "@vue/runtime-dom"]
+                                .iter()
+                                .any(|name| package[section].get(name).is_some())
+                        })
+                })
+        })
+}
 fn cargo_workspace(path: &Path) -> bool {
     read_configuration(&path.join("Cargo.toml"))
         .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -233,6 +268,9 @@ fn resolve_inner(
         .map(|s| s.settings.clone())
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
+    if server == "prisma" && settings["prisma"].is_null() {
+        settings["prisma"] = json!({"enableDiagnostics":true});
+    }
     merge(&mut settings, &local.settings);
     // Omitted initializationOptions retains the historical pack behavior.
     let mut environment = local.environment.clone();
@@ -292,22 +330,66 @@ fn resolve_inner(
             if let Ok(relative) = candidate.strip_prefix(checkout) {
                 configuration_paths.push(relative.to_string_lossy().replace('\\', "/"));
             }
-            if let Some(content) = read_configuration(&candidate)
+            if let Some(version) = configuration_fingerprint(&candidate)
                 && let Ok(relative) = candidate.strip_prefix(checkout)
             {
                 let relative = relative.to_string_lossy().replace('\\', "/");
                 configuration_files.push(relative.clone());
-                versions.push((relative, fingerprint(&content)));
+                versions.push((relative, version));
             }
         }
     }
     configuration_files.sort();
     configuration_files.dedup();
-    let initialization_options = local
+    let mut initialization_options = local
         .initialization_options
         .clone()
         .or_else(|| server_config.and_then(|s| s.initialization_options.clone()))
         .unwrap_or_else(|| settings.clone());
+    if matches!(server, "typescript" | "vue") {
+        let private = catalog::installed(storage, server)?
+            .and_then(|r| r.directory)
+            .map(|p| p.join("node_modules/typescript/lib"));
+        let sdk = ancestors
+            .iter()
+            .map(|p| p.join("node_modules/typescript/lib"))
+            .find(|p| p.join("tsserver.js").is_file())
+            .or(private);
+        let mut defaults = json!({"hostInfo":"ReviewBox", "preferences":{"includeCompletionsForModuleExports":true,"includeCompletionsForImportStatements":true,"allowIncompleteCompletions":true}});
+        if let Some(sdk) = sdk {
+            defaults["tsserver"] = json!({"path":sdk.join("tsserver.js")});
+            defaults["typescript"] = json!({"tsdk":sdk});
+        }
+        if server == "typescript"
+            && crate::editor_extensions::enabled(storage, EditorExtensionId::Vue)?
+            && let Some(modules) = catalog::installed(storage, "vue")?
+                .and_then(|r| r.directory)
+                .map(|p| p.join("node_modules"))
+        {
+            defaults["plugins"] = json!([{"name":"@vue/typescript-plugin","location":modules.join("@vue/typescript-plugin"),"languages":["vue"],"configNamespace":"typescript"}]);
+        }
+        merge(&mut defaults, &initialization_options);
+        defaults["disableAutomaticTypingAcquisition"] = json!(true);
+        initialization_options = defaults;
+        for directory in &ancestors {
+            for name in [
+                "package.json",
+                "bun.lock",
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "yarn.lock",
+                "node_modules/typescript/package.json",
+            ] {
+                let path = directory.join(name);
+                if let Ok(relative) = path.strip_prefix(checkout) {
+                    configuration_paths.push(relative.to_string_lossy().replace('\\', "/"));
+                    if let Some(version) = configuration_fingerprint(&path) {
+                        versions.push((relative.to_string_lossy().to_string(), version));
+                    }
+                }
+            }
+        }
+    }
     let signature = fingerprint(&serde_json::to_vec(&(
         &root,
         &settings,
@@ -352,6 +434,20 @@ fn resolve_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_dependency_lockfiles_invalidate_the_project_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().join("private")).unwrap();
+        let root = temp.path().join("repo");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("package.json"), "{}").unwrap();
+        let file = fs::File::create(root.join("pnpm-lock.yaml")).unwrap();
+        file.set_len(3 * 1024 * 1024).unwrap();
+        let before = resolve(&storage, &root, "main.ts", "typescript").unwrap();
+        file.set_len(3 * 1024 * 1024 + 1).unwrap();
+        let after = resolve(&storage, &root, "main.ts", "typescript").unwrap();
+        assert_ne!(before.context.signature, after.context.signature);
+    }
     #[test]
     fn cargo_workspace_python_environment_and_clang_build_database_are_discovered() {
         let temp = tempfile::tempdir().unwrap();

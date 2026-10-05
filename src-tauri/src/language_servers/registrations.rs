@@ -13,6 +13,9 @@ pub(super) fn provider(method: &str) -> Option<&'static str> {
         "textDocument/documentSymbol" => "documentSymbolProvider",
         "workspace/symbol" => "workspaceSymbolProvider",
         "textDocument/formatting" => "documentFormattingProvider",
+        "textDocument/rangeFormatting" => "documentRangeFormattingProvider",
+        "textDocument/linkedEditingRange" => "linkedEditingRangeProvider",
+        "textDocument/documentColor" => "colorProvider",
         "textDocument/rename" => "renameProvider",
         "textDocument/codeAction" => "codeActionProvider",
         "textDocument/semanticTokens" => "semanticTokensProvider",
@@ -26,6 +29,7 @@ pub(super) fn registration_method(method: &str) -> &str {
         "textDocument/prepareRename" => "textDocument/rename",
         "completionItem/resolve" => "textDocument/completion",
         "codeAction/resolve" => "textDocument/codeAction",
+        "textDocument/colorPresentation" => "textDocument/documentColor",
         other => other,
     }
 }

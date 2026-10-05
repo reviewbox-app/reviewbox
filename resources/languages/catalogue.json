@@ -25,23 +25,22 @@
   {
     "id": "vue",
     "name": "Vue",
-    "description": "Vue 3 support using the standalone compatible language engine and private TypeScript SDK.",
+    "description": "Vue components and typed templates, coordinated with the official TypeScript plugin.",
     "languages": ["vue"],
-    "version": "2.2.12",
+    "version": "3.3.12",
     "method": "npm",
     "package": "@vue/language-server",
     "packages": {
-      "@vue/language-server": "2.2.12",
+      "@vue/language-server": "3.3.12",
+      "@vue/typescript-plugin": "3.3.12",
+      "typescript-language-server": "6.0.1",
       "typescript": "5.9.3"
     },
     "bin": "vue-language-server",
     "arguments": ["--stdio"],
     "sourceUrl": "https://www.npmjs.com/package/@vue/language-server",
     "runtime": "Node.js (private)",
-    "prerequisites": [],
-    "overrides": {
-      "@emmetio/css-parser": "0.4.1"
-    }
+    "prerequisites": []
   },
   {
     "id": "svelte",
@@ -331,5 +330,58 @@
     "sourceUrl": "https://github.com/swiftlang/sourcekit-lsp",
     "runtime": "Installed Swift toolchain",
     "prerequisites": ["Xcode or Swift toolchain"]
+  },
+  {
+    "id": "tailwind",
+    "name": "Tailwind CSS",
+    "description": "Tailwind 3 and 4 classes, variants, diagnostics and colors.",
+    "languages": [
+      "html",
+      "typescriptreact",
+      "javascriptreact",
+      "vue",
+      "svelte",
+      "css"
+    ],
+    "version": "0.16.0",
+    "package": "@tailwindcss/language-server",
+    "bin": "tailwindcss-language-server",
+    "sourceUrl": "https://github.com/tailwindlabs/tailwindcss-intellisense",
+    "method": "npm",
+    "packages": {
+      "@tailwindcss/language-server": "0.16.0"
+    },
+    "arguments": ["--stdio"],
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "prettier",
+    "name": "Prettier",
+    "description": "Project-aware document and selection formatting.",
+    "languages": [],
+    "version": "3.9.6",
+    "package": "prettier",
+    "bin": "prettier",
+    "sourceUrl": "https://prettier.io/docs/api",
+    "method": "npm",
+    "packages": {
+      "prettier": "3.9.6"
+    },
+    "arguments": [],
+    "runtime": "Node.js (private)",
+    "prerequisites": []
+  },
+  {
+    "id": "slang",
+    "name": "HLSL / Slang",
+    "description": "Shader language assistance from the official Slang engine.",
+    "languages": ["hlsl", "slang"],
+    "version": "2026.19",
+    "method": "native",
+    "arguments": [],
+    "sourceUrl": "https://github.com/shader-slang/slang",
+    "runtime": null,
+    "prerequisites": []
   }
 ]

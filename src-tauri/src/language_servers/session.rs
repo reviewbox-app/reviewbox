@@ -15,7 +15,8 @@ use tokio::{
     sync::{Mutex as AsyncMutex, oneshot},
 };
 
-const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
+// Tailwind 4 sends its complete class catalogue in one bounded completion response.
+const RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 type NotificationHandler = Arc<dyn Fn(&Value) + Send + Sync>;
 struct Pending {
@@ -24,6 +25,8 @@ struct Pending {
 }
 
 pub(super) struct Session {
+    pub(super) vue_typescript: Mutex<Option<Arc<Session>>>,
+    pub(super) mirrored_documents: AsyncMutex<BTreeMap<String, i32>>,
     pub server: LanguageServerConfig,
     pub workspace: Workspace,
     input: AsyncMutex<tokio::process::ChildStdin>,
@@ -88,6 +91,8 @@ impl Session {
             AppError::new("process", "The language server output is unavailable.")
         })?;
         let session = Arc::new(Self {
+            vue_typescript: Mutex::new(None),
+            mirrored_documents: AsyncMutex::new(BTreeMap::new()),
             server,
             workspace,
             input: AsyncMutex::new(input),
@@ -117,7 +122,34 @@ impl Session {
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::Acquire)
     }
-    pub(super) fn set_capabilities(&self, value: Value) {
+    pub(super) fn set_capabilities(&self, mut value: Value) {
+        if self.server.id == "vue"
+            && let Some(ts) = self
+                .vue_typescript
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+        {
+            for (key, capability) in ts.capability_data().as_object().into_iter().flatten() {
+                // Only advertise capabilities that the dedicated adapter routes.
+                // Syntax, semantic tokens and formatting remain owned by Vue.
+                if (value[key].is_null() || value[key] == false)
+                    && matches!(
+                        key.as_str(),
+                        "completionProvider"
+                            | "hoverProvider"
+                            | "signatureHelpProvider"
+                            | "definitionProvider"
+                            | "referencesProvider"
+                            | "renameProvider"
+                            | "codeActionProvider"
+                            | "linkedEditingRangeProvider"
+                    )
+                {
+                    value[key] = capability.clone();
+                }
+            }
+        }
         *self
             .static_capabilities
             .lock()
@@ -237,7 +269,7 @@ impl Session {
             notify();
         }
     }
-    fn configuration(&self) -> Value {
+    pub(super) fn configuration(&self) -> Value {
         if self.workspace.live {
             return self
                 .live_settings
@@ -263,6 +295,14 @@ impl Session {
             .as_ref()
         {
             notify(&json!({"method":"reviewbox/stopped","params":{}}));
+        }
+        if let Some(ts) = self
+            .vue_typescript
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            ts.stop();
         }
         self.group.terminate();
         let pending = std::mem::take(
@@ -290,6 +330,28 @@ impl Session {
         }
     }
     pub(super) async fn send(&self, message: &Value) -> AppResult<()> {
+        if matches!(
+            message["method"].as_str(),
+            Some(
+                "textDocument/didOpen"
+                    | "textDocument/didChange"
+                    | "textDocument/didClose"
+                    | "textDocument/didSave"
+                    | "workspace/didChangeWatchedFiles"
+            )
+        ) {
+            let ts = self
+                .vue_typescript
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(ts) = ts {
+                ts.send_raw(message).await?;
+            }
+        }
+        self.send_raw(message).await
+    }
+    pub(super) async fn send_raw(&self, message: &Value) -> AppResult<()> {
         if self.is_stopped() {
             return Err(AppError::new(
                 "language_session_closed",
@@ -322,6 +384,18 @@ impl Session {
             })?
     }
     pub(super) async fn rpc(
+        &self,
+        label: &str,
+        method: &str,
+        params: Value,
+        cancelled: Option<&AtomicBool>,
+    ) -> AppResult<Value> {
+        if self.server.id == "vue" && super::vue::routed_method(method) {
+            return self.vue_rpc(label, method, params, cancelled).await;
+        }
+        self.rpc_raw(label, method, params, cancelled).await
+    }
+    pub(super) async fn rpc_raw(
         &self,
         label: &str,
         method: &str,
@@ -383,6 +457,14 @@ impl Session {
         }
     }
     pub fn cancel(self: &Arc<Self>, label: &str) {
+        if let Some(ts) = self
+            .vue_typescript
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            ts.cancel(label);
+        }
         let mut pending = self
             .pending
             .lock()
@@ -409,7 +491,10 @@ impl Session {
             });
         }
     }
-    pub async fn initialize(&self) -> AppResult<()> {
+    pub async fn initialize(self: &Arc<Self>) -> AppResult<()> {
+        if self.server.id == "vue" {
+            self.initialize_vue().await?;
+        }
         if self.workspace.live {
             return self.initialize_live().await;
         }
@@ -422,17 +507,6 @@ impl Session {
         if self.server.id == "go" {
             options["semanticTokens"] = json!(true);
             options["env"] = json!({"GOPROXY":"off", "GOSUMDB":"off"});
-        }
-        if self.server.id == "vue" {
-            let tsdk = self.server.arguments.iter().find_map(|argument| {
-                std::path::Path::new(argument).ancestors().find_map(|parent| {
-                    let tsdk = parent.join("typescript/lib");
-                    (parent.file_name().is_some_and(|name| name == "node_modules")
-                        && tsdk.join("typescript.js").is_file()).then_some(tsdk)
-                })
-            }).ok_or_else(|| AppError::new("missing_language_prerequisite", "Vue requires its private TypeScript SDK. Reinstall the Vue language server."))?;
-            options["typescript"] = json!({"tsdk": tsdk, "disableAutoImportCache": true});
-            options["vue"] = json!({"hybridMode": false});
         }
         if self.server.id == "kotlin" {
             // The empty build-tool selector is the upstream "none" mode. In
@@ -728,6 +802,10 @@ async fn read_messages(weak: Weak<Session>, output: tokio::process::ChildStdout)
             return;
         }
         if let Some(method) = message["method"].as_str() {
+            if method == "tsserver/request" && session.server.id == "vue" {
+                session.bridge_vue(&message["params"]);
+                continue;
+            }
             if message.get("id").is_none() {
                 if let Some(notify) = session
                     .notifications
@@ -794,11 +872,9 @@ async fn read_messages(weak: Weak<Session>, output: tokio::process::ChildStdout)
                                 item["id"]
                                     .as_str()
                                     .is_none_or(|s| s.is_empty() || s.len() > 256)
-                                    || item["method"].as_str().is_none_or(|m| {
-                                        !super::registrations::supported(m)
-                                            || (!session.workspace.live
-                                                && m != "textDocument/semanticTokens")
-                                    })
+                                    || item["method"]
+                                        .as_str()
+                                        .is_none_or(|m| !super::registrations::supported(m))
                             })
                     }) {
                         json!({"error":{"code":-32602,"message":"Unsupported language registration."}})

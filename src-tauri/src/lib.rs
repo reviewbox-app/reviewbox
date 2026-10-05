@@ -5,6 +5,7 @@ mod commands;
 pub mod contracts;
 mod diagnostics;
 mod editor;
+mod editor_extensions;
 mod illustrations;
 mod integrations;
 mod knowledge;
@@ -229,6 +230,12 @@ pub fn run() {
             appearance::appearance_settings,
             appearance::configure_appearance,
             appearance::system_code_fonts,
+            editor_extensions::editor_extension_settings,
+            editor_extensions::set_prettier_on_save,
+            editor_extensions::set_editor_extension,
+            editor_extensions::ensure_editor_engine,
+            editor_extensions::formatting::format_editor_document,
+            editor_extensions::completions::complete_editor_paths,
             illustrations::register_illustration,
             illustrations::release_illustration,
             commands::list_repositories,
