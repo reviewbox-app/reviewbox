@@ -20,6 +20,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+fontdb = "=0.24.0"
 grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"

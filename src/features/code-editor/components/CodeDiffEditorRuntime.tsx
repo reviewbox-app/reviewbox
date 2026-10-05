@@ -6,7 +6,7 @@ import * as monaco from "monaco-editor/editor/editor.api"
 import { useEffect, useLayoutEffect, useRef } from "react"
 import styles from "./editor-surface.module.css"
 import { useTheme } from "next-themes"
-import { useCodeTheme } from "@/lib/code/codeAppearance"
+import { useCodeTheme, codeEditorOptions } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
 
@@ -80,6 +80,7 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
           theme={theme}
           options={{
             ...props.options,
+            ...codeEditorOptions(),
             // The viewport starts below the glass bars, so sticky-scroll and
             // reveal/find calculations share the same visible upper boundary.
             padding: {

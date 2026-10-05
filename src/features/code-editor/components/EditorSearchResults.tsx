@@ -88,7 +88,7 @@ export function EditorSearchResults({
                     aria-label={`${path}:${match.line}:${match.column} ${match.preview}`}
                     title={match.preview}
                     onClick={() => onSelect(match)}
-                    className="flex w-full gap-2 overflow-hidden rounded-xl py-1 pr-2 pl-6 text-left font-mono text-xs hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
+                    className="code-font flex w-full gap-2 overflow-hidden rounded-xl py-1 pr-2 pl-6 text-left text-xs hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <span className="shrink-0 text-muted-foreground">
                       {match.line}

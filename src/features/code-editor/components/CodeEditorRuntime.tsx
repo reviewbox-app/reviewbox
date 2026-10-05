@@ -4,7 +4,7 @@ import Editor from "@monaco-editor/react"
 import { useEffect } from "react"
 import styles from "./editor-surface.module.css"
 import { useTheme } from "next-themes"
-import { useCodeTheme } from "@/lib/code/codeAppearance"
+import { useCodeTheme, codeEditorOptions } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
 
@@ -38,6 +38,7 @@ export function CodeEditorRuntime(props: CodeEditorProps) {
           theme={theme}
           options={{
             ...props.options,
+            ...codeEditorOptions(),
             // The viewport starts below the glass bars, so sticky-scroll and
             // reveal/find calculations share the same visible upper boundary.
             padding: {

@@ -889,32 +889,12 @@ export type LanguageServerConfig = {
   arguments: Array<string>
 }
 export type CodeTheme = "tokyo-night" | "reviewbox"
-export type IconClone = {
-  name: string
-  base: string
-  color: string | null
-  lightColor: string | null
-  fileNames: Array<string>
-  fileExtensions: Array<string>
-  folderNames: Array<string>
-  rootFolderNames: Array<string>
-  activeForPacks: Array<string>
-}
-export type FileIconPreferences = {
-  activeIconPack: string
-  fileAssociations: { [key in string]: string }
-  folderAssociations: { [key in string]: string }
-  fileClones: Array<IconClone>
-  folderClones: Array<IconClone>
-}
 export type AppearancePreferences = {
   revision: number
   codeTheme: CodeTheme
-  fileIcons: FileIconPreferences
-  importedProfile: string | null
-  importWarnings: Array<string>
+  codeFontFamily: string
+  codeFontWeight: number
 }
-export type EditorProfile = { id: string; name: string }
 export type LanguageSide = "before" | "after"
 export type LanguageDocument = {
   snapshotId: string

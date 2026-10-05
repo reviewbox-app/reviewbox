@@ -10,7 +10,7 @@ import {
 import * as monaco from "monaco-editor/editor/editor.api"
 import type { editor } from "monaco-editor"
 import { useTheme } from "next-themes"
-import { useCodeTheme } from "@/lib/code/codeAppearance"
+import { useCodeTheme, codeEditorOptions } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
 import type {
@@ -121,7 +121,7 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
       model: after,
       theme,
       readOnly: true,
-      fontFamily: "var(--font-mono)",
+      ...codeEditorOptions(),
       fontSize: 12,
       lineHeight: 20,
       fontLigatures: false,
@@ -141,6 +141,7 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
       ariaLabel: "Current file",
     })
     const diff = monaco.editor.createDiffEditor(engineHost.current, {
+      ...codeEditorOptions(),
       readOnly: true,
       ignoreTrimWhitespace: initial.trimWhitespace,
       renderSideBySide: true,

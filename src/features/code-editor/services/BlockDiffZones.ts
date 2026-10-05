@@ -1,5 +1,6 @@
 import * as monaco from "monaco-editor/editor/editor.api"
 import type { editor, IDisposable } from "monaco-editor"
+import { codeEditorOptions } from "@/lib/code/codeAppearance"
 import type {
   BlockDiffModels,
   CodeBlock,
@@ -284,7 +285,7 @@ export class BlockDiffZones {
         model: this.models[side],
         theme: this.theme,
         readOnly: true,
-        fontFamily: "var(--font-mono)",
+        ...codeEditorOptions(),
         fontSize: 12,
         lineHeight: 20,
         fontLigatures: false,

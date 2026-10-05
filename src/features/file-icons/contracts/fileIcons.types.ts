@@ -1,4 +1,5 @@
 import type { Manifest } from "material-icon-theme"
+import bundledIcons from "../../../../resources/appearance/file-icons.json"
 
 export interface IconClone {
   name: string
@@ -31,9 +32,6 @@ export interface ResolvedFileIcon {
 }
 
 export const defaultFileIconPreferences: FileIconPreferences = {
-  activeIconPack: "default",
-  fileAssociations: {},
-  folderAssociations: {},
-  fileClones: [],
-  folderClones: [],
+  ...bundledIcons,
+  activeIconPack: "nest",
 }
