@@ -1,4 +1,6 @@
 "use client"
+import { useEditorExtensions } from "@/features/editor-extensions/services/extensions.store"
+import { useEditorEngineStatus } from "@/features/editor-extensions/services/engines"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -51,6 +53,8 @@ import type {
 
 export function ReviewBoxApp() {
   useAppearancePreferences()
+  useEditorExtensions()
+  useEditorEngineStatus()
   const session = useReviewSession()
   const rev = useRevStatus()
   const {

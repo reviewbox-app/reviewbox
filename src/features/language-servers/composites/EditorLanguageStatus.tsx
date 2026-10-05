@@ -81,7 +81,9 @@ export function EditorLanguageStatus({
       .then((catalogue) => {
         if (alive)
           setServers(
-            catalogue.entries.filter((e) => e.languages.includes(lspId))
+            catalogue.entries.filter(
+              (e) => e.id !== "tailwind" && e.languages.includes(lspId)
+            )
           )
       })
       .catch((e) => {

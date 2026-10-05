@@ -81,6 +81,7 @@
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
     "@vscode/vscode-languagedetection": "1.0.23",
+    "@xml-tools/parser": "1.0.11",
     "chroma-js": "3.2.0",
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",

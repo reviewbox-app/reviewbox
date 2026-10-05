@@ -118,7 +118,7 @@ export function LanguagePacksPanel() {
           />
           <textarea
             aria-label="Language pack JSON"
-            className="h-72 w-full rounded-xl bg-muted p-3 font-mono text-xs"
+            className="code-font h-72 w-full rounded-xl bg-muted p-3 text-xs"
             value={text}
             onChange={(e) => setText(e.target.value)}
           />

@@ -148,8 +148,8 @@ export function LanguageServerSettingsPanel() {
         </p>
       )}
       <p className="text-xs text-muted-foreground">
-        Tools are installed only when requested, in ReviewBox’s private data.
-        Missing dependencies may limit analysis; code reading stays available.
+        Built-in tools download when first needed; additional language packs
+        install on request. Tools stay in ReviewBox’s private data.
       </p>
     </section>
   )

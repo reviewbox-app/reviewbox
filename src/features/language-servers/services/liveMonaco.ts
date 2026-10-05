@@ -7,6 +7,7 @@ import type {
   LiveLanguageSession,
 } from "@/lib/desktop/contracts.generated"
 import { resolveLanguageId } from "@/lib/code/languages"
+import { refreshLinkedEditing } from "@/lib/code/codeAppearance"
 import { errorMessage } from "@/lib/desktop/review.commands"
 import {
   dirty,
@@ -24,7 +25,38 @@ import { replaceText } from "../helpers/lspEdits"
 import { editorCommands } from "@/features/code-editor/services/editor.commands"
 import { liveCommands } from "./liveLanguage.commands"
 
+import {
+  extensionEnabled,
+  useExtensionsStore,
+  loadExtensions,
+} from "@/features/editor-extensions/services/extensions.store"
+import {
+  defaultEngine,
+  engineEnabled,
+  ensureEngine,
+  useEditorEngines,
+  invalidateEngine,
+} from "@/features/editor-extensions/services/engines"
+import {
+  formatText,
+  formatModel,
+  prettierEnabled,
+} from "@/features/editor-extensions/services/formatting"
+import {
+  allowCompletion,
+  specifierContext,
+  pathSuggestions,
+} from "@/features/editor-extensions/services/completions"
+import { xmlLinkedRanges } from "@/features/editor-extensions/services/xmlLinkedEditing"
+import {
+  decorateColors,
+  modelColors,
+} from "@/features/editor-extensions/services/colors"
+
 interface Binding {
+  auxiliary?: "tailwind"
+  features?: { dispose(): void; refresh(): void }
+
   repository: string
   key: string
   model: M.editor.ITextModel
@@ -37,6 +69,8 @@ interface Binding {
   path: string
   language?: string
   stopped?: boolean
+  diagnostics?: L.Diagnostic[]
+  diagnosticSets?: Record<string, L.Diagnostic[]>
   diagnosticVersion?: number
   diagnosticRequest?: symbol
   semanticChanges?: M.Emitter<void>
@@ -68,6 +102,11 @@ export const useLiveLanguages = create<{
   capabilities: {},
   edits: null,
 }))
+const bindingId = (b: Binding) =>
+  b.model.uri.toString() + (b.auxiliary ? `::${b.auxiliary}` : "")
+const publishedKey = (b: Binding) =>
+  b.auxiliary ? `${b.key}:${b.auxiliary}` : b.key
+const markerOwner = (b: Binding) => `reviewbox-lsp-${b.auxiliary ?? "primary"}`
 const bindings = new Map<string, Binding>()
 const navigation = new Map<string, M.IRange | M.IPosition>()
 const targets = new Map<string, { repository: string; path: string }>()
@@ -93,6 +132,28 @@ function registerFor(
 }
 function refreshProviders(b: Binding) {
   const available = providerFactories.filter(({ capability }) => {
+    if (
+      b.auxiliary &&
+      ![
+        "completionProvider",
+        "hoverProvider",
+        "codeActionProvider",
+        "colorProvider",
+      ].includes(capability)
+    )
+      return false
+    if (
+      capability === "linkedEditingRangeProvider" &&
+      !extensionEnabled("autoRenameTag")
+    )
+      return false
+    if (capability === "colorProvider" && !extensionEnabled("colorHighlight"))
+      return false
+    if (
+      capability.includes("FormattingProvider") &&
+      prettierEnabled(b.model.getLanguageId())
+    )
+      return false
     const value = capabilityFor(b, capability)
     return (
       !b.stopped &&
@@ -102,9 +163,10 @@ function refreshProviders(b: Binding) {
         (value as L.SemanticTokensOptions).full)
     )
   })
-  const signature = JSON.stringify(
-    available.map((f) => [f.capability, capabilityFor(b, f.capability)])
-  )
+  const signature = JSON.stringify([
+    b.session?.id,
+    available.map((f) => [f.capability, capabilityFor(b, f.capability)]),
+  ])
   if (b.providers?.signature === signature) return
   b.providers?.disposables.forEach((p) => p.dispose())
   b.providers = {
@@ -117,10 +179,11 @@ function refreshProviders(b: Binding) {
       )
     ),
   }
+  refreshLinkedEditing(b.model)
 }
 const status = (b: Binding, value: string) =>
   useLiveLanguages.setState((s) => ({
-    status: { ...s.status, [b.key]: value },
+    status: { ...s.status, [publishedKey(b)]: value },
   }))
 const range = (r: L.Range): M.IRange => ({
   startLineNumber: r.start.line + 1,
@@ -153,7 +216,7 @@ function current(b: Binding) {
 function forgetPublishedSession(b: Binding) {
   useLiveLanguages.setState((state) => {
     const sessions = { ...state.sessions }
-    delete sessions[b.key]
+    delete sessions[publishedKey(b)]
     return { sessions }
   })
 }
@@ -167,9 +230,15 @@ function capabilityFor(b: Binding, name: string) {
       (file ? resolveLanguageId(bufferLanguage(b.repository, file)).lspId : "")
   )
 }
-function get(model: M.editor.ITextModel, capability: string) {
-  const b = bindings.get(model.uri.toString())
-  return b && capabilityFor(b, capability) ? b : undefined
+function get(
+  model: M.editor.ITextModel,
+  capability: string,
+  binding?: Binding
+) {
+  const b = binding ?? bindings.get(model.uri.toString())
+  return b && b.model === model && !b.stopped && capabilityFor(b, capability)
+    ? b
+    : undefined
 }
 async function sync(b: Binding, allowStart = true) {
   if (b.pending) {
@@ -179,6 +248,24 @@ async function sync(b: Binding, allowStart = true) {
   const file = current(b)
   if (!file || file.readOnly || b.stopped) return
   const language = resolveLanguageId(bufferLanguage(b.repository, file))
+  const engine =
+    b.auxiliary ??
+    (getEditor(b.repository)?.servers[language.lspId] ||
+      defaultEngine(language.lspId))
+  if (engine && !engineEnabled(engine)) return
+  if (
+    b.auxiliary &&
+    ![
+      "typescriptreact",
+      "javascriptreact",
+      "html",
+      "vue",
+      "svelte",
+      "css",
+      "scss",
+    ].includes(language.lspId)
+  )
+    return
   if (
     b.session &&
     b.path === file.path &&
@@ -187,14 +274,16 @@ async function sync(b: Binding, allowStart = true) {
     b.language === language.lspId
   )
     return
+  let synchronized = false
   const work = (async () => {
     if (
       b.session &&
       ((b.language && b.language !== language.lspId) ||
         (b.path && b.path !== file.path))
     ) {
-      await liveCommands.close(b.session.id, b.path)
+      const previousSession = b.session.id
       b.session = undefined
+      await liveCommands.close(previousSession, b.path)
       forgetPublishedSession(b)
       b.language = undefined
       b.version = 0
@@ -203,18 +292,41 @@ async function sync(b: Binding, allowStart = true) {
     if (!b.session) {
       if (!allowStart) return
       status(b, "Starting language support…")
+      await loadExtensions()
+      if (engine) await ensureEngine(engine)
+      if (
+        b.stopped ||
+        b.model.isDisposed() ||
+        (engine && !engineEnabled(engine))
+      )
+        return
       b.session = await liveCommands.open(
         b.repository,
         file.path,
         language.lspId,
-        getEditor(b.repository)?.servers[language.lspId] || undefined
+        b.auxiliary ??
+          (getEditor(b.repository)?.servers[language.lspId] || undefined)
       )
-      if (!current(b) || b.model.isDisposed()) return
+      if (
+        !current(b) ||
+        b.model.isDisposed() ||
+        b.stopped ||
+        (engine && !engineEnabled(engine))
+      ) {
+        const session = b.session
+        b.session = undefined
+        await liveCommands.close(session.id, file.path).catch(() => {})
+        return
+      }
       useLiveLanguages.setState((s) => ({
-        sessions: { ...s.sessions, [b.key]: b.session! },
-        capabilities: { ...s.capabilities, [b.key]: b.session!.capabilities },
+        sessions: { ...s.sessions, [publishedKey(b)]: b.session! },
+        capabilities: {
+          ...s.capabilities,
+          [publishedKey(b)]: b.session!.capabilities,
+        },
       }))
       refreshProviders(b)
+      b.features?.refresh()
     }
     if (b.path && b.path !== file.path) {
       await liveCommands.close(b.session.id, b.path)
@@ -249,6 +361,7 @@ async function sync(b: Binding, allowStart = true) {
     b.path = file.path
     b.version = file.version
     b.revision = file.revision
+    synchronized = true
     status(b, "Language support active")
     if (capabilityFor(b, "diagnosticProvider"))
       void pullDiagnostics(b).catch(() => {})
@@ -260,6 +373,15 @@ async function sync(b: Binding, allowStart = true) {
     .finally(() => {
       b.pending = undefined
       b.sendingVersion = undefined
+      const latest = current(b)
+      if (
+        synchronized &&
+        latest &&
+        !b.stopped &&
+        !b.model.isDisposed() &&
+        (latest.version !== b.version || latest.path !== b.path)
+      )
+        void sync(b).catch(() => {})
     })
   b.pending = work
   return work
@@ -489,12 +611,13 @@ function install(monaco: typeof M) {
       return true
     },
   })
-  registerFor("completionProvider", (selector, options) =>
+  registerFor("completionProvider", (selector, options, binding) =>
     monaco.languages.registerCompletionItemProvider(selector, {
       triggerCharacters: (options as L.CompletionOptions)?.triggerCharacters,
       async provideCompletionItems(model, p, context, token) {
-        const b = get(model, "completionProvider")
+        const b = get(model, "completionProvider", binding)
         if (!b) return
+        const version = model.getVersionId()
         const result = await request<
           L.CompletionItem[] | L.CompletionList | null
         >(
@@ -509,46 +632,80 @@ function install(monaco: typeof M) {
           },
           token
         )
-        const items = Array.isArray(result) ? result : (result?.items ?? [])
+        const contextAt = specifierContext(
+          model
+            .getValue()
+            .slice(
+              Math.max(0, model.getOffsetAt(p) - 1000),
+              model.getOffsetAt(p)
+            )
+        )
+        const items = (
+          Array.isArray(result) ? result : (result?.items ?? [])
+        ).filter((item) => b.auxiliary || allowCompletion(item, contextAt))
+        const fallbackItems = b.auxiliary
+          ? []
+          : await pathSuggestions(
+              monaco,
+              model,
+              p,
+              b.repository,
+              current(b)?.path ?? b.path,
+              items.map((i) => i.label)
+            ).catch(() => [])
+        if (
+          token.isCancellationRequested ||
+          model.isDisposed() ||
+          model.getVersionId() !== version ||
+          b.stopped
+        )
+          return
+
         const word = model.getWordUntilPosition(p)
         return {
           incomplete: !Array.isArray(result) && !!result?.isIncomplete,
-          suggestions: items.map((item) => {
-            const edit = item.textEdit
-            const fallback = {
-              startLineNumber: p.lineNumber,
-              endLineNumber: p.lineNumber,
-              startColumn: word.startColumn,
-              endColumn: word.endColumn,
-            }
-            return {
-              label: item.label,
-              kind: completionKind(monaco, item.kind),
-              insertText: edit?.newText ?? item.insertText ?? item.label,
-              range: edit
-                ? "range" in edit
-                  ? range(edit.range)
-                  : { insert: range(edit.insert), replace: range(edit.replace) }
-                : fallback,
-              detail: item.detail,
-              documentation: documentation(item.documentation),
-              sortText: item.sortText,
-              filterText: item.filterText,
-              preselect: item.preselect,
-              insertTextRules:
-                item.insertTextFormat === 2
-                  ? monaco.languages.CompletionItemInsertTextRule
-                      .InsertAsSnippet
-                  : undefined,
-              additionalTextEdits: item.additionalTextEdits?.map((e) => ({
-                range: range(e.range),
-                text: e.newText,
-              })),
-              lspItem: item,
-              version: current(b)?.version,
-              binding: b,
-            }
-          }),
+          suggestions: [
+            ...fallbackItems,
+            ...items.map((item) => {
+              const edit = item.textEdit
+              const fallback = {
+                startLineNumber: p.lineNumber,
+                endLineNumber: p.lineNumber,
+                startColumn: word.startColumn,
+                endColumn: word.endColumn,
+              }
+              return {
+                label: item.label,
+                kind: completionKind(monaco, item.kind),
+                insertText: edit?.newText ?? item.insertText ?? item.label,
+                range: edit
+                  ? "range" in edit
+                    ? range(edit.range)
+                    : {
+                        insert: range(edit.insert),
+                        replace: range(edit.replace),
+                      }
+                  : fallback,
+                detail: item.detail,
+                documentation: documentation(item.documentation),
+                sortText: item.sortText,
+                filterText: item.filterText,
+                preselect: item.preselect,
+                insertTextRules:
+                  item.insertTextFormat === 2
+                    ? monaco.languages.CompletionItemInsertTextRule
+                        .InsertAsSnippet
+                    : undefined,
+                additionalTextEdits: item.additionalTextEdits?.map((e) => ({
+                  range: range(e.range),
+                  text: e.newText,
+                })),
+                lspItem: item,
+                version: current(b)?.version,
+                binding: b,
+              }
+            }),
+          ],
         }
       },
       async resolveCompletionItem(item, token) {
@@ -577,7 +734,10 @@ function install(monaco: typeof M) {
               ...item,
               detail: result.detail,
               documentation: documentation(result.documentation),
-              additionalTextEdits: result.additionalTextEdits?.map((e) => ({
+              additionalTextEdits: (extensionEnabled("autoImport")
+                ? result.additionalTextEdits
+                : []
+              )?.map((e) => ({
                 range: range(e.range),
                 text: e.newText,
               })),
@@ -586,10 +746,10 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("hoverProvider", (selector) =>
+  registerFor("hoverProvider", (selector, _options, binding) =>
     monaco.languages.registerHoverProvider(selector, {
       async provideHover(model, p, token) {
-        const b = get(model, "hoverProvider")
+        const b = get(model, "hoverProvider", binding)
         if (!b) return
         const value = await request<L.Hover | null>(
           b,
@@ -612,10 +772,10 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("definitionProvider", (selector) =>
+  registerFor("definitionProvider", (selector, _options, binding) =>
     monaco.languages.registerDefinitionProvider(selector, {
       async provideDefinition(model, p, token) {
-        const b = get(model, "definitionProvider")
+        const b = get(model, "definitionProvider", binding)
         return b
           ? locations(
               b,
@@ -630,10 +790,10 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("referencesProvider", (selector) =>
+  registerFor("referencesProvider", (selector, _options, binding) =>
     monaco.languages.registerReferenceProvider(selector, {
       async provideReferences(model, p, context, token) {
-        const b = get(model, "referencesProvider")
+        const b = get(model, "referencesProvider", binding)
         return b
           ? locations(
               b,
@@ -648,14 +808,14 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("signatureHelpProvider", (selector, options) =>
+  registerFor("signatureHelpProvider", (selector, options, binding) =>
     monaco.languages.registerSignatureHelpProvider(selector, {
       signatureHelpTriggerCharacters: (options as L.SignatureHelpOptions)
         ?.triggerCharacters,
       signatureHelpRetriggerCharacters: (options as L.SignatureHelpOptions)
         ?.retriggerCharacters,
       async provideSignatureHelp(model, p, token, context) {
-        const b = get(model, "signatureHelpProvider")
+        const b = get(model, "signatureHelpProvider", binding)
         if (!b) return
         const value = await request<L.SignatureHelp | null>(
           b,
@@ -690,10 +850,10 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("documentSymbolProvider", (selector) =>
+  registerFor("documentSymbolProvider", (selector, _options, binding) =>
     monaco.languages.registerDocumentSymbolProvider(selector, {
       async provideDocumentSymbols(model, token) {
-        const b = get(model, "documentSymbolProvider")
+        const b = get(model, "documentSymbolProvider", binding)
         if (!b) return []
         const symbols = await request<
           L.DocumentSymbol[] | L.SymbolInformation[]
@@ -715,10 +875,10 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("documentFormattingProvider", (selector) =>
+  registerFor("documentFormattingProvider", (selector, _options, binding) =>
     monaco.languages.registerDocumentFormattingEditProvider(selector, {
       async provideDocumentFormattingEdits(model, options, token) {
-        const b = get(model, "documentFormattingProvider")
+        const b = get(model, "documentFormattingProvider", binding)
         if (!b) return []
         const edits = await request<L.TextEdit[]>(
           b,
@@ -732,10 +892,10 @@ function install(monaco: typeof M) {
       },
     })
   )
-  registerFor("renameProvider", (selector) =>
+  registerFor("renameProvider", (selector, _options, binding) =>
     monaco.languages.registerRenameProvider(selector, {
       async resolveRenameLocation(model, p, token) {
-        const b = get(model, "renameProvider")
+        const b = get(model, "renameProvider", binding)
         const options = (b ? capabilityFor(b, "renameProvider") : undefined) as
           L.RenameOptions | undefined
         if (b && options?.prepareProvider) {
@@ -776,7 +936,7 @@ function install(monaco: typeof M) {
         }
       },
       async provideRenameEdits(model, p, newName, token) {
-        const b = get(model, "renameProvider")
+        const b = get(model, "renameProvider", binding)
         if (!b)
           return {
             edits: [],
@@ -809,6 +969,8 @@ function install(monaco: typeof M) {
     ) => {
       const b = bindings.get(modelUri)
       if (!b) return
+      if (!extensionEnabled("autoImport") && /\bimport\b/i.test(action.title))
+        return
       if (current(b)?.version !== version) {
         status(b, "The file changed. Request code actions again.")
         return
@@ -829,18 +991,16 @@ function install(monaco: typeof M) {
     }
   )
   void applyAction
-  registerFor("codeActionProvider", (selector) =>
+  registerFor("codeActionProvider", (selector, _options, binding) =>
     monaco.languages.registerCodeActionProvider(selector, {
       async provideCodeActions(model, selected, context, token) {
-        const b = get(model, "codeActionProvider")
+        const b = get(model, "codeActionProvider", binding)
         if (!b) return { actions: [], dispose() {} }
-        const diagnostics = context.markers.map((m) => ({
-          range: lspRange(m),
-          message: m.message,
-          code: typeof m.code === "object" ? m.code.value : m.code,
-          source: m.source,
-          severity: m.severity === monaco.MarkerSeverity.Error ? 1 : 2,
-        }))
+        const diagnostics = (b.diagnostics ?? []).filter(
+          (d) =>
+            d.range.start.line <= selected.endLineNumber - 1 &&
+            d.range.end.line >= selected.startLineNumber - 1
+        )
         const actions = await request<(L.CodeAction | L.Command)[]>(
           b,
           "textDocument/codeAction",
@@ -854,24 +1014,120 @@ function install(monaco: typeof M) {
           token
         )
         return {
-          actions: (actions ?? []).map((action) => ({
-            title: action.title,
-            kind: "kind" in action ? action.kind : undefined,
-            isPreferred: "isPreferred" in action ? action.isPreferred : false,
-            disabled:
-              typeof action.command === "string" || action.command
-                ? "This action requires a server command that is not available in the editor."
-                : "disabled" in action
-                  ? action.disabled?.reason
-                  : undefined,
-            command: {
-              id: "reviewbox.previewCodeAction",
+          actions: (actions ?? [])
+            .filter(
+              (action) =>
+                extensionEnabled("autoImport") ||
+                (!("kind" in action && action.kind?.includes("import")) &&
+                  !/\b(add|import|missing)\b.*\bimport|\bimport\b/i.test(
+                    action.title
+                  ))
+            )
+            .map((action) => ({
               title: action.title,
-              arguments: [model.uri.toString(), action, current(b)?.version],
-            },
-          })),
+              kind: "kind" in action ? action.kind : undefined,
+              isPreferred: "isPreferred" in action ? action.isPreferred : false,
+              disabled:
+                typeof action.command === "string" || action.command
+                  ? "This action requires a server command that is not available in the editor."
+                  : "disabled" in action
+                    ? action.disabled?.reason
+                    : undefined,
+              command: {
+                id: "reviewbox.previewCodeAction",
+                title: action.title,
+                arguments: [bindingId(b), action, current(b)?.version],
+              },
+            })),
           dispose() {},
         }
+      },
+    })
+  )
+  registerFor(
+    "documentRangeFormattingProvider",
+    (selector, _options, binding) =>
+      monaco.languages.registerDocumentRangeFormattingEditProvider(selector, {
+        async provideDocumentRangeFormattingEdits(
+          model,
+          selected,
+          options,
+          token
+        ) {
+          const b = get(model, "documentRangeFormattingProvider", binding)
+          if (!b) return []
+          return (
+            (
+              await request<L.TextEdit[]>(
+                b,
+                "textDocument/rangeFormatting",
+                { range: lspRange(selected), options },
+                token
+              )
+            )?.map((e) => ({ range: range(e.range), text: e.newText })) ?? []
+          )
+        },
+      })
+  )
+  registerFor("linkedEditingRangeProvider", (selector, _options, binding) =>
+    monaco.languages.registerLinkedEditingRangeProvider(selector, {
+      async provideLinkedEditingRanges(model, p, token) {
+        const b = get(model, "linkedEditingRangeProvider", binding)
+        if (!b || !extensionEnabled("autoRenameTag")) return
+        const result = await request<L.LinkedEditingRanges>(
+          b,
+          "textDocument/linkedEditingRange",
+          { position: position(p) },
+          token
+        )
+        if (!result || !extensionEnabled("autoRenameTag")) return
+        return {
+          ranges: result.ranges.map(range),
+          wordPattern: result.wordPattern
+            ? new RegExp(result.wordPattern)
+            : undefined,
+        }
+      },
+    })
+  )
+  registerFor("colorProvider", (selector, _options, binding) =>
+    monaco.languages.registerColorProvider(selector, {
+      async provideDocumentColors(model, token) {
+        const b = get(model, "colorProvider", binding)
+        if (!b || !extensionEnabled("colorHighlight")) return []
+        return (
+          (
+            await request<L.ColorInformation[]>(
+              b,
+              "textDocument/documentColor",
+              {},
+              token
+            )
+          )?.map((c) => ({ range: range(c.range), color: c.color })) ?? []
+        )
+      },
+      async provideColorPresentations(model, info, token) {
+        const b = get(model, "colorProvider", binding)
+        if (!b || !extensionEnabled("colorHighlight")) return []
+        return (
+          (
+            await request<L.ColorPresentation[]>(
+              b,
+              "textDocument/colorPresentation",
+              { range: lspRange(info.range), color: info.color },
+              token
+            )
+          )?.map((c) => ({
+            label: c.label,
+            textEdit: c.textEdit
+              ? { range: range(c.textEdit.range), text: c.textEdit.newText }
+              : undefined,
+            additionalTextEdits: c.additionalTextEdits?.map((e) => ({
+              range: range(e.range),
+              text: e.newText,
+            })),
+          })) ?? []
+        )
       },
     })
   )
@@ -923,7 +1179,7 @@ function install(monaco: typeof M) {
         getLegend: () => ({ tokenTypes, tokenModifiers }),
         releaseDocumentSemanticTokens() {},
         async provideDocumentSemanticTokens(model, _last, token) {
-          const b = get(model, "semanticTokensProvider")
+          const b = get(model, "semanticTokensProvider", binding)
           if (!b) return null
           const capabilities = capabilityFor(
             b,
@@ -969,12 +1225,15 @@ export function bindLiveEditor(
   monaco: typeof M,
   model: M.editor.ITextModel,
   repository: string,
-  buffer: EditorBuffer
+  buffer: EditorBuffer,
+  auxiliary?: "tailwind"
 ) {
   install(monaco)
-  let b = bindings.get(model.uri.toString())
+  const id = model.uri.toString() + (auxiliary ? `::${auxiliary}` : "")
+  let b = bindings.get(id)
   if (!b) {
     b = {
+      auxiliary,
       repository,
       key: buffer.id,
       model,
@@ -983,7 +1242,9 @@ export function bindLiveEditor(
       revision: "",
       path: "",
     }
-    bindings.set(model.uri.toString(), b)
+    bindings.set(id, b)
+    if (!auxiliary && typeof document !== "undefined")
+      b.features = bindFeatures(b)
     const binding = b
     binding.modelListener = model.onDidChangeContent((event) => {
       if (!binding.session || binding.stopped) {
@@ -1005,6 +1266,17 @@ export function bindLiveEditor(
     })
   }
   if (!buffer.readOnly) void sync(b).catch(() => {})
+  if (!auxiliary && !buffer.readOnly) {
+    if (prettierEnabled(model.getLanguageId()))
+      void ensureEngine("prettier").catch(() => {})
+    if (
+      extensionEnabled("tailwind") &&
+      ["tsx", "jsx", "html", "vue", "svelte", "css", "scss"].includes(
+        model.getLanguageId()
+      )
+    )
+      bindLiveEditor(monaco, model, repository, buffer, "tailwind")
+  }
   for (const other of getEditor(repository)?.buffers ?? []) {
     const uri = monaco.Uri.parse(`reviewbox-editor://${repository}/${other.id}`)
     if (bindings.has(uri.toString())) continue
@@ -1035,7 +1307,7 @@ export function bindLiveEditor(
             useLiveLanguages.setState((s) => ({
               capabilities: {
                 ...s.capabilities,
-                [b.key]: b.session!.capabilities,
+                [publishedKey(b)]: b.session!.capabilities,
               },
             }))
           } else if (event.payload.method === "reviewbox/stopped") {
@@ -1044,10 +1316,12 @@ export function bindLiveEditor(
             b.diagnosticVersion = undefined
             b.session!.capabilities = {}
             refreshProviders(b)
-            b.monaco.editor.setModelMarkers(b.model, "reviewbox-lsp", [])
+            b.diagnostics = []
+            b.diagnosticSets = {}
+            b.monaco.editor.setModelMarkers(b.model, markerOwner(b), [])
             status(b, "Language server stopped. Restart to reconnect.")
             useLiveLanguages.setState((s) => ({
-              capabilities: { ...s.capabilities, [b.key]: {} },
+              capabilities: { ...s.capabilities, [publishedKey(b)]: {} },
             }))
           } else if (event.payload.method === "workspace/diagnostic/refresh") {
             b.diagnosticVersion = undefined
@@ -1064,14 +1338,20 @@ export function bindLiveEditor(
           } else if (
             event.payload.method === "textDocument/publishDiagnostics"
           ) {
-            const data = event.payload.params as L.PublishDiagnosticsParams
+            const data = event.payload.params as L.PublishDiagnosticsParams & {
+              reviewboxEngine?: string
+            }
             const file = current(b)
             if (
               file?.uri === data.uri &&
               (data.version == null || data.version === file.version) &&
               b.version === file.version
-            )
-              setDiagnostics(b, data.diagnostics ?? [])
+            ) {
+              b.diagnosticSets ??= {}
+              b.diagnosticSets[data.reviewboxEngine ?? "primary"] =
+                data.diagnostics ?? []
+              setDiagnostics(b, Object.values(b.diagnosticSets).flat())
+            }
           } else if (event.payload.method === "$/progress") {
             const data = event.payload.params as {
               value:
@@ -1089,6 +1369,66 @@ export function bindLiveEditor(
         }
       }
     )
+    const unsubscribeExtensions = useExtensionsStore.subscribe(
+      (state, previous) => {
+        if (state.preferences === previous.preferences) return
+        for (const b of [...bindings.values()]) {
+          const engine =
+            b.auxiliary ??
+            defaultEngine(resolveLanguageId(b.model.getLanguageId()).lspId)
+          b.features?.refresh()
+          refreshProviders(b)
+          if (engine && !engineEnabled(engine)) {
+            b.stopped = true
+            if (b.session)
+              void liveCommands.close(b.session.id, b.path).catch(() => {})
+            b.session = undefined
+            forgetPublishedSession(b)
+            b.diagnostics = []
+            b.diagnosticSets = {}
+            b.monaco.editor.setModelMarkers(b.model, markerOwner(b), [])
+            refreshProviders(b)
+          } else {
+            b.stopped = false
+            if (engine) invalidateEngine(engine)
+            if (!b.session) void sync(b).catch(() => {})
+            const file = current(b)
+            if (file && !b.auxiliary)
+              bindLiveEditor(b.monaco, b.model, b.repository, file)
+          }
+        }
+      }
+    )
+    const unsubscribeEngines = useEditorEngines.subscribe((state, previous) => {
+      for (const [id, value] of Object.entries(state.engines))
+        if (
+          value.phase === "ready" &&
+          previous.engines[id]?.phase !== "ready"
+        ) {
+          if (id === "vue") {
+            const restarted = new Set<string>()
+            for (const b of bindings.values()) {
+              if (
+                b.session?.serverId === "typescript" &&
+                !restarted.has(b.session.id)
+              ) {
+                restarted.add(b.session.id)
+                void restartLiveEditor(b.key).catch(() => {})
+              }
+            }
+          }
+          for (const b of bindings.values())
+            if (
+              !b.session &&
+              !b.stopped &&
+              (b.auxiliary ??
+                defaultEngine(
+                  resolveLanguageId(b.model.getLanguageId()).lspId
+                )) === id
+            )
+              void sync(b).catch(() => {})
+        }
+    })
     const unsubscribe = useEditorStore.subscribe(() => {
       for (const [uri, b] of bindings) {
         const file = current(b)
@@ -1097,10 +1437,11 @@ export function bindLiveEditor(
           forgetPublishedSession(b)
           b.providers?.disposables.forEach((p) => p.dispose())
           b.modelListener?.dispose()
+          b.features?.dispose()
           targets.delete(uri)
           if (b.session)
             void liveCommands.close(b.session.id, b.path).catch(() => {})
-          b.model.dispose()
+          if (!b.auxiliary) b.model.dispose()
           continue
         }
         if (
@@ -1121,7 +1462,9 @@ export function bindLiveEditor(
         if (languageChanged && !b.session && !b.stopped)
           void sync(b).catch(() => {})
         if (file.version !== b.version && b.session) {
-          monaco.editor.setModelMarkers(b.model, "reviewbox-lsp", [])
+          b.diagnostics = []
+          b.diagnosticSets = {}
+          monaco.editor.setModelMarkers(b.model, markerOwner(b), [])
           void sync(b).catch(() => {})
         } else if (
           (file.revision !== b.revision && b.session) ||
@@ -1133,6 +1476,8 @@ export function bindLiveEditor(
     })
     dispose = () => {
       unsubscribe()
+      unsubscribeExtensions()
+      unsubscribeEngines()
       void unlisten.then((stop) => stop())
     }
   }
@@ -1141,7 +1486,7 @@ export async function prepareLiveSave(repository: string, key: string) {
   const b = [...bindings.values()].find(
     (b) => b.repository === repository && b.key === key
   )
-  if (!b?.session || b.stopped || b.model.isDisposed()) return
+  if (!b || b.auxiliary || b.model.isDisposed()) return
   const file = current(b)
   if (!file || file.readOnly || file.external !== undefined) return
   const notice = (value: string) =>
@@ -1244,7 +1589,27 @@ export async function prepareLiveSave(repository: string, key: string) {
       }
       return before.text
     })
-  if (settings.formatOnSave && capabilityFor(b, "documentFormattingProvider"))
+  if (
+    settings.formatOnSave &&
+    prettierEnabled(b.model.getLanguageId()) &&
+    useExtensionsStore.getState().preferences.prettierOnSave !== false
+  )
+    actions.push(async (before, signal) => {
+      if (needsPreview || signal.aborted) return before.text
+      const text = await formatText(repository, file.path, before.text)
+      if (
+        signal.aborted ||
+        !extensionEnabled("prettier") ||
+        !useExtensionsStore.getState().preferences.prettierOnSave
+      )
+        return before.text
+      return text ?? before.text
+    })
+  else if (
+    settings.formatOnSave &&
+    !prettierEnabled(b.model.getLanguageId()) &&
+    capabilityFor(b, "documentFormattingProvider")
+  )
     actions.push(async (before, signal) => {
       if (needsPreview) return before.text
       const options = b.model.getOptions()
@@ -1290,12 +1655,17 @@ export async function prepareLiveSave(repository: string, key: string) {
 export async function restartLiveEditor(key: string, stop = false) {
   const target = [...bindings.values()].find((b) => b.key === key)
   if (!target) return
-  const sessionId = target.session?.id
+  const sessionIds = new Set(
+    [...bindings.values()]
+      .filter((b) => b.key === key)
+      .map((b) => b.session?.id)
+      .filter(Boolean)
+  )
   const group = [...bindings.values()].filter(
-    (b) => b === target || (sessionId && b.session?.id === sessionId)
+    (b) => b.key === key || sessionIds.has(b.session?.id)
   )
   await Promise.all(group.map((b) => b.pending?.catch(() => {})))
-  if (sessionId) await liveCommands.restart(sessionId)
+  await Promise.all([...sessionIds].map((id) => liveCommands.restart(id!)))
   for (const b of group) {
     b.session = undefined
     forgetPublishedSession(b)
@@ -1305,9 +1675,11 @@ export async function restartLiveEditor(key: string, stop = false) {
     b.diagnosticRequest = undefined
     b.stopped = stop
     refreshProviders(b)
-    b.monaco.editor.setModelMarkers(b.model, "reviewbox-lsp", [])
+    b.diagnostics = []
+    b.diagnosticSets = {}
+    b.monaco.editor.setModelMarkers(b.model, markerOwner(b), [])
     useLiveLanguages.setState((s) => ({
-      capabilities: { ...s.capabilities, [b.key]: {} },
+      capabilities: { ...s.capabilities, [publishedKey(b)]: {} },
     }))
     status(b, stop ? "Language support stopped" : "Starting language support…")
   }
@@ -1387,9 +1759,10 @@ function completionKind(monaco: typeof M, kind?: number) {
   return monaco.languages.CompletionItemKind[names[(kind ?? 1) - 1] ?? "Text"]
 }
 function setDiagnostics(b: Binding, diagnostics: L.Diagnostic[]) {
+  b.diagnostics = diagnostics
   b.monaco.editor.setModelMarkers(
     b.model,
-    "reviewbox-lsp",
+    markerOwner(b),
     diagnostics.map((d) => ({
       ...range(d.range),
       message: d.message,
@@ -1434,7 +1807,7 @@ async function pullDiagnostics(b: Binding) {
       b.session?.id === sessionId &&
       !b.stopped &&
       !b.model.isDisposed() &&
-      bindings.get(b.model.uri.toString()) === b &&
+      bindings.get(bindingId(b)) === b &&
       current(b)?.version === file.version &&
       result.kind === "full"
     )
@@ -1462,4 +1835,165 @@ export function languageDiagnostic(key: string) {
         source: d.source,
       })),
   })
+}
+
+/** Local features also work while a language engine is downloading or unavailable. */
+function bindFeatures(b: Binding) {
+  const { monaco, model } = b
+  const selector = { scheme: model.uri.scheme, pattern: model.uri.path }
+  let providers: M.IDisposable[] = []
+  let signature = ""
+  const colors = decorateColors(monaco, model, async () => {
+    const result = await Promise.all(
+      [...bindings.values()]
+        .filter(
+          (other) =>
+            other.model === model &&
+            !other.stopped &&
+            capabilityFor(other, "colorProvider")
+        )
+        .map(async (other) => {
+          const colors = await request<L.ColorInformation[]>(
+            other,
+            "textDocument/documentColor",
+            {},
+            undefined,
+            false
+          )
+          return (
+            colors?.map((c) => ({ range: range(c.range), color: c.color })) ??
+            []
+          )
+        })
+    )
+    return result.flat()
+  })
+  function refresh() {
+    colors.refresh()
+    const next = JSON.stringify([
+      model.getLanguageId(),
+      prettierEnabled(model.getLanguageId()),
+      extensionEnabled("autoRenameTag"),
+      extensionEnabled("colorHighlight"),
+      extensionEnabled("npmIntellisense") ||
+        extensionEnabled("pathIntellisense"),
+    ])
+    if (next === signature) return
+    signature = next
+    providers.forEach((p) => p.dispose())
+    providers = []
+    if (model.isDisposed()) return
+    if (prettierEnabled(model.getLanguageId())) {
+      providers.push(
+        monaco.languages.registerDocumentFormattingEditProvider(selector, {
+          displayName: "Prettier",
+          provideDocumentFormattingEdits: (model, _options, token) =>
+            formatModel(model, b.repository, current(b)?.path ?? b.path, token),
+        })
+      )
+      providers.push(
+        monaco.languages.registerDocumentRangeFormattingEditProvider(selector, {
+          displayName: "Prettier",
+          provideDocumentRangeFormattingEdits: (
+            model,
+            range,
+            _options,
+            token
+          ) =>
+            formatModel(
+              model,
+              b.repository,
+              current(b)?.path ?? b.path,
+              token,
+              range
+            ),
+        })
+      )
+    }
+    if (extensionEnabled("autoRenameTag") && model.getLanguageId() === "xml")
+      providers.push(
+        monaco.languages.registerLinkedEditingRangeProvider(selector, {
+          provideLinkedEditingRanges(model, p) {
+            if (!extensionEnabled("autoRenameTag")) return
+            const pairs = xmlLinkedRanges(
+              model.getValue(),
+              model.getOffsetAt(p)
+            )
+            return pairs
+              ? {
+                  ranges: pairs.map((r) => {
+                    const start = model.getPositionAt(r.start),
+                      end = model.getPositionAt(r.end)
+                    return new monaco.Range(
+                      start.lineNumber,
+                      start.column,
+                      end.lineNumber,
+                      end.column
+                    )
+                  }),
+                  wordPattern: /[\w.:-]+/,
+                }
+              : undefined
+          },
+        })
+      )
+    if (extensionEnabled("colorHighlight"))
+      providers.push(
+        monaco.languages.registerColorProvider(selector, {
+          provideDocumentColors(model) {
+            return capabilityFor(b, "colorProvider") ? [] : modelColors(model)
+          },
+          provideColorPresentations(_model, info) {
+            const c = info.color
+            const label =
+              c.alpha === 1
+                ? `#${[c.red, c.green, c.blue]
+                    .map((v) =>
+                      Math.round(v * 255)
+                        .toString(16)
+                        .padStart(2, "0")
+                    )
+                    .join("")}`
+                : `rgba(${[c.red, c.green, c.blue].map((v) => Math.round(v * 255)).join(", ")}, ${Math.round(c.alpha * 100) / 100})`
+            return [{ label, textEdit: { range: info.range, text: label } }]
+          },
+        })
+      )
+    if (
+      extensionEnabled("npmIntellisense") ||
+      extensionEnabled("pathIntellisense")
+    )
+      providers.push(
+        monaco.languages.registerCompletionItemProvider(selector, {
+          triggerCharacters: ["/", "'", '"'],
+          async provideCompletionItems(model, p, _context, token) {
+            if (capabilityFor(b, "completionProvider")) return
+            const version = model.getVersionId()
+            const suggestions = await pathSuggestions(
+              monaco,
+              model,
+              p,
+              b.repository,
+              current(b)?.path ?? b.path
+            ).catch(() => [])
+            return !token.isCancellationRequested &&
+              !model.isDisposed() &&
+              model.getVersionId() === version
+              ? { suggestions }
+              : undefined
+          },
+        })
+      )
+    refreshLinkedEditing(model)
+  }
+  const language = model.onDidChangeLanguage(refresh)
+  refresh()
+  return {
+    refresh,
+    dispose() {
+      language.dispose()
+      colors.dispose()
+      providers.forEach((p) => p.dispose())
+    },
+  }
 }

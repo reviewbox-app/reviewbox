@@ -35,6 +35,8 @@ import { CodeAppearanceSettings } from "../components/CodeAppearanceSettings"
 import { ReadingSettings } from "../components/ReadingSettings"
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel"
 
+import { ExtensionsSettings } from "@/features/editor-extensions/composites/ExtensionsSettings"
+
 const sections = [
   { id: "General", icon: Settings01Icon },
   { id: "Reading", icon: CodeIcon },
@@ -42,6 +44,7 @@ const sections = [
   { id: "Permissions", icon: SecurityCheckIcon },
   { id: "Context sent", icon: Attachment01Icon },
   { id: "Integrations", icon: PlugSocketIcon },
+  { id: "Extensions", icon: PlugSocketIcon },
   { id: "Languages", icon: CodeIcon },
   { id: "Storage", icon: Database01Icon },
   { id: "Error log", icon: AlertCircleIcon },
@@ -72,6 +75,8 @@ const intro: Record<Section, string> = {
   "Context sent": "Context used to prepare review explanations.",
   Integrations:
     "Enrich project reviews from other tools, with the app open or closed.",
+  Extensions:
+    "Built-in code assistance. Language tools download when first needed.",
   Languages:
     "Manage language tools for the live Code Editor and captured review sources.",
   Storage: "Where reviews, tours and explanations are saved.",
@@ -160,6 +165,7 @@ export function SettingsDialog({
             {intro[section]}
           </p>
           <div className={cn("mt-6 space-y-5", section === "Rev" && "mt-5")}>
+            {section === "Extensions" && <ExtensionsSettings />}
             {section === "General" && (
               <div className="rounded-3xl border px-5">
                 <CodeAppearanceSettings />
