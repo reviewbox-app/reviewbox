@@ -1,4 +1,5 @@
 //! Explicit source-control actions. No review, validation or publication is created here.
+mod branches;
 pub(crate) mod commands;
 mod commits;
 mod git;

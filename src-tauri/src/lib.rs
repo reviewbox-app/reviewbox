@@ -221,6 +221,8 @@ pub fn run() {
             source_control::commands::git_commit_detail,
             source_control::commands::fetch_git_remote,
             source_control::commands::push_git_branch,
+            source_control::commands::list_git_branches,
+            source_control::commands::switch_git_branch,
             source_control::commands::commit_local_changes,
             source_control::commands::cancel_git_operation,
             source_control::commands::last_git_operation,

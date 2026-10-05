@@ -11,6 +11,10 @@ import type {
 } from "@/lib/desktop/contracts.generated"
 
 export const sourceControlCommands = {
+  branches: (repositoryId: string) =>
+    call<string[]>("list_git_branches", { repositoryId }),
+  switchBranch: (repositoryId: string, branch: string) =>
+    call<void>("switch_git_branch", { repositoryId, branch }),
   state: (repositoryId: string) =>
     call<LocalGitState>("local_git_state", { repositoryId }),
   diff: (repositoryId: string, path: string, layer: string, version: string) =>

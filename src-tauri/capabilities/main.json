@@ -22,6 +22,8 @@
     "allow-git-commit-detail",
     "allow-fetch-git-remote",
     "allow-push-git-branch",
+    "allow-list-git-branches",
+    "allow-switch-git-branch",
     "allow-commit-local-changes",
     "allow-cancel-git-operation",
     "allow-last-git-operation",

@@ -47,6 +47,8 @@ fn main() {
         "git_commit_detail",
         "fetch_git_remote",
         "push_git_branch",
+        "list_git_branches",
+        "switch_git_branch",
         "commit_local_changes",
         "cancel_git_operation",
         "last_git_operation",

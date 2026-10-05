@@ -69,25 +69,48 @@ pub(super) fn freeze(root: &Path, expected: &str) -> AppResult<Frozen> {
         }
         entries.insert(path.into(), (parts[0].into(), parts[1].into()));
     }
-    // No external diff programs or textconv commands. Binary contents stay opaque.
-    let diff = git::text(
+    // Freeze an addressable tree without touching the real index. The harness
+    // inspects these Git objects itself, even if the live index changes later.
+    let temporary = git::TempIndex::new(root)?;
+    let cancel = AtomicBool::new(false);
+    git::run(
         root,
-        &[
-            "diff",
-            "--cached",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-color",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-        ],
+        &["read-tree", "--empty"],
+        Some(&temporary.0),
+        &[],
+        &cancel,
     )?;
-    let recent = git::text(root, &["log", "-8", "--format=%s"]).unwrap_or_default();
-    let context = serde_json::to_string_pretty(
-        &serde_json::json!({"files":files.iter().map(|f|serde_json::json!({"path":f.path,"previousPath":f.previous_path})).collect::<Vec<_>>(),"stagedDiff":diff,"recentMessages":recent}),
+    let empty_tree = String::from_utf8(git::run(
+        root,
+        &["write-tree"],
+        Some(&temporary.0),
+        &[],
+        &cancel,
+    )?)
+    .map_err(|_| AppError::new("git_encoding", "Invalid Git tree ID."))?;
+    git::run(
+        root,
+        &["update-index", "-z", "--index-info"],
+        Some(&temporary.0),
+        &raw,
+        &cancel,
     )?;
+    let staged_tree = String::from_utf8(git::run(
+        root,
+        &["write-tree"],
+        Some(&temporary.0),
+        &[],
+        &cancel,
+    )?)
+    .map_err(|_| AppError::new("git_encoding", "Invalid Git tree ID."))?;
+    let head = git::head(root);
+    let context = serde_json::to_string(&serde_json::json!({
+        "baseTree":head.as_deref().unwrap_or(empty_tree.trim()),
+        "stagedTree":staged_tree.trim(),
+        "files":files.iter().map(|f|serde_json::json!({"path":f.path,"previousPath":f.previous_path})).collect::<Vec<_>>(),
+    }))?;
     Ok(Frozen {
-        head: git::head(root),
+        head,
         branch,
         version,
         entries,

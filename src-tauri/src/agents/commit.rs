@@ -28,7 +28,8 @@ pub(crate) async fn plan(
         "claude-sonnet-5".into()
     });
     let template = std::fs::read_to_string(resources.join("prompts/commit.md"))?;
-    let prompt = prompts::render(&template, &BTreeMap::from([("context".into(), context)]))?;
+    let directory = tempfile::tempdir()?;
+    let prompt = planning_prompt(&template, &context, &directory.path().join("staged.json"))?;
     let mut stream = Stream {
         id: request.operation_id.clone(),
         sequence: 0,
@@ -40,11 +41,56 @@ pub(crate) async fn plan(
     if provider == "codex" {
         let prepared = codex::prepare(&config, cancel.clone(), None).await?;
         let mut session = codex::Session::start(root, &config, prepared, cancel).await?;
+        session.read_only();
         let result = session.run(&prompt, Some(schema), &mut stream).await;
         session.finish().await;
-        result?;
+        result.map_err(commit_error)?;
     } else {
-        claude::run(root, &prompt, &config, cancel, &mut stream).await?;
+        claude::run_terminal(root, &prompt, &config, cancel, &mut stream)
+            .await
+            .map_err(commit_error)?;
     }
     Ok(stream.text)
+}
+
+fn planning_prompt(template: &str, context: &str, manifest: &std::path::Path) -> AppResult<String> {
+    let value: Value = serde_json::from_str(context)?;
+    std::fs::write(manifest, context)?;
+    let input = serde_json::json!({
+        "manifest": manifest,
+        "baseTree":value["baseTree"],
+        "stagedTree":value["stagedTree"],
+        "stagedFileCount":value["files"].as_array().map_or(0, Vec::len),
+    });
+    prompts::render(
+        template,
+        &BTreeMap::from([("context".into(), input.to_string())]),
+    )
+}
+
+fn commit_error(mut error: AppError) -> AppError {
+    if error.code == "provider_error" {
+        error.message = "Rev could not prepare the commit plan. No commit was created; your staged changes are kept.".into();
+    }
+    error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn large_inventory_stays_on_disk_not_in_the_provider_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("staged.json");
+        let files: Vec<_> = (0..20_000)
+            .map(|i| json!({"path":format!("long-directory/{i}/file.ts")}))
+            .collect();
+        let context = json!({"baseTree":"base","stagedTree":"frozen","files":files}).to_string();
+        let prompt =
+            planning_prompt("Inspect with your terminal: {{context}}", &context, &path).unwrap();
+        assert!(prompt.len() < 1024);
+        assert!(!prompt.contains("long-directory"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), context);
+    }
 }

@@ -272,3 +272,42 @@ pub async fn discard_local_files(
     })
     .await
 }
+
+#[tauri::command]
+pub async fn list_git_branches(
+    storage: State<'_, Storage>,
+    repository_id: String,
+) -> AppResult<Vec<String>> {
+    let root = repositories::root(&storage, &repository_id)?;
+    blocking(move || super::branches::list(&root)).await
+}
+
+#[tauri::command]
+pub async fn switch_git_branch(
+    storage: State<'_, Storage>,
+    manager: State<'_, SourceControl>,
+    editor: State<'_, crate::editor::commands::EditorState>,
+    repository_id: String,
+    branch: String,
+) -> AppResult<()> {
+    let root = repositories::root(&storage, &repository_id)?;
+    let storage = storage.inner().clone();
+    let manager = manager.inner().clone();
+    let editor = editor.inner().clone();
+    blocking(move || {
+        let operation = manager.begin(&root, &id())?;
+        let _editor = editor
+            .mutation
+            .lock()
+            .map_err(|_| AppError::new("editor_busy", "The editor is busy."))?;
+        if editor.dirty.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::new(
+                "editor_dirty",
+                "Save your open files before switching branches.",
+            ));
+        }
+        let _invalidation = storage.repository_cache.mutation(&root);
+        super::branches::switch(&root, &branch, &operation.cancel)
+    })
+    .await
+}

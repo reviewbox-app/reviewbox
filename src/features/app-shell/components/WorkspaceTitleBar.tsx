@@ -2,12 +2,7 @@
 import { useRef, type ReactNode } from "react"
 import { reviewCommands, desktopAvailable } from "@/lib/desktop/review.commands"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  Settings01Icon,
-  Search01Icon,
-  GitBranchIcon,
-  UnfoldMoreIcon,
-} from "@hugeicons/core-free-icons"
+import { Settings01Icon, Search01Icon } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Kbd } from "@/components/ui/kbd"
@@ -15,15 +10,20 @@ import { RevStatusBadge } from "@/features/agents/components/RevStatusBadge"
 import type { RevStatus } from "@/features/agents/hooks/useRevStatus"
 import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
 import type { Repository } from "@/lib/desktop/contracts.generated"
+import { BranchPicker } from "@/features/source-control/components/BranchPicker"
 import { ReviewBoxMark } from "./ReviewBoxMark"
 
 export function WorkspaceTitleBar({
   repository,
+  branch,
+  onBranchSwitched,
   rev,
   onHome,
   onReviewOverview,
   reviewControl,
 }: {
+  branch?: string
+  onBranchSwitched: () => Promise<unknown>
   repository: Repository | null
   rev: RevStatus
   reviewControl?: ReactNode
@@ -39,25 +39,24 @@ export function WorkspaceTitleBar({
     >
       <div className="flex min-w-0 flex-1 items-center">
         {repository && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onHome}
-            title="Switch repository"
-            className="h-[30px] min-w-0 gap-2 pr-2 pl-1.5"
-          >
-            <ReviewBoxMark />
-            <span className="truncate">{repository.name}</span>
-            <span className="flex min-w-0 items-center gap-1 font-normal text-muted-foreground">
-              <HugeiconsIcon icon={GitBranchIcon} size={14} />
-              <span className="truncate">{repository.branch}</span>
-            </span>
-            <HugeiconsIcon
-              icon={UnfoldMoreIcon}
-              size={14}
-              className="text-muted-foreground"
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onHome}
+              title="Switch repository"
+              className="h-[30px] min-w-0 gap-2 pr-2 pl-1.5"
+            >
+              <ReviewBoxMark />
+              <span className="truncate">{repository.name}</span>
+            </Button>
+            <BranchPicker
+              key={repository.id}
+              repositoryId={repository.id}
+              branch={branch ?? repository.branch}
+              onSwitched={onBranchSwitched}
             />
-          </Button>
+          </>
         )}
       </div>
       {repository ? (

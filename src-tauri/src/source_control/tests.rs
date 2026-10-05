@@ -822,3 +822,75 @@ fn discard_rejects_stale_batch_before_restoring_any_file() {
     assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"before\r\nlast");
     assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "newer");
 }
+
+#[test]
+fn branch_switch_lists_exact_local_refs_and_preserves_changes() {
+    let (_dir, root, _storage, _repo) = fixture(true);
+    run(&root, &["branch", "feature/example"]);
+    assert_eq!(
+        branches::list(&root).unwrap(),
+        vec!["feature/example", "main"]
+    );
+    fs::write(root.join("b.txt"), "local changes\n").unwrap();
+    branches::switch(&root, "feature/example", &AtomicBool::new(false)).unwrap();
+    assert_eq!(run(&root, &["branch", "--show-current"]), "feature/example");
+    assert_eq!(
+        fs::read_to_string(root.join("b.txt")).unwrap(),
+        "local changes\n"
+    );
+    for invalid in ["--detach", "HEAD~1", "@{-1}", "missing"] {
+        assert!(branches::switch(&root, invalid, &AtomicBool::new(false)).is_err());
+    }
+}
+
+#[test]
+fn branch_switch_refuses_overwrites_and_keeps_index() {
+    let (_dir, root, _storage, _repo) = fixture(true);
+    run(&root, &["switch", "-c", "other"]);
+    fs::write(root.join("a.txt"), "other branch\n").unwrap();
+    run(&root, &["commit", "-am", "other"]);
+    run(&root, &["switch", "main"]);
+    fs::write(root.join("a.txt"), "local edit\n").unwrap();
+    stage(&root, "a.txt");
+    let index = run(&root, &["write-tree"]);
+    assert!(branches::switch(&root, "other", &AtomicBool::new(false)).is_err());
+    assert_eq!(run(&root, &["branch", "--show-current"]), "main");
+    assert_eq!(run(&root, &["write-tree"]), index);
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt")).unwrap(),
+        "local edit\n"
+    );
+}
+
+#[test]
+fn commit_context_contains_only_frozen_git_references_even_for_large_changes() {
+    for initial in [false, true] {
+        let (_dir, root, _storage, repo) = fixture(initial);
+        let content = "staged payload only\n".repeat(70_000);
+        fs::write(root.join("a.txt"), &content).unwrap();
+        stage(&root, "a.txt");
+        let request = request(&root, &repo);
+        let frozen = commits::freeze(&root, &request.index_version).unwrap();
+        assert_eq!(
+            working::index_version(&root).unwrap(),
+            request.index_version
+        );
+        assert!(frozen.context.len() < 4096);
+        assert!(!frozen.context.contains("staged payload"));
+        let context: serde_json::Value = serde_json::from_str(&frozen.context).unwrap();
+        assert!(context.get("stagedDiff").is_none());
+        let tree = context["stagedTree"].as_str().unwrap();
+        fs::write(root.join("a.txt"), "newer staged content").unwrap();
+        stage(&root, "a.txt");
+        assert_eq!(
+            git::read(&root, &["show", &format!("{tree}:a.txt")]).unwrap(),
+            content.as_bytes()
+        );
+        let base = context["baseTree"].as_str().unwrap();
+        let paths = run(&root, &["diff", "--name-only", base, tree]);
+        assert!(paths.lines().any(|p| p == "a.txt"));
+        if !initial {
+            assert!(run(&root, &["ls-tree", base]).is_empty());
+        }
+    }
+}

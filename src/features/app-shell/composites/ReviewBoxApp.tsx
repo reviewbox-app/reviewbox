@@ -334,6 +334,11 @@ export function ReviewBoxApp() {
       <EditorLifecycle />
       <WorkspaceTitleBar
         repository={repository}
+        branch={git.state ? (git.state.branch ?? "Detached HEAD") : undefined}
+        onBranchSwitched={async () => {
+          await git.reload()
+          await session.checkFreshness()
+        }}
         rev={rev}
         onHome={session.home}
         onReviewOverview={showOverview}
