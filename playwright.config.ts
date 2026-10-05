@@ -1,5 +1,6 @@
 import { defineConfig } from "@playwright/test"
 export default defineConfig({
+  workers: process.env.CI ? 1 : undefined,
   testDir: "tests/web",
   outputDir: "artifacts/playwright",
   use: {
@@ -7,7 +8,9 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
   },
   webServer: {
-    command: "bun run dev:web",
+    // Bun + Turbopack currently mis-resolves Shiki externals in the test server.
+    command: "bun run dev:web --webpack",
+    timeout: 120000,
     url: "http://127.0.0.1:1420",
     reuseExistingServer: !process.env.CI,
   },
