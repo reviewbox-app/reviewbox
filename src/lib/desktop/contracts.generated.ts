@@ -73,6 +73,7 @@ export type LanguagePackServer = {
   installation: LanguagePackInstallation
   arguments: Array<string>
   settings: Record<string, unknown>
+  initializationOptions?: Record<string, unknown>
 }
 export type LanguagePack = {
   id: string
@@ -81,10 +82,13 @@ export type LanguagePack = {
   sourceUrl: string
   languages: Array<LanguageDefinition>
   rootMarkers: Array<string>
+  rootStrategy?: LanguageRootStrategy
+  watchedFiles?: Array<string>
   server: LanguagePackServer | null
   grammars: Record<string, unknown>[]
   enabled: boolean
 }
+export type LanguageRootStrategy = "nearest" | "workspace"
 export type LanguageRegistry = {
   languages: Array<LanguageDefinition>
   packs: Array<LanguagePack>
@@ -94,20 +98,51 @@ export type LiveLanguageDocument = {
   version: number
   text: string
   languageId: string
+  /**
+   * Monaco changes are applied in order to this version. Missing/mismatched
+   * bases use a complete replacement to recover a lost IPC change.
+   */
+  baseVersion: number | null
+  changes: Array<LiveLanguageChange>
+}
+export type LiveLanguageChange = {
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+  text: string
 }
 export type LiveLanguageSession = {
   id: string
   serverId: string
   rootUri: string
   capabilities: Record<string, unknown>
+  context: LiveLanguageProjectContext
+}
+export type LiveLanguageProjectContext = {
+  rootUri: string
+  configurationFiles: Array<string>
+  environment: { [key in string]: string }
+  missing: Array<string>
+  signature: string
 }
 export type LiveLanguageEvent = {
   sessionId: string
   method: string
   params: unknown
 }
+export type LiveLanguageProjectSettings = {
+  revision: number
+  root: string | null
+  environment: { [key in string]: string }
+  settings: Record<string, unknown>
+  initializationOptions: Record<string, unknown> | null
+}
 export type RepositoryReadChange = {
   repositoryId: string
+  generation?: string
+  sequence?: number
+  changes?: Array<RepositoryPathChange>
   /**
    * Checkout-relative paths, including both sides of a rename.
    */
@@ -119,7 +154,32 @@ export type RepositoryReadChange = {
    */
   full: boolean
 }
-export type EditorEntry = { path: string; directory: boolean; revision: string }
+export type RepositoryPathChange = {
+  path: string
+  /**
+   * created, changed or deleted; a rename includes both paths.
+   */
+  kind: string
+}
+export type EditorEntry = {
+  path: string
+  directory: boolean
+  revision: string
+  ignored?: boolean
+  /**
+   * Excluded by a direct or inherited rule, unlike an ignored-only parent.
+   */
+  excluded?: boolean
+  /**
+   * An ignored directory whose children are loaded when expanded.
+   */
+  lazy?: boolean
+}
+export type EditorWatchStatus = {
+  healthy: boolean
+  generation: string
+  sequence: number
+}
 export type EditorSearchMatch = {
   path: string
   line: number
@@ -142,6 +202,12 @@ export type EditorSearchResult = {
   scannedFiles: number
   skippedFiles: number
 }
+export type EditorSearchBatch = {
+  requestId: string
+  sequence: number
+  matches: Array<EditorSearchMatch>
+}
+export type EditorSearchBuffer = { path: string; version: number; text: string }
 export type EditorFile = {
   path: string
   uri: string
@@ -156,6 +222,10 @@ export type EditorDraft = {
   baseText: string
   revision: string
 }
+export type EditorSaveActions = {
+  formatOnSave: boolean
+  organizeImportsOnSave: boolean
+}
 export type EditorRecovery = {
   revision: number
   drafts: Array<EditorDraft>
@@ -164,6 +234,7 @@ export type EditorRecovery = {
   autoSave: boolean
   associations: { [key in string]: string }
   servers: { [key in string]: string }
+  saveActions?: { [key in string]: EditorSaveActions }
 }
 export type EditorMutation =
   | { kind: "save"; path: string; text: string; expectedRevision: string }
