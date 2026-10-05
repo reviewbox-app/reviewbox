@@ -2,6 +2,7 @@
 import { useMemo, useRef, useImperativeHandle } from "react"
 import type { Ref } from "react"
 import type { BlockDiffHandle } from "@/features/code-editor/contracts/blockDiff.types"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
 import { BlockDiff } from "@/features/code-editor/components/BlockDiff"
 import type { SourceReadingPoint } from "@/features/markdown/contracts/documentDiff.types"
 import type {
@@ -38,6 +39,7 @@ export function ReviewSourceCode({
   onCounts,
   onCursor,
   handle,
+  onCommentSelection,
 }: {
   snapshot: Pick<Snapshot, "id">
   change: Change
@@ -57,6 +59,7 @@ export function ReviewSourceCode({
   onCounts: (value: { added: number; removed: number }) => void
   onCursor: (value: { line: number; column: number }) => void
   handle: Ref<SourceViewHandle>
+  onCommentSelection?: (selection: SourceSelection | null) => void
 }) {
   const view = useRef<BlockDiffHandle>(null)
   useImperativeHandle(
@@ -95,6 +98,7 @@ export function ReviewSourceCode({
       : undefined)
   return (
     <BlockDiff
+      onCommentSelection={onCommentSelection}
       key={`${snapshot.id}/${change.id}/${modelScope}`}
       before={content.before ?? ""}
       after={content.after ?? ""}

@@ -76,7 +76,7 @@ export function useReviewMenu({
     if (status === "publicationPending") add("retryPublication")
     if (complete) add("reopen")
     add("details", true)
-    if (hasDocuments) add("summary", true)
+    if (hasDocuments || review.mode === "manual") add("summary", true)
     return {
       reviewId: review.id,
       snapshotId,
@@ -97,6 +97,7 @@ export function useReviewMenu({
     status,
     complete,
     hasDocuments,
+    review.mode,
     review.id,
     snapshotId,
     updateWithRev,

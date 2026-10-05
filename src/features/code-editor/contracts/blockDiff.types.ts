@@ -1,6 +1,7 @@
 import type { Ref } from "react"
 import type { editor, IRange } from "monaco-editor"
 import type { LanguageDocument } from "@/lib/desktop/contracts.generated"
+import type { SourceSelection } from "./sourceSelection.types"
 
 export type CodeSide = "before" | "after"
 export type CodePoint = { side: CodeSide; line: number; fraction: number }
@@ -19,6 +20,7 @@ export type BlockDiffHandle = {
   reveal: (point: CodePoint, end?: number) => void
 }
 export type BlockDiffProps = {
+  onCommentSelection?: (selection: SourceSelection | null) => void
   before: string
   after: string
   language: string

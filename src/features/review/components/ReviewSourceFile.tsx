@@ -11,6 +11,7 @@ import {
 import type { editor } from "monaco-editor"
 import { useTheme } from "next-themes"
 import { CodeEditor } from "@/features/code-editor/components/CodeEditor"
+import { observeSourceSelection } from "@/features/code-editor/services/sourceSelection"
 import { reviewboxTheme } from "@/lib/monaco/reviewboxThemes"
 import { sameReadingPoint } from "@/features/markdown/helpers/documentPosition.helpers"
 import { languageFor } from "../helpers/review.helpers"
@@ -227,6 +228,9 @@ export function ReviewSourceFile(
           )
         }
         const subscriptions = [
+          observeSourceSelection(source, side, (selection) =>
+            latest.current.onCommentSelection?.(selection)
+          ),
           source.onDidScrollChange(persist),
           source.onDidChangeCursorPosition((event) => {
             latest.current.onCursor({

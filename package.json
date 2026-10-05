@@ -62,6 +62,7 @@
     "app-icons:build": "bun scripts/build-app-icons.ts",
     "test:ui:terminal": "bun scripts/test-ui-terminal.ts",
     "test:ui:explorer": "bun scripts/test-ui-explorer.ts",
+    "test:ui:review-comments": "bun scripts/test-ui-review-comments.ts",
     "test:ui:code-editor": "bun scripts/test-ui-code-editor.ts",
     "test:ui:editor-languages": "bun scripts/test-ui-editor-languages.ts",
     "test:editor-extensions": "bun scripts/test-editor-extensions.ts",

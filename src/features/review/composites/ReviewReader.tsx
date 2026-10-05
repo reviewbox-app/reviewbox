@@ -25,6 +25,7 @@ import type {
   DocumentReference,
   ReadingLevel,
   ReviewAction,
+  ReviewCommentAnchor,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
@@ -47,6 +48,11 @@ import { ReviewStepsPanel } from "../components/ReviewStepsPanel"
 import { ReviewFiles } from "../components/ReviewFiles"
 import { ReviewPublicationDetails } from "../components/ReviewPublicationDetails"
 import { ReviewSummary } from "../components/ReviewSummary"
+import { ReviewCommentToolbar } from "../components/ReviewCommentToolbar"
+import { ReviewCommentDialog } from "../components/ReviewCommentDialog"
+import { useReviewComments } from "../hooks/useReviewComments"
+import { commentAnchor } from "../helpers/reviewComment.helpers"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
 import { StepDocument } from "../components/StepDocument"
 import {
   publicationLabel,
@@ -126,6 +132,15 @@ export function ReviewReader({
   } = useReviewWorkspaceStore()
   const { review, snapshot } = workspace
   const completed = reviewIsComplete(review)
+  const comments = useReviewComments(review)
+  const [commentSelection, setCommentSelection] = useState<{
+    key: string
+    value: SourceSelection
+  } | null>(null)
+  const [commentDraft, setCommentDraft] = useState<{
+    key: string
+    anchor: ReviewCommentAnchor
+  } | null>(null)
   const units = readingUnits(workspace)
   const hasReviewDocuments = units.length > 0
   const current = currentUnit(workspace)
@@ -182,6 +197,9 @@ export function ReviewReader({
   const cursorKey = readerCursorKey(workspace)
   const scroller = useRef<HTMLDivElement>(null)
   const contentKey = file ? `${readerIdentity(workspace)}/${file.id}` : ""
+  const commentKey = `${readerIdentity(workspace)}/${change?.id ?? ""}`
+  const currentCommentSelection =
+    commentSelection?.key === commentKey ? commentSelection.value : null
   const fileError = fileFailure?.key === contentKey ? fileFailure.message : ""
   const [stateCursor, setStateCursor] = useState(cursorKey)
   if (stateCursor !== cursorKey) {
@@ -478,6 +496,7 @@ export function ReviewReader({
               }}
             >
               <ReviewSummary
+                comments={comments}
                 workspace={workspace}
                 level={level}
                 onReturn={() => setSummary(false)}
@@ -523,6 +542,14 @@ export function ReviewReader({
                   aria-hidden={!!pinned}
                 >
                   <ReviewCodePane
+                    onCommentSelection={
+                      comments.editable
+                        ? (value) =>
+                            setCommentSelection(
+                              value ? { key: commentKey, value } : null
+                            )
+                        : undefined
+                    }
                     key={`${snapshot.id}/${change.id}`}
                     snapshot={snapshot}
                     change={change}
@@ -715,6 +742,15 @@ export function ReviewReader({
                 Review summary
               </Button>
             )}
+            {review.mode === "manual" && !summary && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setSummary(true)}
+              >
+                End review
+              </Button>
+            )}
             {review.needsUpdateConfirmation && (
               <Button
                 size="sm"
@@ -788,14 +824,16 @@ export function ReviewReader({
               })}
             </div>
           )}
-          {(fileError || menuError) && !summary && (
+          {(fileError || menuError || comments.error) && !summary && (
             <div
               className="absolute inset-x-3 z-30 mx-auto max-w-[640px]"
               style={{ bottom: footerHeight + 8 }}
             >
               <Alert size="sm" variant="faded">
                 <HugeiconsIcon icon={InformationCircleIcon} />
-                <AlertDescription>{menuError || fileError}</AlertDescription>
+                <AlertDescription>
+                  {menuError || fileError || comments.error}
+                </AlertDescription>
               </Alert>
             </div>
           )}
@@ -874,6 +912,38 @@ export function ReviewReader({
           />
         )}
       </div>
+      {comments.editable &&
+        !summary &&
+        !isDocument &&
+        !pinned &&
+        commentDraft?.key !== commentKey &&
+        currentCommentSelection && (
+          <ReviewCommentToolbar
+            selection={currentCommentSelection}
+            disabled={comments.busy || !comments.document}
+            onComment={() => {
+              if (!change) return
+              const anchor = commentAnchor(
+                snapshot.id,
+                change,
+                currentCommentSelection
+              )
+              if (anchor) setCommentDraft({ key: commentKey, anchor })
+            }}
+          />
+        )}
+      {commentDraft?.key === commentKey && (
+        <ReviewCommentDialog
+          anchor={commentDraft.anchor}
+          busy={comments.busy}
+          error={comments.error}
+          onSave={comments.mutate}
+          onClose={() => {
+            setCommentDraft(null)
+            setCommentSelection(null)
+          }}
+        />
+      )}
     </div>
   )
 }

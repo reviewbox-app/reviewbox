@@ -8,6 +8,8 @@ import type {
   CodeSide,
 } from "../contracts/blockDiff.types"
 import { hideRanges, lineRange } from "./monacoHiddenRanges"
+import { observeSourceSelection } from "./sourceSelection"
+import type { SourceSelection } from "../contracts/sourceSelection.types"
 
 type Cell = {
   side: CodeSide
@@ -49,6 +51,7 @@ export class BlockDiffZones {
       changed: () => void
       cursor: (line: number, column: number) => void
       find: () => void
+      selection?: (selection: SourceSelection | null) => void
     }
   ) {
     this.theme = theme
@@ -66,6 +69,9 @@ export class BlockDiffZones {
     )
     this.marks = main.createDecorationsCollection()
     this.listeners = [
+      observeSourceSelection(main, "after", (selection) =>
+        this.callbacks.selection?.(selection)
+      ),
       main.onDidScrollChange(() => this.schedule()),
       main.onDidLayoutChange(() => this.schedule()),
       main.onDidFocusEditorText(() => {
@@ -335,6 +341,9 @@ export class BlockDiffZones {
       }
       host.addEventListener("wheel", wheel, { passive: false })
       const subscriptions = [
+        observeSourceSelection(instance, side, (selection) =>
+          this.callbacks.selection?.(selection)
+        ),
         instance.onDidContentSizeChange(() => this.schedule()),
         instance.onDidChangeCursorPosition((event) => {
           this.callbacks.cursor(

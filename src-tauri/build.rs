@@ -101,6 +101,8 @@ fn main() {
         "read_change",
         "read_review_source",
         "read_review_file",
+        "read_review_comments",
+        "mutate_review_comment",
         "export_review_summary",
         "start_review_preparation",
         "get_review_preparation",

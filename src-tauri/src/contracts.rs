@@ -22,6 +22,8 @@ mod language_setup;
 pub use language_setup::*;
 mod reader;
 pub use reader::*;
+mod review_comments;
+pub use review_comments::*;
 mod notifications;
 mod preparation;
 pub use notifications::*;
@@ -514,6 +516,12 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
+        ReviewCommentRange::decl(&cfg),
+        ReviewCommentAnchor::decl(&cfg),
+        ReviewCommentStatus::decl(&cfg),
+        ReviewComment::decl(&cfg),
+        ReviewCommentsDocument::decl(&cfg),
+        ReviewCommentMutation::decl(&cfg),
         TerminalSession::decl(&cfg),
         TerminalEvent::decl(&cfg),
         TerminalLink::decl(&cfg),

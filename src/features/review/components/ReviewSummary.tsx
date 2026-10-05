@@ -11,6 +11,8 @@ import { guidedProgress, stepDecision } from "../helpers/review.helpers"
 import { readerCommands } from "../services/reader.commands"
 import { ReviewPublicationDetails } from "./ReviewPublicationDetails"
 import { reviewIsComplete } from "../helpers/publication.helpers"
+import type { ReviewCommentsSession } from "../hooks/useReviewComments"
+import { ReviewCommentsSummary } from "./ReviewCommentsSummary"
 
 export function ReviewSummary({
   workspace,
@@ -19,6 +21,7 @@ export function ReviewSummary({
   onHome,
   busy,
   onAction,
+  comments,
 }: {
   workspace: Workspace
   level: ReadingLevel
@@ -26,6 +29,7 @@ export function ReviewSummary({
   onHome: () => void
   busy: boolean
   onAction: (action: ReviewAction) => void
+  comments?: ReviewCommentsSession
 }) {
   const [exporting, setExporting] = useState(false)
   const [message, setMessage] = useState("")
@@ -39,9 +43,11 @@ export function ReviewSummary({
       <h1 className="text-3xl font-semibold tracking-tight">
         {complete ? "Review complete" : "Review summary"}
       </h1>
-      <p className="text-base leading-7 text-muted-foreground">
-        {progress.validated} of {progress.total} steps validated.
-      </p>
+      {workspace.review.mode !== "manual" && (
+        <p className="text-base leading-7 text-muted-foreground">
+          {progress.validated} of {progress.total} steps validated.
+        </p>
+      )}
       <ReviewPublicationDetails
         review={workspace.review}
         busy={busy}
@@ -79,6 +85,12 @@ export function ReviewSummary({
         <p role="status" className="text-sm text-muted-foreground">
           {message}
         </p>
+      )}
+      {workspace.review.mode === "manual" && comments && (
+        <ReviewCommentsSummary
+          session={comments}
+          snapshotId={workspace.snapshot.id}
+        />
       )}
       <section
         aria-label="Changes in this review"

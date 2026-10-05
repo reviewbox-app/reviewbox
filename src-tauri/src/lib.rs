@@ -24,6 +24,7 @@ mod proposals;
 mod reader;
 mod repositories;
 mod repository_cache;
+mod review_comments;
 mod review_creation;
 mod review_menu;
 mod reviews;
@@ -177,6 +178,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            review_comments::read_review_comments,
+            review_comments::mutate_review_comment,
             editor::commands::editor_navigation,
             editor::commands::editor_store_navigation,
             terminals::terminal_create,

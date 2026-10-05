@@ -21,6 +21,7 @@ import { MarkdownPreviewToggle } from "@/features/markdown/components/MarkdownPr
 import { DocumentDiffView } from "@/features/markdown/components/DocumentDiffView"
 import { isDocumentFile } from "@/features/markdown/helpers/documentFiles.helpers"
 import { ReviewSourceCode } from "../components/ReviewSourceCode"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
 import { ReviewSourceFile } from "../components/ReviewSourceFile"
 import {
   sourcePreviewSession,
@@ -63,10 +64,12 @@ export function ReviewCodePane({
   overlay,
   modelScope = "reader",
   source,
+  onCommentSelection,
 }: {
   /** Each simultaneous diff owns distinct Monaco models and their lifecycle. */
   modelScope?: "reader" | "reference" | "local"
   source?: FileContent
+  onCommentSelection?: (selection: SourceSelection | null) => void
   snapshot: Pick<Snapshot, "id">
   change: Change
   passage?: Passage
@@ -315,6 +318,7 @@ export function ReviewCodePane({
             />
           ) : (
             <SourceCode
+              onCommentSelection={onCommentSelection}
               snapshot={snapshot}
               change={change}
               content={content}

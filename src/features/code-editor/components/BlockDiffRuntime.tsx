@@ -155,6 +155,7 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
       changed: () => persist(),
       cursor: (line, column) => latest.current.onCursor({ line, column }),
       find: () => setSearch(true),
+      selection: (selection) => latest.current.onCommentSelection?.(selection),
     })
     const state: Runtime = {
       main,

@@ -140,6 +140,8 @@
     "allow-latest-language-setup",
     "allow-cancel-language-setup",
     "allow-apply-language-setup",
-    "allow-export-language-pack"
+    "allow-export-language-pack",
+    "allow-read-review-comments",
+    "allow-mutate-review-comment"
   ]
 }
