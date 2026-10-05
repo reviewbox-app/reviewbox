@@ -1,6 +1,8 @@
 .block-diff {
   --block-added: #26332b;
   --block-removed: #38292b;
+  --block-modified: #3b3023;
+  --block-word-modified: #f59e0b40;
   position: relative;
   height: 100%;
   width: 100%;
@@ -9,6 +11,8 @@
 .block-diff[data-theme="light"] {
   --block-added: #edf7ef;
   --block-removed: #fceeef;
+  --block-modified: #fff4e5;
+  --block-word-modified: #d9770630;
 }
 .block-diff-main {
   height: 100%;
@@ -28,15 +32,23 @@
 .block-diff .block-added-margin {
   background: var(--block-added);
 }
+.block-diff .block-modified,
+.block-diff .block-modified-margin {
+  background: var(--block-modified);
+}
+.block-diff .block-modified.block-first,
 .block-diff .block-added.block-first {
   border-top-right-radius: 8px;
 }
+.block-diff .block-modified.block-last,
 .block-diff .block-added.block-last {
   border-bottom-right-radius: 8px;
 }
+.block-diff .block-modified-margin.block-first,
 .block-diff .block-added-margin.block-first {
   border-top-left-radius: 8px;
 }
+.block-diff .block-modified-margin.block-last,
 .block-diff .block-added-margin.block-last {
   border-bottom-left-radius: 8px;
 }
@@ -154,5 +166,10 @@
 }
 .block-diff .block-word-before {
   background: var(--vscode-diffEditor-removedTextBackground);
+  border-radius: 2px;
+}
+
+.block-diff .block-word-modified {
+  background: var(--block-word-modified);
   border-radius: 2px;
 }

@@ -103,6 +103,7 @@ export class BlockDiffZones {
       blocks.flatMap((block) => {
         if (!block.after || (compare && block.before)) return []
         const { start, end } = block.after
+        const tone = block.before ? "modified" : "added"
         const ranges =
           start === end
             ? [{ start, end, edge: "block-first block-last" }]
@@ -118,13 +119,17 @@ export class BlockDiffZones {
             range: lineRange(range.start, range.end),
             options: {
               isWholeLine: true,
-              className: `block-added ${range.edge}`,
-              marginClassName: `block-added-margin ${range.edge}`,
+              className: `block-${tone} ${range.edge}`,
+              marginClassName: `block-${tone}-margin ${range.edge}`,
             },
           })),
           ...(block.words?.after ?? []).map((range) => ({
             range,
-            options: { inlineClassName: "block-word-after" },
+            options: {
+              inlineClassName: block.before
+                ? "block-word-modified"
+                : "block-word-after",
+            },
           })),
         ]
       })

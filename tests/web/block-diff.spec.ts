@@ -20,34 +20,23 @@ test("block comparisons keep unchanged code single, exact models and one scroll"
   ).toHaveCount(0)
   await expect(root.locator(".block-deletion button").first()).toBeVisible()
   await expect(root.locator(".block-comparison")).toHaveCount(0)
-  const surfaces = await root
-    .locator(".block-added, .block-added-margin")
-    .evaluateAll((nodes) =>
-      nodes.map((node) => getComputedStyle(node).backgroundColor)
-    )
-  expect(surfaces.length).toBeGreaterThan(1)
-  expect(new Set(surfaces).size).toBe(1)
+  await expect(root.locator(".block-modified").first()).toBeVisible()
+  await expect(root.locator(".block-word-modified").first()).toBeVisible()
   for (const [theme, color] of [
-    ["Light", "rgb(237, 247, 239)"],
-    ["Dark", "rgb(38, 51, 43)"],
+    ["Light", "rgb(255, 244, 229)"],
+    ["Dark", "rgb(59, 48, 35)"],
   ]) {
     await page.getByRole("button", { name: theme, exact: true }).click()
-    await expect
-      .poll(() =>
-        root
-          .locator(".block-added")
-          .first()
-          .evaluate((n) => getComputedStyle(n).backgroundColor)
-      )
-      .toBe(color)
-    await expect
-      .poll(() =>
-        root
-          .locator(".block-added-margin")
-          .first()
-          .evaluate((n) => getComputedStyle(n).backgroundColor)
-      )
-      .toBe(color)
+    for (const selector of [".block-modified", ".block-modified-margin"]) {
+      await expect
+        .poll(() =>
+          root
+            .locator(selector)
+            .first()
+            .evaluate((node) => getComputedStyle(node).backgroundColor)
+        )
+        .toBe(color)
+    }
   }
 
   await page
@@ -61,6 +50,9 @@ test("block comparisons keep unchanged code single, exact models and one scroll"
       .locator(".block-comparison .block-after .view-lines")
       .filter({ hasText: "currentOnlyValue" })
   ).toBeVisible()
+  await expect(
+    root.locator(".block-modified, .block-word-modified")
+  ).toHaveCount(0)
   const block = root
     .locator(".block-comparison")
     .filter({ hasText: "currentOnlyValue" })
@@ -98,7 +90,7 @@ test("block comparisons keep unchanged code single, exact models and one scroll"
     const current = block.locator(".block-after")
     const mainNumbers = root
       .locator(
-        ".block-diff-main > .monaco-editor > .overflow-guard > .margin .line-numbers"
+        ".block-diff-main > .monaco-editor > .overflow-guard > .margin .line-numbers:visible"
       )
       .first()
     const blockNumbers = current.locator(".line-numbers:visible").first()
