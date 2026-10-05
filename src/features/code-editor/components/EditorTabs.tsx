@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useId, useRef, useState } from "react"
+import { FileIcon } from "@/features/file-icons/components/FileIcon"
 import {
   closestCenter,
   DndContext,
@@ -16,7 +16,7 @@ import {
   SortableContext,
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable"
-import { FileIcon } from "@/features/file-icons/components/FileIcon"
+import { useEffect, useId, useRef, useState } from "react"
 import { type EditorBuffer } from "../stores/editor.store"
 import { SortableEditorTab } from "./SortableEditorTab"
 
@@ -98,7 +98,7 @@ export function EditorTabs({
         ref={strip}
         role="tablist"
         aria-label="Open files"
-        className="flex shrink-0 gap-1 overflow-x-auto border-b p-2"
+        className="flex shrink-0 gap-1 overflow-x-auto border-b p-1"
       >
         <SortableContext
           items={buffers.map((buffer) => buffer.id)}

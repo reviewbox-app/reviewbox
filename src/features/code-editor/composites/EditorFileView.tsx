@@ -33,7 +33,6 @@ const viewStates = new Map<string, editor.ICodeEditorViewState>()
 export function EditorFileView({
   repositoryId,
   buffer,
-  onSave,
   onConflict,
 }: {
   repositoryId: string
@@ -100,8 +99,11 @@ export function EditorFileView({
       aria-label="Project file"
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
-      <header className="flex min-h-12 items-center gap-2 border-b px-3">
-        <span className="min-w-0 flex-1 truncate text-sm" title={buffer.path}>
+      <header className="flex items-center gap-2 border-b p-1">
+        <span
+          className="min-w-0 flex-1 truncate text-xs opacity-50"
+          title={buffer.path}
+        >
           {buffer.path}
         </span>
         {isDocumentFile(buffer.path, buffer.text.split("\n", 1)[0]) && (
@@ -115,8 +117,8 @@ export function EditorFileView({
             }
           />
         )}
-        <Button
-          size="sm"
+        {/*<Button
+          size="icon-sm"
           variant="ghost"
           aria-label="Find in file"
           onClick={() => {
@@ -124,16 +126,8 @@ export function EditorFileView({
             else void instance.current?.getAction("actions.find")?.run()
           }}
         >
-          Find
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={!dirty(buffer) || buffer.readOnly}
-          onClick={onSave}
-        >
-          Save
-        </Button>
+          <HugeiconsIcon icon={Search01Icon} />
+        </Button>*/}
       </header>
       {buffer.external !== undefined && (
         <div

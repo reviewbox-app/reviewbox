@@ -45,16 +45,14 @@ import {
   publicationLabel,
   reviewIsComplete,
 } from "../helpers/publication.helpers"
-import { shortTime } from "../helpers/review.helpers"
+import { readingStep, shortTime } from "../helpers/review.helpers"
 import { readerCommands } from "../services/reader.commands"
 
 function stepOf(review: Review, stepId?: string | null) {
-  if (!stepId) return null
-  for (const topic of review.topics) {
-    const index = topic.steps.findIndex((step) => step.id === stepId)
-    if (index >= 0) return { topic, step: topic.steps[index], index }
-  }
-  return null
+  return readingStep({
+    topics: review.topics,
+    position: { ...review.position, context: "guided", stepId: stepId ?? null },
+  })
 }
 
 function ListRow({
@@ -359,9 +357,8 @@ export function ResumeReviews({
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   {position ? (
                     <>
-                      <InlineMarkdown>{position.topic.title}</InlineMarkdown> ·
-                      step {position.index + 1} of {position.topic.steps.length}{" "}
-                      · read {shortTime(review.updatedAt)}
+                      step {position.index + 1} of {position.total} · read{" "}
+                      {shortTime(review.updatedAt)}
                     </>
                   ) : (
                     `Last opened ${shortTime(review.updatedAt)}`

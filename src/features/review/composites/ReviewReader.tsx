@@ -149,7 +149,7 @@ export function ReviewReader({
     message: string
   } | null>(null)
   const navigationPanel = useRef<HTMLElement>(null)
-  const [summary, setSummary] = useState(false)
+  const [summary, setSummary] = useState(completed)
   const [details, setDetails] = useState(false)
   const menuError = useReviewMenu({
     onLocalChanges,
@@ -706,6 +706,15 @@ export function ReviewReader({
                 </Button>
               </Hint>
             )}
+            {hasReviewDocuments && !summary && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setSummary(true)}
+              >
+                Review summary
+              </Button>
+            )}
             {review.needsUpdateConfirmation && (
               <Button
                 size="sm"
@@ -795,6 +804,14 @@ export function ReviewReader({
               className="absolute inset-x-0 bottom-0 z-40 border-t glass-bar px-3"
               style={{ height: reviewReaderLayout.footerHeight }}
             >
+              {deciding && (
+                <p
+                  role="status"
+                  className="absolute inset-x-0 bottom-full border-t bg-card p-2 text-center text-sm text-muted-foreground"
+                >
+                  Saving your decision and finalizing the review…
+                </p>
+              )}
               <DecisionBar
                 unitLabel={guided ? "step" : "file"}
                 validated={validated}

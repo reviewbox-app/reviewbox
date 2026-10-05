@@ -1,5 +1,4 @@
 import { InlineMarkdown } from "@/features/markdown/components/InlineMarkdown"
-import { MarkdownRenderer } from "@/features/markdown/components/MarkdownRenderer"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import type {
@@ -86,52 +85,42 @@ export function ReviewSummary({
         className="space-y-8 border-t pt-6"
       >
         <h2 className="text-lg font-semibold">Changes in this review</h2>
-        {workspace.review.topics.map((topic) => (
-          <section key={topic.id} className="space-y-3">
-            <h3 className="font-medium">
-              <InlineMarkdown>{topic.title}</InlineMarkdown>
-            </h3>
-            {topic.brief && (
-              <MarkdownRenderer className="text-sm text-muted-foreground">
-                {topic.brief}
-              </MarkdownRenderer>
-            )}
-            <ul className="space-y-2">
-              {topic.steps.map((step) => {
-                const validated = !!stepDecision(workspace.review, step.id)
-                const examined = workspace.review.decisions.some(
-                  (decision) =>
-                    decision.target.kind === "step" &&
-                    decision.target.stepId === step.id &&
-                    decision.state === "examined"
-                )
-                return (
-                  <li
-                    key={step.id}
-                    className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm"
+        <ul className="space-y-2">
+          {workspace.review.topics
+            .flatMap((topic) => topic.steps)
+            .map((step) => {
+              const validated = !!stepDecision(workspace.review, step.id)
+              const examined = workspace.review.decisions.some(
+                (decision) =>
+                  decision.target.kind === "step" &&
+                  decision.target.stepId === step.id &&
+                  decision.state === "examined"
+              )
+              return (
+                <li
+                  key={step.id}
+                  className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm"
+                >
+                  <span className="min-w-0 flex-1">
+                    <InlineMarkdown>{step.title}</InlineMarkdown>
+                  </span>
+                  <span
+                    className={
+                      validated
+                        ? "text-review-validated"
+                        : "text-muted-foreground"
+                    }
                   >
-                    <span className="min-w-0 flex-1">
-                      <InlineMarkdown>{step.title}</InlineMarkdown>
-                    </span>
-                    <span
-                      className={
-                        validated
-                          ? "text-review-validated"
-                          : "text-muted-foreground"
-                      }
-                    >
-                      {validated
-                        ? "Validated"
-                        : examined
-                          ? "Examined"
-                          : "To review"}
-                    </span>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-        ))}
+                    {validated
+                      ? "Validated"
+                      : examined
+                        ? "Examined"
+                        : "To review"}
+                  </span>
+                </li>
+              )
+            })}
+        </ul>
       </section>
     </article>
   )

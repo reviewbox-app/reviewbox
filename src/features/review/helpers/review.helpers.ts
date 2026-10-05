@@ -52,13 +52,13 @@ export function currentUnit(workspace: Workspace) {
 
 export function readingStep(review: Pick<Review, "topics" | "position">) {
   if (review.position.context === "files") return undefined
-  for (const topic of review.topics) {
-    const index = topic.steps.findIndex(
-      (step) => step.id === review.position.stepId
-    )
-    if (index >= 0) return { topic, step: topic.steps[index], index }
-  }
-  return undefined
+  const steps = review.topics.flatMap((topic) =>
+    topic.steps.map((step) => ({ topic, step }))
+  )
+  const index = steps.findIndex(
+    ({ step }) => step.id === review.position.stepId
+  )
+  return index < 0 ? undefined : { ...steps[index], index, total: steps.length }
 }
 
 export function stepDecision(review: Review, stepId: string) {

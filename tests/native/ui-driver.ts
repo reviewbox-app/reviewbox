@@ -354,6 +354,12 @@ export class NativeUI {
   }
   /** Enter the scope step, regardless of whether this machine needs Rev setup. */
   async reviewScope() {
+    // Repository loading may finish after the Open click has returned. Wait for
+    // an actionable surface before deciding whether the wizard needs opening.
+    await this.until(
+      `!!document.querySelector('[role="dialog"]') || [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Start review' && !e.disabled)`,
+      "review entry point"
+    )
     if (
       await this.execute(
         `return !document.querySelector('[role="dialog"]') && [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Start review')`

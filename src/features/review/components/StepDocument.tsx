@@ -48,7 +48,7 @@ export function StepDocument({
   onOpenCode: (anchor: CodeAnchor) => void
   onOpenReference: (reference: DocumentReference) => void
 }) {
-  const { step, topic } = unit.step
+  const { step } = unit.step
   const document = step.documents[level]
   return (
     <article
@@ -60,7 +60,6 @@ export function StepDocument({
       <header className="space-y-3">
         <p className="text-xs font-medium text-muted-foreground">
           Step {index + 1} of {total} ·{" "}
-          <InlineMarkdown>{topic.title}</InlineMarkdown> ·{" "}
           {Math.max(1, Math.ceil(document.readingSeconds / 60))} min read
         </p>
         <h1

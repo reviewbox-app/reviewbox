@@ -144,7 +144,7 @@ export function FileTree({
     })
   }
   const row =
-    "relative flex w-full items-center gap-1.5 rounded-xl py-1 pr-2 text-left text-sm outline-none hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/30"
+    "relative flex h-[22px] w-full items-center gap-0 rounded-md p-0 text-left text-[13px] leading-[22px] outline-none hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/30"
   const render = (folder: Folder, depth: number): React.ReactNode => (
     <>
       {[...folder.folders.values()]
@@ -156,13 +156,14 @@ export function FileTree({
             <>
               <HugeiconsIcon
                 icon={open ? ArrowDown01Icon : ArrowRight01Icon}
-                size={14}
+                size={16}
                 className="shrink-0 text-muted-foreground"
+                style={{ marginLeft: 8 + depth * 8, marginRight: 6 }}
               />
-              <FolderIcon path={child.path} open={open} />
+              <FolderIcon path={child.path} open={open} size={16} />
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate",
+                  "ml-1.5 min-w-0 flex-1 truncate",
                   gitStatusColor(folderStatuses[child.path])
                 )}
               >
@@ -183,7 +184,6 @@ export function FileTree({
                         ignoredFolders.get(child.path)) &&
                         "opacity-60"
                     )}
-                    style={{ paddingLeft: 6 + depth * 14 }}
                   >
                     {content}
                   </div>
@@ -197,7 +197,6 @@ export function FileTree({
                         ignoredFolders.get(child.path)) &&
                         "opacity-60"
                     )}
-                    style={{ paddingLeft: 6 + depth * 14 }}
                     onClick={() => toggle(child.path)}
                   >
                     {content}
@@ -221,7 +220,6 @@ export function FileTree({
                 (selectedPaths ? selectedPaths.has(path) : path === selected) &&
                   "bg-accent hover:bg-accent"
               )}
-              style={{ paddingLeft: 26 + depth * 14 }}
               onClick={(event) => onSelect(path, event, visiblePaths)}
             >
               <span
@@ -233,8 +231,9 @@ export function FileTree({
                       ? "opacity-50"
                       : statuses[path] === "D" && "opacity-75"
                 )}
+                style={{ marginLeft: 30 + depth * 8 }}
               >
-                <FileIcon path={path} />
+                <FileIcon path={path} size={16} />
                 {reviewedPaths?.has(path) && (
                   <span className="sr-only">{dimmedLabel}</span>
                 )}
@@ -271,5 +270,5 @@ export function FileTree({
       ))}
     </>
   )
-  return <ul className="space-y-px">{render(tree, 0)}</ul>
+  return <ul>{render(tree, 0)}</ul>
 }

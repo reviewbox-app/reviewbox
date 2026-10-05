@@ -487,7 +487,6 @@ pub(crate) fn read_file(
 pub(crate) fn summary(workspace: &Workspace, level: ReadingLevel) -> String {
     let mut out = format!("# {}\n\n", workspace.review.title);
     for topic in &workspace.review.topics {
-        out.push_str(&format!("## {}\n\n", topic.title));
         for step in &topic.steps {
             let done = workspace.review.decisions.iter().any(|d| {
                 d.target
@@ -497,7 +496,7 @@ pub(crate) fn summary(workspace: &Workspace, level: ReadingLevel) -> String {
                     && d.state == DecisionState::Validated
             });
             out.push_str(&format!(
-                "### {} {}\n\n{}\n\n",
+                "## {} {}\n\n{}\n\n",
                 if done { "[x]" } else { "[ ]" },
                 step.title,
                 step.documents.get(level).body

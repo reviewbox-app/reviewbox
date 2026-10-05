@@ -340,3 +340,21 @@ test("overlapping steps must all be validated even when they point to the same p
   })
   expect(reviewedTreePaths(workspace).has("a.ts")).toBe(true)
 })
+
+test("resuming a review counts steps across legacy groups", () => {
+  const workspace = fixture()
+  const steps = workspace.review.topics.flatMap((topic) => topic.steps)
+  workspace.review.topics = steps.map((step, index) => ({
+    ...workspace.review.topics[0],
+    id: String(index),
+    steps: [step],
+  }))
+  workspace.review.position = {
+    ...workspace.review.position,
+    context: "guided",
+    stepId: steps.at(-1)!.id,
+  }
+  const position = readingStep(workspace.review)
+  expect(position?.index).toBe(steps.length - 1)
+  expect(position?.total).toBe(steps.length)
+})
