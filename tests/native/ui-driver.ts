@@ -88,6 +88,58 @@ export class NativeUI {
     await this.execute(
       `window.__uiErrors=[];window.addEventListener('error',e=>window.__uiErrors.push(e.message));window.addEventListener('unhandledrejection',e=>window.__uiErrors.push(String(e.reason)));return true`
     )
+    await this.activateWindow()
+  }
+  private async activateWindow() {
+    assert(this.child, "Start the validation process before activating it")
+    if (process.platform === "darwin") {
+      // Target this fixture's process: the installed app can share its bundle ID.
+      const activation = Bun.spawn(
+        [
+          "osascript",
+          "-l",
+          "JavaScript",
+          "-e",
+          `ObjC.import('AppKit'); function run(argv) {
+            const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
+            return app.activateWithOptions(3);
+          }`,
+          String(this.child.pid),
+        ],
+        { stdout: "pipe", stderr: "pipe" }
+      )
+      const [exitCode, error] = await Promise.all([
+        activation.exited,
+        new Response(activation.stderr).text(),
+      ])
+      assert.equal(
+        exitCode,
+        0,
+        `Could not activate the native test window: ${error}`
+      )
+    }
+    await this.execute(
+      "window.__nativeValidationFrame=false;requestAnimationFrame(()=>window.__nativeValidationFrame=true);return true"
+    )
+    try {
+      await this.wait(
+        () =>
+          this.execute(
+            "return document.visibilityState==='visible' && window.__nativeValidationFrame===true"
+          ),
+        "visible native window with an active rendering loop",
+        8000
+      )
+    } catch (error) {
+      throw new Error(
+        "Native UI validation requires a visible desktop session. Unlock macOS and keep the validation window visible; WebKit suspends Monaco and terminal rendering while the session is locked or hidden.",
+        { cause: error }
+      )
+    } finally {
+      await this.execute(
+        "delete window.__nativeValidationFrame;return true"
+      ).catch(() => {})
+    }
   }
   execute<T = unknown>(script: string, args: unknown[] = []) {
     return this.request<T>(this.route("/execute/sync"), { script, args })
@@ -455,6 +507,14 @@ export class NativeUI {
       Buffer.from(data, "base64")
     )
     await writeFile(join(this.artifacts, `${name}.txt`), await this.text())
+    await writeFile(
+      join(this.artifacts, `${name}.errors.json`),
+      JSON.stringify(
+        await this.execute("return window.__uiErrors ?? []"),
+        null,
+        2
+      )
+    )
   }
   async stop() {
     if (this.session)

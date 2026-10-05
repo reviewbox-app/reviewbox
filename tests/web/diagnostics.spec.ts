@@ -25,6 +25,11 @@ test.beforeEach(async ({ page, context }) => {
         ) => {
           if (command.startsWith("plugin:event|")) return 1
           if (command === "editor_profiles") return []
+          if (command === "system_code_fonts") return []
+          if (command === "project_skill_preferences")
+            return { revision: 0, enabled: true, projects: {} }
+          if (command === "review_working_context")
+            return { snapshotId: "fixture-snapshot", files: [] }
           if (command === "appearance_settings")
             return {
               revision: 0,
