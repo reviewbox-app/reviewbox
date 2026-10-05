@@ -17,6 +17,7 @@ import {
   saveAllEditors,
   useEditorStore,
   editorError,
+  updateEditor,
 } from "../stores/editor.store"
 import {
   flushEditorRecovery,
@@ -24,6 +25,7 @@ import {
   setEditorFinishing,
 } from "../services/editorLifecycle.service"
 import { observeLanguageRegistry } from "@/features/language-servers/services/languageRegistry.service"
+import { observeEditorMenu } from "../services/editorMenu.service"
 
 /** Lives with the app, so drafts survive leaving the editor or switching checkout. */
 export function EditorLifecycle() {
@@ -31,6 +33,7 @@ export function EditorLifecycle() {
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   useEffect(observeLanguageRegistry, [])
+  useEffect(observeEditorMenu, [])
   useEffect(() => {
     if (desktopAvailable()) return observeEditorPersistence()
   }, [])
@@ -40,12 +43,72 @@ export function EditorLifecycle() {
       setExit(true)
     )
     const subscriptions = new Map<string, () => void>()
+    const fallbacks = new Map<string, ReturnType<typeof setTimeout>>()
+    const revisions = new Map<
+      string,
+      { generation: string; sequence: number }
+    >()
+    let disposed = false
+    const check = async (id: string, fallback = false) => {
+      if (disposed || document.visibilityState !== "visible") return
+      try {
+        const status = await editorCommands.watchStatus(id)
+        if (disposed || !subscriptions.has(id)) return
+        updateEditor(id, (session) =>
+          session.watchHealthy === status.healthy
+            ? session
+            : { ...session, watchHealthy: status.healthy }
+        )
+        const previous = revisions.get(id)
+        const missed = previous
+          ? previous.generation !== status.generation ||
+            status.sequence > previous.sequence
+          : status.sequence > 0
+        revisions.set(id, status)
+        const session = useEditorStore.getState().sessions[id]
+        if (session?.ready)
+          await refreshEditor(
+            id,
+            fallback || missed
+              ? undefined
+              : {
+                  repositoryId: id,
+                  paths: session.buffers
+                    .filter((buffer) => !buffer.path.startsWith("file:"))
+                    .map((buffer) => buffer.path),
+                  tree: false,
+                  git: false,
+                  full: false,
+                }
+          )
+        clearTimeout(fallbacks.get(id))
+        fallbacks.delete(id)
+        if (!status.healthy && !disposed)
+          fallbacks.set(
+            id,
+            setTimeout(() => void check(id, true), 30000)
+          )
+      } catch (error) {
+        if (!disposed) {
+          updateEditor(id, (session) => ({ ...session, watchHealthy: false }))
+          editorError(id, error)
+          clearTimeout(fallbacks.get(id))
+          fallbacks.set(
+            id,
+            setTimeout(() => void check(id, true), 30000)
+          )
+        }
+      }
+    }
     const sync = () => {
       const sessions = useEditorStore.getState().sessions
       for (const [id, stop] of subscriptions) {
         if (!sessions[id]?.ready) {
           stop()
           subscriptions.delete(id)
+          clearTimeout(fallbacks.get(id))
+          fallbacks.delete(id)
+          revisions.delete(id)
         }
       }
       for (const [id, session] of Object.entries(sessions)) {
@@ -53,8 +116,19 @@ export function EditorLifecycle() {
           subscriptions.set(
             id,
             subscribeRepositoryReads(id, (change) => {
+              if (change.generation && change.sequence !== undefined)
+                revisions.set(id, {
+                  generation: change.generation,
+                  sequence: change.sequence,
+                })
               void refreshEditor(id, change).catch((e) => editorError(id, e))
+              if (change.full) void check(id)
             })
+          )
+          // Native registration is asynchronous. Health checks only enable a bounded fallback if unavailable.
+          fallbacks.set(
+            id,
+            setTimeout(() => void check(id), 1000)
           )
         }
       }
@@ -62,17 +136,17 @@ export function EditorLifecycle() {
     sync()
     const stopStore = useEditorStore.subscribe(sync)
     const refresh = () => {
-      if (document.visibilityState !== "visible") return
-      for (const [id, s] of Object.entries(useEditorStore.getState().sessions))
-        if (s.ready) void refreshEditor(id).catch((e) => editorError(id, e))
+      for (const id of subscriptions.keys()) void check(id)
     }
-    const interval = setInterval(refresh, 30000)
     window.addEventListener("focus", refresh)
+    document.addEventListener("visibilitychange", refresh)
     return () => {
-      clearInterval(interval)
+      disposed = true
       stopStore()
       for (const stop of subscriptions.values()) stop()
+      for (const timer of fallbacks.values()) clearTimeout(timer)
       window.removeEventListener("focus", refresh)
+      document.removeEventListener("visibilitychange", refresh)
       void listener.then((stop) => stop())
     }
   }, [])
@@ -80,7 +154,7 @@ export function EditorLifecycle() {
     setBusy(true)
     setError("")
     try {
-      if (save) await saveAllEditors()
+      if (save) await saveAllEditors(undefined, "close")
       setEditorFinishing(true)
       await flushEditorRecovery(true)
       await editorCommands.exit()
