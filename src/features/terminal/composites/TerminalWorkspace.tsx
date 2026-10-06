@@ -1,5 +1,6 @@
 "use client"
 import "@xterm/xterm/css/xterm.css"
+import "../terminal.css"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
   DndContext,

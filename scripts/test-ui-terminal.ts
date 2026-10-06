@@ -32,6 +32,34 @@ try {
   await ui.named("Terminal", '[data-testid="workspace-navigation"] [role=tab]')
   await ui.element('[aria-label="Terminals"] [role=tab]')
   await ui.until("!!document.querySelector('.xterm-helper-textarea')")
+  phase = "transparent terminal surfaces in both themes"
+  const originalDark = await ui.execute<boolean>(
+    "return document.documentElement.classList.contains('dark')"
+  )
+  for (const dark of [false, true]) {
+    await ui.execute(
+      "document.documentElement.classList.toggle('dark', arguments[0]); return true",
+      [dark]
+    )
+    await ui.until(
+      `(() => {
+      const terminal = document.querySelector('section[aria-label="Terminal workspace"] .xterm');
+      const surfaces = ['.xterm-viewport', '.xterm-scrollable-element', '.xterm-screen', '.xterm-rows'];
+      return surfaces.every(selector => {
+        const element = terminal?.querySelector(selector);
+        return element && getComputedStyle(element).backgroundColor === 'rgba(0, 0, 0, 0)';
+      });
+    })()`,
+      "terminal layers expose the panel background"
+    )
+    await ui.screenshot(
+      dark ? "terminal-transparent-dark" : "terminal-transparent-light"
+    )
+  }
+  await ui.execute(
+    "document.documentElement.classList.toggle('dark', arguments[0]); return true",
+    [originalDark]
+  )
   phase = "real shell input and output"
   await paste(
     "printf 'REVIEWBOX_%s\\n' 'TERMINAL_OK'; printf ready > terminal-proof.txt; printf %s \"$$\" > terminal-shell.pid"

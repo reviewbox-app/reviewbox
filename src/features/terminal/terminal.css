@@ -1,0 +1,4 @@
+/* xterm 6 themes the new scrollable element but retains an opaque legacy viewport. */
+section[aria-label="Terminal workspace"] .xterm .xterm-viewport {
+  background-color: transparent;
+}

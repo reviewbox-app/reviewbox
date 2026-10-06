@@ -65,6 +65,9 @@ export async function createTerminal(
       fontFamily: codeEditorOptions().fontFamily,
       fontWeight: Number(codeEditorOptions().fontWeight),
       cursorBlink: true,
+      cursorStyle: "bar",
+      cursorInactiveStyle: "bar",
+      allowTransparency: true,
       allowProposedApi: true,
       convertEol: false,
       theme: terminalTheme(),
@@ -245,13 +248,13 @@ export function terminalTheme() {
   const light = !document.documentElement.classList.contains("dark")
   return light
     ? {
-        background: "#fafafa",
+        background: "#00000000",
         foreground: "#242424",
         cursor: "#242424",
         selectionBackground: "#005fcc40",
       }
     : {
-        background: "#171717",
+        background: "#00000000",
         foreground: "#e5e5e5",
         cursor: "#e5e5e5",
         selectionBackground: "#64748b66",
