@@ -27,6 +27,7 @@ mod repositories;
 mod repository_cache;
 mod review_comments;
 mod review_creation;
+mod review_finalization;
 mod review_menu;
 mod reviews;
 mod snapshots;
@@ -42,6 +43,8 @@ pub fn run() {
     #[cfg(feature = "native-validation")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
+        .manage(review_finalization::Finalizations::default())
+        .manage(source_control::review_commit::ReviewCommits::default())
         .manage(illustrations::Illustrations::default())
         .manage(editor::commands::EditorState::default())
         .manage(terminals::Terminals::default())
@@ -106,6 +109,14 @@ pub fn run() {
                         live.repository_changed(&root, &change).await;
                     });
                 });
+            let review_app = app.handle().clone();
+            storage.set_review_notifier(move |repository_id, review_id| {
+                use tauri::Emitter;
+                let _ = review_app.emit(
+                    "reviewbox:review-changed",
+                    serde_json::json!({"repositoryId":repository_id,"reviewId":review_id}),
+                );
+            });
             app.manage(storage);
             app.manage(source_control::SourceControl::default());
             notifications::install(app.handle());
@@ -166,6 +177,7 @@ pub fn run() {
                     .state::<language_servers::live::LiveLanguages>()
                     .stop_all();
                 window.state::<source_control::SourceControl>().stop_all();
+                window.state::<review_finalization::Finalizations>().stop();
                 window.state::<preparation::PreparationManager>().stop_all();
                 window
                     .state::<review_creation::CaptureManager>()
@@ -283,6 +295,10 @@ pub fn run() {
             commands::diagnose_proposal,
             commands::load_review,
             commands::update_review,
+            review_finalization::start_review_finalization,
+            review_finalization::get_review_finalization,
+            source_control::review_commit::start_review_commit,
+            source_control::review_commit::get_review_commit,
             commands::refresh_review,
             commands::delete_review,
             commands::read_change,
@@ -345,6 +361,8 @@ pub fn run() {
             ) {
                 app.state::<language_servers::setup::Setup>().0.stop_all();
                 app.state::<terminals::Terminals>().stop_all();
+                app.state::<review_finalization::Finalizations>().stop();
+                app.state::<source_control::SourceControl>().stop_all();
                 app.state::<language_servers::live::LiveLanguages>()
                     .stop_all();
                 app.state::<preparation::PreparationManager>().stop_all();

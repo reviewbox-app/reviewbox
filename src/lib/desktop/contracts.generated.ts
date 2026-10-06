@@ -456,6 +456,34 @@ export type GitOperation = {
   commits: Array<GitCommitSummary>
   error: string | null
 }
+export type FinalizationStatus =
+  "running" | "completed" | "failed" | "interrupted"
+export type FinalizationStepStatus =
+  "queued" | "running" | "completed" | "skipped" | "failed"
+export type ReviewFinalizationStep = {
+  id: string
+  title: string
+  status: FinalizationStepStatus
+  startedAt: string | null
+  finishedAt: string | null
+  error: AppError | null
+}
+export type ReviewFinalization = {
+  id: string
+  repositoryId: string
+  reviewId: string
+  sequence: number
+  action: ReviewAction
+  status: FinalizationStatus
+  steps: Array<ReviewFinalizationStep>
+  error: AppError | null
+}
+export type ReviewCommitOperation = {
+  reviewId: string
+  sequence: number
+  phase: string
+  operation: GitOperation
+}
 export type ReviewMenuEvent = {
   reviewId: string
   snapshotId: string

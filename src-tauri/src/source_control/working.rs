@@ -242,6 +242,15 @@ pub(super) fn stage_files(
     stage: bool,
     cancel: &AtomicBool,
 ) -> AppResult<()> {
+    stage_files_version(root, selections, stage, cancel).map(|_| ())
+}
+
+pub(super) fn stage_files_version(
+    root: &Path,
+    selections: &[LocalFileSelection],
+    stage: bool,
+    cancel: &AtomicBool,
+) -> AppResult<String> {
     let mut lock = git::IndexLock::acquire(root)?;
     let selected = selected_files(root, selections)?;
     let original = fs::read(git::git_path(root, "index")?).ok();
@@ -295,7 +304,21 @@ pub(super) fn stage_files(
             "The Git index changed in another tool.",
         ));
     }
-    lock.publish(root, &temporary.0)
+    // Compute the exact future index identity before releasing index.lock.
+    // An external writer between publication and freeze must be detected.
+    let version = fingerprint(&serde_json::to_vec(&(
+        git::head(root),
+        git::text(root, &["symbolic-ref", "--quiet", "HEAD"]).ok(),
+        git::run(
+            root,
+            &["ls-files", "--stage", "-z"],
+            Some(&temporary.0),
+            &[],
+            cancel,
+        )?,
+    ))?);
+    lock.publish(root, &temporary.0)?;
+    Ok(version)
 }
 
 fn blob(root: &Path, reference: &str, path: &str) -> AppResult<Option<(String, Vec<u8>)>> {

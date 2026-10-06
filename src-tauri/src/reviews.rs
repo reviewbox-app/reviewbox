@@ -754,3 +754,26 @@ pub fn refresh(storage: &Storage, id: &str, revision: u32) -> AppResult<Workspac
 
 #[cfg(test)]
 mod tests;
+
+/// Persist human completion before starting publication. Replays never add another decision.
+pub(crate) fn save_finalization_decision(
+    storage: &Storage,
+    id: &str,
+    revision: u32,
+    action: ReviewAction,
+) -> AppResult<Workspace> {
+    let current = load(storage, id)?;
+    storage.check_update_write(&current.review.repository_id, id)?;
+    if current.review.publication.is_complete() {
+        return Ok(current);
+    }
+    let workspace = prepare_action(storage, current, revision, action)?;
+    if !workspace.review.publication.is_complete() {
+        return Err(AppError::new(
+            "review_incomplete",
+            "Finish validating this review before finalizing it.",
+        ));
+    }
+    storage.replace("review", id, revision, &workspace.review)?;
+    Ok(workspace)
+}

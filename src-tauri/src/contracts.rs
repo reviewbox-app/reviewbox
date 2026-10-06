@@ -35,10 +35,12 @@ mod working_context;
 pub use working_context::*;
 mod provider_setup;
 mod publication;
+mod review_finalization;
 pub use creation::*;
 pub use preparation::*;
 pub use provider_setup::*;
 pub use publication::*;
+pub use review_finalization::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -586,6 +588,11 @@ pub fn typescript() -> String {
         LocalFileDiff::decl(&cfg),
         GitCommitRequest::decl(&cfg),
         GitOperation::decl(&cfg),
+        FinalizationStatus::decl(&cfg),
+        FinalizationStepStatus::decl(&cfg),
+        ReviewFinalizationStep::decl(&cfg),
+        ReviewFinalization::decl(&cfg),
+        ReviewCommitOperation::decl(&cfg),
         ReviewMenuEvent::decl(&cfg),
         ProjectSettings::decl(&cfg),
         PreparationMode::decl(&cfg),
