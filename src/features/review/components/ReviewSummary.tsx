@@ -10,7 +10,10 @@ import { errorMessage } from "@/lib/desktop/review.commands"
 import { guidedProgress, stepDecision } from "../helpers/review.helpers"
 import { readerCommands } from "../services/reader.commands"
 import { ReviewPublicationDetails } from "./ReviewPublicationDetails"
-import { reviewIsComplete } from "../helpers/publication.helpers"
+import {
+  reviewIsComplete,
+  reviewIsFinalized,
+} from "../helpers/publication.helpers"
 import type { ReviewCommentsSession } from "../hooks/useReviewComments"
 import { ReviewCommentsSummary } from "./ReviewCommentsSummary"
 import { WorkingContextStatus } from "@/features/agents/components/WorkingContextStatus"
@@ -80,7 +83,7 @@ export function ReviewSummary({
         starting={finalizationStarting}
         onAction={onAction}
       />
-      {complete &&
+      {reviewIsFinalized(workspace.review) &&
         !finalizing &&
         !finalizationFailed &&
         !checkingFinalization && (
