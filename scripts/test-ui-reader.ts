@@ -338,7 +338,7 @@ try {
     await ui.named("Back to review")
     await ui.named("Review summary")
     await ui.has("11 of 11 steps validated")
-    await ui.named("Home", "main[aria-label=Review] button")
+    await ui.named("Back home", "main[aria-label=Review] button")
     await ui.named("Review", '[role="tab"]')
     await ui.has("Review complete")
     await ui.screenshot("reader-guided-published")
@@ -589,7 +589,7 @@ try {
     await ui.has("Review complete")
     await ui.has("11 of 11 steps validated")
     await ui.screenshot("reader-guided-published")
-    await ui.named("Home", "main[aria-label=Review] button")
+    await ui.named("Back home", "main[aria-label=Review] button")
     await ui.has("Complete")
 
     await ui.named("Review", '[role="tab"]')

@@ -1,5 +1,6 @@
 "use client"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { listen } from "@tauri-apps/api/event"
 import type {
   CaptureRequest,
   CodeAnchor,
@@ -17,6 +18,8 @@ import {
   setActiveRepository,
 } from "@/lib/desktop/review.commands"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
+import { useReviewFinalization } from "./useReviewFinalization"
+import { isFinalizationAction } from "../helpers/reviewFinalization.helpers"
 import { loadReviewNotification } from "@/features/notifications/services/reviewNotifications"
 import {
   anchorFor,
@@ -31,6 +34,9 @@ export function useReviewSession() {
   const [repositories, setRepositories] = useState<Repository[]>([])
   const [repository, setRepository] = useState<Repository | null>(null)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
+  const finalization = useReviewFinalization(workspace?.review)
+  const isFinalizing = finalization.isActive
+  const startFinalization = finalization.start
   const [selected, setSelected] = useState<CodeAnchor | null>(null)
   const [coverage, setCoverage] = useState<Coverage | null>(null)
   const [busy, setBusy] = useState(false)
@@ -252,6 +258,9 @@ export function useReviewSession() {
           return false
         if (action.kind !== "savePosition") setBusy(true)
         try {
+          if (isFinalizationAction(value.review, action))
+            return await startFinalization(value.review, action)
+          if (isFinalizing()) return false
           const next = await reviewCommands.update(
             owner,
             value.review.revision,
@@ -279,7 +288,7 @@ export function useReviewSession() {
       mutations.current = task.then(() => undefined)
       return task
     },
-    [accept, install]
+    [accept, install, startFinalization, isFinalizing]
   )
   const selectPosition = useCallback(
     (position: ReadingPosition) => {
@@ -437,12 +446,25 @@ export function useReviewSession() {
     if (!watchedReviewId) return
     let alive = true
     let checking = false
-    const check = async () => {
-      if (checking || writing.current || document.visibilityState !== "visible")
+    let queued = false
+    let queuedForced = false
+    const check = async (force = false) => {
+      if (
+        !alive ||
+        writing.current ||
+        (!force && document.visibilityState !== "visible")
+      )
         return
+      if (checking) {
+        queued = true
+        queuedForced ||= force
+        return
+      }
       checking = true
-      const before = current.current
       try {
+        await mutations.current
+        if (!alive) return
+        const before = current.current
         const value = await reviewCommands.load(watchedReviewId)
         if (
           alive &&
@@ -459,14 +481,38 @@ export function useReviewSession() {
         if (alive) setError(errorMessage(e))
       } finally {
         checking = false
+        if (queued && alive) {
+          const force = queuedForced
+          queued = false
+          queuedForced = false
+          void check(force)
+        }
       }
     }
-    const timer = setInterval(check, 2000)
-    window.addEventListener("focus", check)
+    const subscription = listen<{ repositoryId: string; reviewId: string }>(
+      "reviewbox:review-changed",
+      ({ payload }) => {
+        if (
+          payload.repositoryId === watchedRepositoryId &&
+          payload.reviewId === watchedReviewId
+        )
+          // A completed native write is authoritative even in a hidden WebView.
+          void check(true)
+      }
+    )
+    void subscription
+      .then(() => {
+        if (alive) void check(true)
+      })
+      .catch((cause) => {
+        if (alive) setError(errorMessage(cause))
+      })
+    const focus = () => void check(true)
+    window.addEventListener("focus", focus)
     return () => {
       alive = false
-      clearInterval(timer)
-      window.removeEventListener("focus", check)
+      void subscription.then((dispose) => dispose()).catch(() => {})
+      window.removeEventListener("focus", focus)
     }
   }, [watchedReviewId, watchedRepositoryId, accept, install])
   const watchedSnapshotId = workspace?.snapshot.id
@@ -476,7 +522,12 @@ export function useReviewSession() {
     let alive = true
     let checking = false
     const check = async (force = false) => {
-      if (checking || (!force && document.visibilityState !== "visible")) return
+      if (
+        checking ||
+        isFinalizing() ||
+        (!force && document.visibilityState !== "visible")
+      )
+        return
       checking = true
       if (force) setFreshnessSnapshot(null)
       try {
@@ -517,6 +568,8 @@ export function useReviewSession() {
     watchedRepositoryId,
     watchedReviewId,
     watchedPreparationId,
+    isFinalizing,
+    finalization.checking,
   ]) // Snapshot is immutable; revisions must not restart the watcher.
   const nextTopic = useCallback(
     (direction: number) => {
@@ -552,9 +605,10 @@ export function useReviewSession() {
     repositories,
     repository,
     workspace,
+    finalization,
     selected,
     coverage,
-    busy,
+    busy: busy || finalization.active,
     error,
     changed,
     staleStepIds,

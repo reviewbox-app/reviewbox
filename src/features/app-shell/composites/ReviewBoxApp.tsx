@@ -548,6 +548,8 @@ export function ReviewBoxApp() {
           <ReviewReader
             key={readingIdentity}
             workspace={workspace}
+            finalization={session.finalization}
+            onConfigure={() => setSettings(true)}
             selected={selected}
             busy={busy || updating}
             menuEnabled={!session.newReview && !settings && !palette}

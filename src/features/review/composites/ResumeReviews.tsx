@@ -26,6 +26,8 @@ import type {
   ReviewAction,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
+import { isFinalizationAction } from "../helpers/reviewFinalization.helpers"
+import { reviewFinalizationCommands } from "../services/reviewFinalization.commands"
 import { cn } from "@/lib/utils"
 import {
   Add01Icon,
@@ -151,6 +153,17 @@ export function ResumeReviews({
     loadGeneration.current++
     setMutating(true)
     try {
+      if (isFinalizationAction(review, action)) {
+        const started = reviewFinalizationCommands.start(
+          review.repositoryId,
+          review.id,
+          review.revision,
+          action
+        )
+        onOpen(review.id)
+        await started
+        return
+      }
       const next = await reviewCommands.update(
         review.id,
         review.revision,

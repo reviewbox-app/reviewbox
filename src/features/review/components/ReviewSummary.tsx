@@ -14,6 +14,9 @@ import { reviewIsComplete } from "../helpers/publication.helpers"
 import type { ReviewCommentsSession } from "../hooks/useReviewComments"
 import { ReviewCommentsSummary } from "./ReviewCommentsSummary"
 import { WorkingContextStatus } from "@/features/agents/components/WorkingContextStatus"
+import { ReviewFinalization } from "../composites/ReviewFinalization"
+import type { ReviewFinalizationSession } from "../hooks/useReviewFinalization"
+import { ReviewCommit } from "@/features/source-control/composites/ReviewCommit"
 
 export function ReviewSummary({
   workspace,
@@ -23,6 +26,9 @@ export function ReviewSummary({
   busy,
   onAction,
   comments,
+  finalization,
+  finalizationStarting = false,
+  onConfigure,
 }: {
   workspace: Workspace
   level: ReadingLevel
@@ -31,45 +37,81 @@ export function ReviewSummary({
   busy: boolean
   onAction: (action: ReviewAction) => void
   comments?: ReviewCommentsSession
+  finalization?: ReviewFinalizationSession
+  finalizationStarting?: boolean
+  onConfigure?: () => void
 }) {
   const [exporting, setExporting] = useState(false)
   const [message, setMessage] = useState("")
   const progress = guidedProgress(workspace.review)
   const complete = reviewIsComplete(workspace.review)
+  const finalizing = finalizationStarting || finalization?.active
+  const checkingFinalization = finalization?.checking
+  const finalizationFailed =
+    !!finalization?.error ||
+    finalization?.operation?.status === "failed" ||
+    finalization?.operation?.status === "interrupted"
   return (
     <article className="mx-auto max-w-[720px] space-y-6 px-8 py-16">
       <p className="text-sm text-muted-foreground">
         <InlineMarkdown>{workspace.review.title}</InlineMarkdown>
       </p>
       <h1 className="text-3xl font-semibold tracking-tight">
-        {complete ? "Review complete" : "Review summary"}
+        {finalizing
+          ? "Finalizing review"
+          : finalizationFailed
+            ? "Review needs attention"
+            : complete && !checkingFinalization
+              ? "Review complete"
+              : "Review summary"}
       </h1>
       {workspace.review.mode !== "manual" && (
         <p className="text-base leading-7 text-muted-foreground">
           {progress.validated} of {progress.total} steps validated.
         </p>
       )}
+      <ReviewFinalization
+        review={workspace.review}
+        session={finalization}
+        starting={finalizationStarting}
+        onAction={onAction}
+      />
+      {complete &&
+        !finalizing &&
+        !finalizationFailed &&
+        !checkingFinalization && (
+          <ReviewCommit
+            repositoryId={workspace.review.repositoryId}
+            reviewId={workspace.review.id}
+            onConfigure={onConfigure}
+          />
+        )}
       <ReviewPublicationDetails
         review={workspace.review}
         busy={busy}
         onAction={onAction}
       />
-      <WorkingContextStatus
-        repositoryId={workspace.review.repositoryId}
-        reviewId={workspace.review.id}
-        revision={workspace.review.revision}
-        completed={complete}
-      />
+      {!finalizing && !checkingFinalization && (
+        <WorkingContextStatus
+          repositoryId={workspace.review.repositoryId}
+          reviewId={workspace.review.id}
+          revision={workspace.review.revision}
+          completed={complete}
+        />
+      )}
       <div className="flex flex-wrap gap-2">
-        <Button variant={complete ? "secondary" : "default"} onClick={onReturn}>
+        <Button
+          variant={complete || finalizing ? "secondary" : "default"}
+          onClick={onReturn}
+        >
           Back to review
         </Button>
-        <Button variant={complete ? "default" : "secondary"} onClick={onHome}>
-          Home
+        <Button variant="secondary" onClick={onHome}>
+          Back home
         </Button>
         <Button
           variant="ghost"
-          disabled={exporting}
+          disabled={exporting || !!finalizing}
           onClick={async () => {
             setExporting(true)
             setMessage("")

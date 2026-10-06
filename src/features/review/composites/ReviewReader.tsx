@@ -51,6 +51,8 @@ import { ReviewSummary } from "../components/ReviewSummary"
 import { ReviewCommentToolbar } from "../components/ReviewCommentToolbar"
 import { ReviewCommentDialog } from "../components/ReviewCommentDialog"
 import { useReviewComments } from "../hooks/useReviewComments"
+import type { ReviewFinalizationSession } from "../hooks/useReviewFinalization"
+import { isFinalizationAction } from "../helpers/reviewFinalization.helpers"
 import { commentAnchor } from "../helpers/reviewComment.helpers"
 import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
 import { StepDocument } from "../components/StepDocument"
@@ -99,6 +101,8 @@ export function ReviewReader({
   staleStepIds = [],
   updatePending = false,
   menuEnabled = true,
+  finalization,
+  onConfigure,
 }: {
   workspace: Workspace
   selected: CodeAnchor | null
@@ -116,6 +120,8 @@ export function ReviewReader({
   staleStepIds?: string[]
   updatePending?: boolean
   menuEnabled?: boolean
+  finalization?: ReviewFinalizationSession
+  onConfigure?: () => void
 }) {
   const {
     view,
@@ -164,8 +170,33 @@ export function ReviewReader({
     message: string
   } | null>(null)
   const navigationPanel = useRef<HTMLElement>(null)
-  const [summary, setSummary] = useState(completed)
+  const [summary, setSummary] = useState(completed || !!finalization?.operation)
   const [details, setDetails] = useState(false)
+  const [finalizationStarting, setFinalizationStarting] = useState(false)
+  const act = useCallback(
+    async (action: ReviewAction) => {
+      const final = isFinalizationAction(review, action)
+      if (final) {
+        setDetails(false)
+        setSummary(true)
+        setFinalizationStarting(true)
+      }
+      try {
+        return await onAction(action)
+      } finally {
+        if (final) setFinalizationStarting(false)
+      }
+    },
+    [review, onAction]
+  )
+  const restoredFinalization = useRef<string | null>(null)
+  const finalizationId = finalization?.operation?.id
+  useEffect(() => {
+    if (!finalizationId || restoredFinalization.current === finalizationId)
+      return
+    restoredFinalization.current = finalizationId
+    setSummary(true)
+  }, [finalizationId])
   const menuError = useReviewMenu({
     onLocalChanges,
     review,
@@ -175,7 +206,7 @@ export function ReviewReader({
     updatePending,
     enabled: menuEnabled && !details,
     onRefresh,
-    onAction,
+    onAction: act,
     onDetails: () => setDetails(true),
     onSummary: () => setSummary(true),
   })
@@ -266,7 +297,7 @@ export function ReviewReader({
       decidingRef.current = true
       setDeciding(true)
       try {
-        const saved = await onAction(action)
+        const saved = await act(action)
         if (!saved || reopen || !isCurrentCursor(owner)) return
         if (guided && guideProgress.validated === guideProgress.total - 1)
           setSummary(true)
@@ -285,7 +316,7 @@ export function ReviewReader({
       guided,
       unit,
       file,
-      onAction,
+      act,
       isCurrentCursor,
       cursorIndex,
       total,
@@ -502,7 +533,10 @@ export function ReviewReader({
                 onReturn={() => setSummary(false)}
                 onHome={() => setSpace("resume")}
                 busy={busy}
-                onAction={(action) => void onAction(action)}
+                finalization={finalization}
+                finalizationStarting={finalizationStarting}
+                onConfigure={onConfigure}
+                onAction={(action) => void act(action)}
               />
             </div>
           ) : isDocument ? (
@@ -755,7 +789,7 @@ export function ReviewReader({
               <Button
                 size="sm"
                 disabled={busy}
-                onClick={() => void onAction({ kind: "completeUpdatedReview" })}
+                onClick={() => void act({ kind: "completeUpdatedReview" })}
               >
                 Complete updated review
               </Button>
@@ -774,7 +808,7 @@ export function ReviewReader({
               <ReviewPublicationDetails
                 review={review}
                 busy={busy}
-                onAction={(action) => void onAction(action)}
+                onAction={(action) => void act(action)}
               />
             </DialogContent>
           </Dialog>
