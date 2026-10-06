@@ -29,6 +29,8 @@ export function ReviewSummary({
   finalization,
   finalizationStarting = false,
   onConfigure,
+  onFinish,
+  hasLocalChanges,
 }: {
   workspace: Workspace
   level: ReadingLevel
@@ -40,6 +42,8 @@ export function ReviewSummary({
   finalization?: ReviewFinalizationSession
   finalizationStarting?: boolean
   onConfigure?: () => void
+  onFinish?: () => void
+  hasLocalChanges?: boolean
 }) {
   const [exporting, setExporting] = useState(false)
   const [message, setMessage] = useState("")
@@ -84,6 +88,8 @@ export function ReviewSummary({
             repositoryId={workspace.review.repositoryId}
             reviewId={workspace.review.id}
             onConfigure={onConfigure}
+            onFinish={onFinish}
+            hasChanges={hasLocalChanges}
           />
         )}
       <ReviewPublicationDetails

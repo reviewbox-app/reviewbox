@@ -56,3 +56,17 @@ export function canCompleteManually(
     review.files.length > 0
   )
 }
+
+/** Terminal review states; pending publication still needs explicit attention. */
+export function reviewIsFinalized(review: Pick<Review, "publication">) {
+  return ["published", "completedLocal", "archived"].includes(
+    review.publication.status
+  )
+}
+
+/** Reopening a project resumes unfinished work, never a completed history entry. */
+export function reviewToResume(reviews: Review[]) {
+  return reviews
+    .filter((review) => !reviewIsFinalized(review))
+    .sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt))[0]
+}

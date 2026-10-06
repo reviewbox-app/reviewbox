@@ -102,6 +102,8 @@ export function ReviewReader({
   updatePending = false,
   menuEnabled = true,
   finalization,
+  hasLocalChanges,
+  onFinish,
   onConfigure,
 }: {
   workspace: Workspace
@@ -120,6 +122,8 @@ export function ReviewReader({
   staleStepIds?: string[]
   updatePending?: boolean
   menuEnabled?: boolean
+  hasLocalChanges?: boolean
+  onFinish?: () => void
   finalization?: ReviewFinalizationSession
   onConfigure?: () => void
 }) {
@@ -534,6 +538,8 @@ export function ReviewReader({
                 onHome={() => setSpace("resume")}
                 busy={busy}
                 finalization={finalization}
+                hasLocalChanges={hasLocalChanges}
+                onFinish={onFinish}
                 finalizationStarting={finalizationStarting}
                 onConfigure={onConfigure}
                 onAction={(action) => void act(action)}

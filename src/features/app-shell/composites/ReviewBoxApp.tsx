@@ -36,6 +36,7 @@ import { ReviewOverview } from "@/features/source-control/composites/ReviewOverv
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { getReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 import { useAppearancePreferences } from "@/features/settings/hooks/useAppearancePreferences"
+import { reviewIsFinalized } from "@/features/review/helpers/publication.helpers"
 import { useReviewSession } from "@/features/review/hooks/useReviewSession"
 import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
 import {
@@ -97,6 +98,16 @@ export function ReviewBoxApp() {
     repositoryId: string
     mode: "local" | "overview"
   } | null>(null)
+  const finalized = !!workspace && reviewIsFinalized(workspace.review)
+  const hasLocalChanges =
+    !git.error && git.state?.repositoryId === repository?.id
+      ? !!git.state?.files.length
+      : undefined
+  const localReview =
+    !!workspace &&
+    ["local", "staged", "unstaged"].includes(workspace.snapshot.request.scope)
+  const relevantRepositoryChange =
+    session.changed && !(finalized && localReview && hasLocalChanges === false)
   const local =
     surface?.repositoryId === repository?.id && surface?.mode === "local"
   const overview =
@@ -354,12 +365,13 @@ export function ReviewBoxApp() {
         onHome={session.home}
         onReviewOverview={showOverview}
         reviewControl={
-          workspace && (
+          workspace &&
+          (!finalized || updating) && (
             <ReviewUpdateStatus
               key={workspace.review.id}
               workspace={workspace}
               update={update}
-              changed={session.changed}
+              changed={relevantRepositoryChange}
               freshnessChecked={session.freshnessChecked}
               onCheck={session.checkFreshness}
               staleStepIds={session.staleStepIds}
@@ -406,7 +418,7 @@ export function ReviewBoxApp() {
       {space === "review" &&
         !local &&
         !overview &&
-        session.changed &&
+        relevantRepositoryChange &&
         workspace &&
         dismissedChange !== readingIdentity && (
           <div
@@ -549,6 +561,12 @@ export function ReviewBoxApp() {
             key={readingIdentity}
             workspace={workspace}
             finalization={session.finalization}
+            hasLocalChanges={hasLocalChanges}
+            onFinish={() => {
+              session.finish()
+              setSurface(null)
+              setPreparing(null)
+            }}
             onConfigure={() => setSettings(true)}
             selected={selected}
             busy={busy || updating}

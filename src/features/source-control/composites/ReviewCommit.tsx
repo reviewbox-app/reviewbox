@@ -20,10 +20,14 @@ export function ReviewCommit({
   repositoryId,
   reviewId,
   onConfigure,
+  onFinish,
+  hasChanges,
 }: {
   repositoryId: string
   reviewId: string
   onConfigure?: () => void
+  onFinish?: () => void
+  hasChanges?: boolean
 }) {
   const job = useReviewCommit(repositoryId, reviewId)
   const [copyMessage, setCopyMessage] = useState("")
@@ -39,12 +43,29 @@ export function ReviewCommit({
     phase === "done" ? phases.length : phases.findIndex(([id]) => id === phase)
   return (
     <section className="space-y-3" aria-label="Commit project changes">
-      {!success && (
-        <div className="space-y-2">
-          <Button disabled={running} onClick={() => void job.start()}>
+      <div className="flex flex-wrap gap-2">
+        {onFinish && (
+          <Button variant="secondary" onClick={onFinish}>
+            Finish review
+          </Button>
+        )}
+        {!success && hasChanges !== false && (
+          <Button
+            disabled={running || hasChanges !== true}
+            onClick={() => void job.start()}
+          >
             {running ? <Spinner /> : <HugeiconsIcon icon={AiMagicIcon} />}
             Stage &amp; commit with Rev
           </Button>
+        )}
+      </div>
+      {!success && !running && hasChanges === false && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Nothing to commit. Your working tree is clean.
+        </p>
+      )}
+      {!success && hasChanges !== false && (
+        <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
             Includes all saved Git changes in this project, including changes
             outside this review. Creates commits without pushing.

@@ -19,6 +19,10 @@ import {
 } from "@/lib/desktop/review.commands"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
 import { useReviewFinalization } from "./useReviewFinalization"
+import {
+  reviewIsFinalized,
+  reviewToResume,
+} from "../helpers/publication.helpers"
 import { isFinalizationAction } from "../helpers/reviewFinalization.helpers"
 import { loadReviewNotification } from "@/features/notifications/services/reviewNotifications"
 import {
@@ -146,10 +150,8 @@ export function useReviewSession() {
         current.current = null
         setWorkspace(null)
         setSelected(null)
-        if (reviews.length) {
-          const latest = reviews.sort(
-            (a, b) => Number(b.updatedAt) - Number(a.updatedAt)
-          )[0]
+        const latest = reviewToResume(reviews)
+        if (latest) {
           const value = await reviewCommands.load(latest.id)
           if (generation.current === request) install(value)
         } else {
@@ -589,6 +591,25 @@ export function useReviewSession() {
     },
     [workspace, selectStep]
   )
+  const finish = useCallback(() => {
+    // Completion is native and already durable. This only releases the reader.
+    if (
+      !current.current ||
+      !reviewIsFinalized(current.current.review) ||
+      isFinalizing()
+    )
+      return
+    generation.current++
+    current.current = null
+    pendingPosition.current = null
+    setWorkspace(null)
+    setSelected(null)
+    setCoverage(null)
+    setChanged(false)
+    setStaleStepIds([])
+    setFreshnessSnapshot(null)
+    setSpace("review")
+  }, [isFinalizing, setSpace])
   const home = useCallback(async () => {
     await mutations.current
     generation.current++
@@ -632,6 +653,7 @@ export function useReviewSession() {
     nextTopic,
     refresh,
     home,
+    finish,
     install,
     accept,
     acceptCurrent,
