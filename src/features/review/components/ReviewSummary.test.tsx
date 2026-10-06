@@ -94,6 +94,7 @@ test("manual handoff shows comments and correction prompt without completing or 
     document: {
       revision: "revision",
       comments: [],
+      outdatedCommentIds: [],
       correctionPrompt:
         "Read .reviewbox/.local/REVIEW_COMMENTS.md and check .reviewbox/REVIEW_COMMENTS.md",
       sharedFilePresent: true,

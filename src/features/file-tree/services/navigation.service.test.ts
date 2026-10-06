@@ -53,6 +53,7 @@ test("private checkout navigation restores expansion, selection, scroll and live
     expandedPaths: ["src", ".reviewbox"],
     selectedPath: "src/a.ts",
     scrollTop: 240,
+    visible: false,
   }))
   updateTreeNavigation(repo, "local", (tree) => ({ ...tree, mode: "changes" }))
   await flushTreeNavigation(repo)
@@ -61,11 +62,13 @@ test("private checkout navigation restores expansion, selection, scroll and live
     expandedPaths: ["src", ".reviewbox"],
     selectedPath: "src/a.ts",
     scrollTop: 240,
+    visible: false,
   })
   useTreeNavigation.setState({ checkouts: {} })
   await loadTreeNavigation(repo)
   expect(treeNavigation(repo, "local")?.mode).toBe("changes")
   expect(treeNavigation(repo, "editor")?.scrollTop).toBe(240)
+  expect(treeNavigation(repo, "editor")?.visible).toBe(false)
   expect(Object.keys(treeNavigation(repo, "editor") ?? {})).not.toContain(
     "filter"
   )

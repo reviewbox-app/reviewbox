@@ -1,5 +1,6 @@
 import type {
   Change,
+  CodeCommentAnchor,
   ReviewCommentAnchor,
 } from "@/lib/desktop/contracts.generated"
 import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
@@ -8,7 +9,7 @@ export function commentAnchor(
   snapshotId: string,
   change: Change,
   selection: SourceSelection
-): ReviewCommentAnchor | undefined {
+): CodeCommentAnchor | undefined {
   const source = change[selection.side]
   if (!source) return
   return {
@@ -24,7 +25,11 @@ export function commentAnchor(
   }
 }
 export function commentLocation(anchor: ReviewCommentAnchor) {
+  if ("document" in anchor)
+    return `${anchor.title ?? "Document"} · ${anchor.document.level}`
   const range = anchor.range
-  const side = anchor.sourceId.endsWith(":before") ? "before" : "after"
-  return `${anchor.path} · ${side} · ${range.startLine}:${range.startColumn}–${range.endLine}:${range.endColumn}`
+  const side =
+    anchor.local?.side ??
+    (anchor.sourceId.endsWith(":before") ? "before" : "after")
+  return `${anchor.path} · ${anchor.local ? `${anchor.local.layer} · ` : ""}${side} · ${range.startLine}:${range.startColumn}–${range.endLine}:${range.endColumn}`
 }

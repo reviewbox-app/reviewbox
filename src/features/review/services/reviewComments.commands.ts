@@ -5,14 +5,14 @@ import type {
 } from "@/lib/desktop/contracts.generated"
 
 export const reviewCommentsCommands = {
-  read: (repositoryId: string, reviewId: string) =>
+  read: (repositoryId: string, reviewId: string | null) =>
     call<ReviewCommentsDocument>("read_review_comments", {
       repositoryId,
       reviewId,
     }),
   mutate: (
     repositoryId: string,
-    reviewId: string,
+    reviewId: string | null,
     expectedRevision: string,
     mutation: ReviewCommentMutation
   ) =>

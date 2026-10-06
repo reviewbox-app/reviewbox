@@ -310,6 +310,7 @@ fn navigation_versions_match_private_sqlite_revisions_and_preserve_checkout_scop
     navigation.trees.insert(
         "editor".into(),
         FileTreeNavigation {
+            visible: None,
             expanded_paths: vec!["src".into(), ".reviewbox".into()],
             selected_path: Some("src/file.ts".into()),
             scroll_top: 200.0,

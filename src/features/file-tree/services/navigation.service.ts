@@ -124,3 +124,28 @@ export function remapTreeNavigation(
       selectedPath: tree.selectedPath ? remap(tree.selectedPath) : null,
     }))
 }
+
+/** Initialize only missing layouts: an empty saved expansion is an explicit choice. */
+export function initializeReviewTree(
+  repositoryId: string,
+  reviewId: string,
+  paths: string[]
+) {
+  const key = `review:${reviewId}`
+  if (treeNavigation(repositoryId, key)) return
+  const expandedPaths = [
+    ...new Set(
+      paths.flatMap((path) => {
+        const parts = path.split("/")
+        return parts
+          .slice(0, -1)
+          .map((_, index) => parts.slice(0, index + 1).join("/"))
+      })
+    ),
+  ]
+  updateTreeNavigation(repositoryId, key, (tree) => ({
+    ...tree,
+    visible: true,
+    expandedPaths,
+  }))
+}

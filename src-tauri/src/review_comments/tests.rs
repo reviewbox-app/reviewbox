@@ -1,7 +1,8 @@
 use super::*;
 
 fn anchor() -> ReviewCommentAnchor {
-    ReviewCommentAnchor {
+    CodeCommentAnchor {
+        local: None,
         snapshot_id: "snapshot".into(),
         source_id: "change:file:before".into(),
         path: "deleted.ts".into(),
@@ -14,6 +15,7 @@ fn anchor() -> ReviewCommentAnchor {
         },
         excerpt: "hi".into(),
     }
+    .into()
 }
 fn add(id: &str, text: &str) -> ReviewCommentMutation {
     ReviewCommentMutation::Add {
@@ -153,4 +155,46 @@ fn only_the_private_markdown_path_is_written() {
         "const value = 1;\n"
     );
     assert!(!project.root.join("REVIEW_COMMENTS.md").exists());
+}
+
+#[test]
+fn legacy_anchors_remain_readable_without_local_context() {
+    let json = serde_json::json!({
+        "snapshotId": "snapshot", "sourceId": "change:file:before", "path": "deleted.ts",
+        "contentHash": "hash", "range": { "startLine": 1, "startColumn": 1, "endLine": 1, "endColumn": 3 },
+        "excerpt": "hi"
+    });
+    let anchor: ReviewCommentAnchor = serde_json::from_value(json.clone()).unwrap();
+    assert!(matches!(&anchor, ReviewCommentAnchor::Code(a) if a.local.is_none()));
+    assert_eq!(serde_json::to_value(anchor).unwrap(), json);
+}
+
+#[test]
+fn document_comments_roundtrip_without_synthetic_file_locations() {
+    let anchor = ReviewCommentAnchor::Document(DocumentCommentAnchor {
+        title: None,
+        document: DocumentSelection {
+            snapshot_id: "snapshot".into(),
+            step_id: "step".into(),
+            level: ReadingLevel::Explained,
+            content_hash: fingerprint(b"A **clear** explanation"),
+            ranges: vec![DocumentTextRange { start: 4, end: 9 }],
+        },
+        excerpt: "clear".into(),
+    });
+    let text = update_text(
+        "Keep this prose\n",
+        "review",
+        ReviewCommentMutation::Add {
+            id: "document-note".into(),
+            anchor: anchor.clone(),
+            text: "Explain the consequence".into(),
+        },
+    )
+    .unwrap();
+    let blocks = parse(&text).unwrap();
+    assert_eq!(blocks[0].comment.anchor, anchor);
+    assert!(!text.contains("sourceId"));
+    assert!(!text.contains("\"path\""));
+    assert!(text.starts_with("Keep this prose\n"));
 }

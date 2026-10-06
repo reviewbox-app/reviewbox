@@ -48,8 +48,8 @@ import { ReviewStepsPanel } from "../components/ReviewStepsPanel"
 import { ReviewFiles } from "../components/ReviewFiles"
 import { ReviewPublicationDetails } from "../components/ReviewPublicationDetails"
 import { ReviewSummary } from "../components/ReviewSummary"
-import { ReviewCommentToolbar } from "../components/ReviewCommentToolbar"
-import { ReviewCommentDialog } from "../components/ReviewCommentDialog"
+import { RevChat } from "@/features/rev-chat/components/RevChat"
+import { CodeComments } from "../components/CodeComments"
 import { useReviewComments } from "../hooks/useReviewComments"
 import type { ReviewFinalizationSession } from "../hooks/useReviewFinalization"
 import { isFinalizationAction } from "../helpers/reviewFinalization.helpers"
@@ -75,6 +75,9 @@ import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
 import { reviewReaderLayout } from "../reader.config"
 import { ReviewCodePane } from "./ReviewCodePane"
 import { ReviewReferencePane } from "./ReviewReferencePane"
+
+import { useFileTreeNavigation } from "@/features/file-tree/hooks/useFileTreeNavigation"
+import { initializeReviewTree } from "@/features/file-tree/services/navigation.service"
 
 const EXPLANATION_WIDTH =
   "clamp(280px,var(--review-explanation-width,440px),50%)"
@@ -134,22 +137,33 @@ export function ReviewReader({
     setReaderLevel,
     stepsOpen,
     setStepsOpen,
-    filesOpen,
-    setFilesOpen,
     explanationRequested,
     setExplanationRequested,
     setSpace,
   } = useReviewWorkspaceStore()
   const { review, snapshot } = workspace
+  const filesNavigation = useFileTreeNavigation(
+    review.repositoryId,
+    `review:${review.id}`
+  )
+  const filesOpen = filesNavigation.value.visible ?? true
+  const setFilesOpen = (visible: boolean) =>
+    filesNavigation.update((tree) => ({ ...tree, visible }))
+  useEffect(() => {
+    if (filesNavigation.ready)
+      initializeReviewTree(
+        review.repositoryId,
+        review.id,
+        review.files.map((file) => file.path)
+      )
+  }, [filesNavigation.ready, review.repositoryId, review.id, review.files])
+
   const completed = reviewIsComplete(review)
   const comments = useReviewComments(review)
   const [commentSelection, setCommentSelection] = useState<{
+    anchor?: ReviewCommentAnchor
     key: string
     value: SourceSelection
-  } | null>(null)
-  const [commentDraft, setCommentDraft] = useState<{
-    key: string
-    anchor: ReviewCommentAnchor
   } | null>(null)
   const units = readingUnits(workspace)
   const hasReviewDocuments = units.length > 0
@@ -232,7 +246,7 @@ export function ReviewReader({
   const cursorKey = readerCursorKey(workspace)
   const scroller = useRef<HTMLDivElement>(null)
   const contentKey = file ? `${readerIdentity(workspace)}/${file.id}` : ""
-  const commentKey = `${readerIdentity(workspace)}/${change?.id ?? ""}`
+  const commentKey = `${readerIdentity(workspace)}/${pinned?.sourceId ?? change?.id ?? ""}`
   const currentCommentSelection =
     commentSelection?.key === commentKey ? commentSelection.value : null
   const fileError = fileFailure?.key === contentKey ? fileFailure.message : ""
@@ -377,6 +391,7 @@ export function ReviewReader({
   const document =
     guided && unit ? (
       <StepDocument
+        comments={comments}
         workspace={workspace}
         unit={unit}
         index={index}
@@ -613,6 +628,16 @@ export function ReviewReader({
                     <ReviewReferencePane
                       workspace={workspace}
                       reference={pinned}
+                      onCommentSelection={
+                        comments.editable
+                          ? (value, anchor) =>
+                              setCommentSelection(
+                                value && anchor
+                                  ? { key: commentKey, value, anchor }
+                                  : null
+                              )
+                          : undefined
+                      }
                       overlay={{
                         top: reviewReaderLayout.headerHeight,
                         bottom: footerHeight,
@@ -674,6 +699,34 @@ export function ReviewReader({
             className="absolute inset-x-0 top-0 z-40 flex items-center gap-2 border-b glass-bar px-3"
             style={{ height: reviewReaderLayout.headerHeight }}
           >
+            {
+              <CodeComments
+                key={`${review.repositoryId}/${review.id}`}
+                session={comments}
+                snapshotId={snapshot.id}
+                selection={
+                  view === "code" &&
+                  !summary &&
+                  currentCommentSelection &&
+                  (change || commentSelection?.anchor)
+                    ? (() => {
+                        const anchor =
+                          commentSelection?.anchor ??
+                          (change
+                            ? commentAnchor(
+                                snapshot.id,
+                                change,
+                                currentCommentSelection
+                              )
+                            : undefined)
+                        return anchor
+                          ? { value: currentCommentSelection, anchor }
+                          : null
+                      })()
+                    : null
+                }
+              />
+            }
             {(view === "code" || hasReviewDocuments) && (
               <Hint
                 label={
@@ -952,38 +1005,7 @@ export function ReviewReader({
           />
         )}
       </div>
-      {comments.editable &&
-        !summary &&
-        !isDocument &&
-        !pinned &&
-        commentDraft?.key !== commentKey &&
-        currentCommentSelection && (
-          <ReviewCommentToolbar
-            selection={currentCommentSelection}
-            disabled={comments.busy || !comments.document}
-            onComment={() => {
-              if (!change) return
-              const anchor = commentAnchor(
-                snapshot.id,
-                change,
-                currentCommentSelection
-              )
-              if (anchor) setCommentDraft({ key: commentKey, anchor })
-            }}
-          />
-        )}
-      {commentDraft?.key === commentKey && (
-        <ReviewCommentDialog
-          anchor={commentDraft.anchor}
-          busy={comments.busy}
-          error={comments.error}
-          onSave={comments.mutate}
-          onClose={() => {
-            setCommentDraft(null)
-            setCommentSelection(null)
-          }}
-        />
-      )}
+      <RevChat repositoryId={review.repositoryId} reviewId={review.id} />
     </div>
   )
 }

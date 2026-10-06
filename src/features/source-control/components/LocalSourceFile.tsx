@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useState, useRef } from "react"
 import { useTheme } from "next-themes"
 import { CodeEditor } from "@/features/code-editor/components/CodeEditor"
 import {
@@ -14,17 +14,28 @@ import { reviewboxTheme } from "@/lib/monaco/reviewboxThemes"
 import { languageFor } from "@/features/review/helpers/review.helpers"
 import { reviewReaderLayout } from "@/features/review/reader.config"
 
+import { observeSourceSelection } from "@/features/code-editor/services/sourceSelection"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
+
 /** Live unchanged files are inspected without creating a review or an editable buffer. */
 export function LocalSourceFile({
   repositoryId,
   path,
+  onSelection,
 }: {
   repositoryId: string
   path: string
+  onSelection: (file: EditorFile, selection: SourceSelection | null) => void
 }) {
+  const current = useRef({ file: null as EditorFile | null, onSelection })
+  const observer = useRef<{ dispose: () => void } | null>(null)
+  useEffect(() => () => observer.current?.dispose(), [])
   const { resolvedTheme } = useTheme()
   const [file, setFile] = useState<EditorFile | null>(null)
   const [error, setError] = useState("")
+  useLayoutEffect(() => {
+    current.current = { file, onSelection }
+  }, [file, onSelection])
   useEffect(() => {
     let active = true
     let token = 0
@@ -80,6 +91,17 @@ export function LocalSourceFile({
         </p>
       ) : (
         <CodeEditor
+          onMount={(editor) => {
+            observer.current?.dispose()
+            observer.current = observeSourceSelection(
+              editor,
+              "after",
+              (selection) => {
+                const { file, onSelection } = current.current
+                if (file) onSelection(file, selection)
+              }
+            )
+          }}
           height="100%"
           path={`reviewbox-local://${repositoryId}/${path}`}
           value={file?.text ?? ""}

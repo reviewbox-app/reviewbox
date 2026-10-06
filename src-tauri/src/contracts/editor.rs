@@ -137,6 +137,9 @@ pub enum EditorMutation {
 #[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileTreeNavigation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub visible: Option<bool>,
     pub expanded_paths: Vec<String>,
     pub selected_path: Option<String>,
     pub scroll_top: f64,

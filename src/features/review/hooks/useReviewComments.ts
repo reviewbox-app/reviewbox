@@ -16,10 +16,20 @@ import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
 import { reviewCommentsCommands } from "../services/reviewComments.commands"
 
 export function useReviewComments(review: Review) {
-  const repositoryId = review.repositoryId
-  const reviewId = review.id
-  const key = `${repositoryId}/${reviewId}`
-  const enabled = review.mode === "manual"
+  return useCodeComments(
+    review.repositoryId,
+    review.id,
+    review.publication.status === "draft"
+  )
+}
+
+export function useCodeComments(
+  repositoryId: string,
+  reviewId: string | null,
+  editable = true
+) {
+  const key = `${repositoryId}/${reviewId ?? "local"}`
+  const enabled = !!repositoryId
   const [state, setState] = useState<{
     key: string
     document?: ReviewCommentsDocument
@@ -81,6 +91,7 @@ export function useReviewComments(review: Review) {
     const stop = enabled
       ? subscribeRepositoryReads(repositoryId, (change) => {
           if (
+            reviewId === null ||
             change.full ||
             change.paths.some(
               (path) =>
@@ -99,7 +110,7 @@ export function useReviewComments(review: Review) {
       window.removeEventListener("focus", focus)
       document.removeEventListener("visibilitychange", focus)
     }
-  }, [reload, enabled, repositoryId, invalidate])
+  }, [reload, enabled, repositoryId, reviewId, invalidate])
   const mutate = useCallback(
     async (mutation: ReviewCommentMutation) => {
       const document =
@@ -133,7 +144,7 @@ export function useReviewComments(review: Review) {
     document: state.key === key ? state.document : undefined,
     error: state.key === key ? state.error : undefined,
     busy: state.key === key && !!state.busy,
-    editable: enabled && review.publication.status === "draft",
+    editable: enabled && editable,
     reload,
     mutate,
   }

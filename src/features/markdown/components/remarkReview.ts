@@ -6,6 +6,10 @@ interface Node {
   lang?: string
   url?: string
   children?: Node[]
+  position?: {
+    start: { offset?: number; line: number; column: number }
+    end: { offset?: number; line: number; column: number }
+  }
 }
 const word = (char: string | undefined) => !!char && /[\p{L}\p{N}_]/u.test(char)
 
@@ -41,6 +45,27 @@ export function remarkReview(options: {
         return [child]
       }
       const text = child.value
+      const slice = (start: number, end: number): Node => ({
+        type: "text",
+        value: text.slice(start, end),
+        position:
+          child.position &&
+          child.position.start.offset !== undefined &&
+          child.position.end.offset !== undefined &&
+          child.position.end.offset - child.position.start.offset ===
+            text.length
+            ? {
+                start: {
+                  ...child.position.start,
+                  offset: child.position.start.offset + start,
+                },
+                end: {
+                  ...child.position.end,
+                  offset: child.position.start.offset + end,
+                },
+              }
+            : undefined,
+      })
       const result: Node[] = []
       let start = 0
       for (let offset = 0; offset < text.length;) {
@@ -56,23 +81,17 @@ export function remarkReview(options: {
           offset++
           continue
         }
-        if (start < offset)
-          result.push({ type: "text", value: text.slice(start, offset) })
+        if (start < offset) result.push(slice(start, offset))
         result.push({
           type: "link",
           url: `reviewbox:term/${found.id}`,
-          children: [
-            {
-              type: "text",
-              value: text.slice(offset, offset + found.term.length),
-            },
-          ],
+          children: [slice(offset, offset + found.term.length)],
         })
         offset += found.term.length
         start = offset
       }
-      if (start < text.length)
-        result.push({ type: "text", value: text.slice(start) })
+      if (start === 0) return [child]
+      if (start < text.length) result.push(slice(start, text.length))
       return result
     })
   }

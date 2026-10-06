@@ -8,7 +8,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ReviewMarkdown } from "@/features/markdown/components/ReviewMarkdown"
+import { DocumentInteractions } from "./DocumentInteractions"
+import type { ReviewCommentsSession } from "../hooks/useReviewComments"
 import type {
   CodeAnchor,
   DocumentReference,
@@ -25,6 +26,7 @@ import {
 
 export function StepDocument({
   workspace,
+  comments,
   unit,
   index,
   total,
@@ -36,6 +38,7 @@ export function StepDocument({
   onOpenCode,
   onOpenReference,
 }: {
+  comments: ReviewCommentsSession
   workspace: Workspace
   unit: ReadingUnit
   index: number
@@ -87,8 +90,12 @@ export function StepDocument({
           </AlertDescription>
         </Alert>
       )}
-      <ReviewMarkdown
+      <DocumentInteractions
         key={`${workspace.snapshot.id}/${step.id}/${level}`}
+        repositoryId={workspace.review.repositoryId}
+        stepId={step.id}
+        title={step.title}
+        session={comments}
         document={document}
         glossary={[
           ...(workspace.review.glossary ?? []),

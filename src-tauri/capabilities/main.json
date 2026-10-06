@@ -148,6 +148,9 @@
     "allow-apply-language-setup",
     "allow-export-language-pack",
     "allow-read-review-comments",
-    "allow-mutate-review-comment"
+    "allow-mutate-review-comment",
+    "allow-rev-chat-send",
+    "allow-rev-chat-cancel",
+    "allow-rev-chat-close"
   ]
 }

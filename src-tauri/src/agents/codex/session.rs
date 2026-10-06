@@ -372,7 +372,7 @@ impl Session {
 
 /// Read-only filesystem sandbox plus no out-of-sandbox connectors or delegated tools.
 fn planning_configuration(effective: &Value) -> Value {
-    let mut config = json!({"features.apps": false, "features.plugins": false, "features.multi_agent": false, "agents.enabled": false, "apps._default.enabled": false});
+    let mut config = json!({"features.apps": false, "features.plugins": false, "features.multi_agent": false, "agents.enabled": false, "apps._default.enabled": false, "web_search": "disabled", "features.web_search_request": false});
     for category in ["mcp_servers", "plugins", "apps"] {
         if let Some(entries) = effective[category].as_object() {
             // App-server splits override paths on dots; it does not parse TOML

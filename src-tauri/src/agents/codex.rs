@@ -172,7 +172,19 @@ impl Messages {
         {
             self.drafts.entry(id.to_owned()).or_default();
         }
+        if stream.live_text
+            && value["method"] == "item/started"
+            && params["item"]["type"] == "agentMessage"
+        {
+            stream.emit("textStart", "")?;
+        }
         if value["method"] == "item/agentMessage/delta" {
+            if stream.live_text
+                && let Some(delta) = params["delta"].as_str()
+            {
+                stream.emit("textDelta", delta)?;
+            }
+
             let id = params["itemId"].as_str().unwrap_or("message").to_owned();
             if let Some(text) = params["delta"].as_str() {
                 let partial = self.partial.entry(id.clone()).or_default();
@@ -428,6 +440,7 @@ mod progress_tests {
             Ok(())
         });
         let mut stream = Stream {
+            live_text: false,
             id: "run".into(),
             sequence: 0,
             channel,

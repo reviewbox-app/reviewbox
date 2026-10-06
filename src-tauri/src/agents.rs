@@ -1,6 +1,8 @@
+pub(crate) mod chat;
 mod claude;
 mod codex;
 pub(crate) mod commit;
+mod consultation;
 mod exploration;
 pub(crate) mod language_setup;
 mod outline_preview;
@@ -201,6 +203,7 @@ impl Transport {
     }
 }
 struct Stream {
+    live_text: bool,
     id: String,
     sequence: u32,
     channel: Channel<AgentEvent>,

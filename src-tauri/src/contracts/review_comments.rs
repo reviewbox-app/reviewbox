@@ -12,7 +12,10 @@ pub struct ReviewCommentRange {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReviewCommentAnchor {
+pub struct CodeCommentAnchor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub local: Option<LocalCommentSource>,
     pub snapshot_id: String,
     pub source_id: String,
     pub path: String,
@@ -20,6 +23,59 @@ pub struct ReviewCommentAnchor {
     pub range: ReviewCommentRange,
     pub excerpt: String,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(untagged)]
+pub enum ReviewCommentAnchor {
+    Document(DocumentCommentAnchor),
+    Code(CodeCommentAnchor),
+}
+impl ReviewCommentAnchor {
+    pub fn excerpt(&self) -> &str {
+        match self {
+            Self::Document(a) => &a.excerpt,
+            Self::Code(a) => &a.excerpt,
+        }
+    }
+}
+impl From<CodeCommentAnchor> for ReviewCommentAnchor {
+    fn from(value: CodeCommentAnchor) -> Self {
+        Self::Code(value)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentCommentAnchor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub document: DocumentSelection,
+    pub excerpt: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentSelection {
+    pub snapshot_id: String,
+    pub step_id: String,
+    pub level: super::ReadingLevel,
+    pub content_hash: String,
+    pub ranges: Vec<DocumentTextRange>,
+}
+/// Zero-based UTF-16 source offsets, exclusive end, in the exact Markdown body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentTextRange {
+    pub start: u32,
+    pub end: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalCommentSource {
+    pub path: String,
+    pub layer: String,
+    pub side: String,
+    pub version: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewCommentStatus {
@@ -49,6 +105,8 @@ pub struct ReviewCommentsDocument {
     pub comments: Vec<ReviewComment>,
     pub shared_file_present: bool,
     pub correction_prompt: String,
+    #[serde(default)]
+    pub outdated_comment_ids: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(

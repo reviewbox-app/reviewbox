@@ -12,7 +12,7 @@ export function ReviewCommentsSummary({
   snapshotId,
 }: {
   session: ReviewCommentsSession
-  snapshotId: string
+  snapshotId?: string
 }) {
   const [editing, setEditing] = useState<ReviewComment>()
   const comments = session.document?.comments ?? []
@@ -23,12 +23,21 @@ export function ReviewCommentsSummary({
         <h2 className="text-lg font-semibold">Comments for your agent</h2>
         <p className="text-sm text-muted-foreground">
           {open} open · {comments.length - open} addressed ·{" "}
-          {new Set(comments.map((comment) => comment.anchor.path)).size} files
+          {
+            new Set(
+              comments.map((comment) =>
+                "document" in comment.anchor
+                  ? `document:${comment.anchor.document.stepId}/${comment.anchor.document.level}`
+                  : comment.anchor.path
+              )
+            ).size
+          }{" "}
+          sources
         </p>
         <p className="text-sm text-muted-foreground">
-          You can now ask your agent to address these comments. Return to the
-          review to add more. This summary does not validate or publish the
-          review.
+          Ask your agent to address these comments using the prompt below.
+          {snapshotId &&
+            " This summary does not validate or publish the review."}
         </p>
       </div>
       {session.error && (
@@ -71,10 +80,13 @@ export function ReviewCommentsSummary({
                 {comment.status === "open" ? "Open" : "Addressed"}
               </span>
             </div>
-            {comment.anchor.snapshotId !== snapshotId && (
+            {("document" in comment.anchor || comment.anchor.local
+              ? session.document?.outdatedCommentIds.includes(comment.id)
+              : !("document" in comment.anchor) &&
+                comment.anchor.snapshotId !== snapshotId) && (
               <p className="text-xs text-muted-foreground">
-                Comment on an earlier capture. Compare the excerpt before
-                applying a correction.
+                Comment on an earlier or unavailable source version. Compare the
+                excerpt before applying a correction.
               </p>
             )}
             <p className="text-sm whitespace-pre-wrap">{comment.text}</p>

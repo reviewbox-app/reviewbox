@@ -219,6 +219,7 @@ for line in sys.stdin:
             model: None,
         };
         let mut stream = Stream {
+            live_text: false,
             id: id(),
             sequence: 0,
             channel: Channel::new(|_| Ok(())),
@@ -265,6 +266,7 @@ print(json.dumps({'type':'result','is_error':False,'result':'Complete answer'}),
         model: None,
     };
     let mut stream = Stream {
+        live_text: false,
         id: id(),
         sequence: 0,
         channel: Channel::new(|_| Ok(())),
@@ -366,7 +368,7 @@ for line in sys.stdin:
     });
     let path = manifest(&storage, &workspace, &request);
     let exploration = exploration::materialize(&storage, &workspace, &request, &AtomicBool::new(false)).unwrap();
-    let mut stream = Stream {id:id(),sequence:0,channel,text:String::new(),preview:None};
+    let mut stream = Stream { live_text: false,id:id(),sequence:0,channel,text:String::new(),preview:None};
     let config = settings(&storage).unwrap().providers.into_iter().find(|p| p.provider == "codex").unwrap();
     codex::run(&exploration.project, &exploration::descriptor(&storage, &workspace, &request).unwrap(), &config, Arc::new(AtomicBool::new(false)), &mut stream).await.unwrap();
     drop(exploration);

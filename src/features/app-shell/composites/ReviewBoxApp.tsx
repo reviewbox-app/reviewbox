@@ -542,12 +542,7 @@ export function ReviewBoxApp() {
           )}
         />
       ) : space === "terminal" ? null : local ? (
-        <LocalChanges
-          key={repository.id}
-          git={git}
-          onBack={showOverview}
-          onFinished={showOverview}
-        />
+        <LocalChanges key={repository.id} git={git} onBack={showOverview} />
       ) : overview || !workspace ? (
         <ReviewOverview
           git={git}

@@ -46,6 +46,7 @@ pub(crate) async fn plan(
         &BTreeMap::from([("context".into(), context), ("contract".into(), contract)]),
     )?;
     let mut stream = Stream {
+        live_text: false,
         id: request.operation_id.clone(),
         sequence: 0,
         channel,

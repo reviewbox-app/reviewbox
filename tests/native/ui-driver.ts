@@ -90,7 +90,7 @@ export class NativeUI {
     )
     await this.activateWindow()
   }
-  private async activateWindow() {
+  async activateWindow() {
     assert(this.child, "Start the validation process before activating it")
     if (process.platform === "darwin") {
       // Target this fixture's process: the installed app can share its bundle ID.

@@ -1,6 +1,7 @@
 "use client"
 
 import type { DocumentTerm } from "@/lib/desktop/contracts.generated"
+import { rehypeDocumentSelection } from "./rehypeDocumentSelection"
 import { remarkReview } from "./remarkReview"
 import { cn } from "@/lib/utils"
 import type { Root, Nodes } from "hast"
@@ -170,10 +171,12 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   renderCodeBlock,
   glossary = [],
   illustrations = false,
+  selectable = false,
 }: {
   children: string
   glossary?: DocumentTerm[]
   illustrations?: boolean
+  selectable?: boolean
   className?: string
   /** Embedded HTML is sanitized; scripts, handlers and unsafe URLs are removed. */
   allowHtml?: boolean
@@ -204,8 +207,16 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
           },
         },
       ],
+      ...(selectable
+        ? [
+            [rehypeDocumentSelection, { source: children }] as [
+              typeof rehypeDocumentSelection,
+              { source: string },
+            ],
+          ]
+        : []),
     ],
-    [allowHtml, prefix, hasCustomLinks]
+    [allowHtml, prefix, hasCustomLinks, selectable, children]
   )
   return (
     <div

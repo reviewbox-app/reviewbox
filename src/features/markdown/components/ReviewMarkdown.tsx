@@ -138,7 +138,9 @@ function TermLink({
   term,
   definition,
   context,
+  onAsk,
 }: {
+  onAsk?: () => void
   children: ReactNode
   term: string
   definition: string
@@ -160,6 +162,16 @@ function TermLink({
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {definition}
           </p>
+          {onAsk && (
+            <Button
+              size="xs"
+              variant="secondary"
+              className="mt-2"
+              onClick={onAsk}
+            >
+              Ask Rev
+            </Button>
+          )}
         </HoverCardContent>
       </HoverCard>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -169,6 +181,18 @@ function TermLink({
             <DialogDescription>{definition}</DialogDescription>
           </DialogHeader>
           <p className="text-sm leading-6 text-muted-foreground">{context}</p>
+          {onAsk && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setOpen(false)
+                onAsk()
+              }}
+            >
+              Ask Rev
+            </Button>
+          )}
         </DialogContent>
       </Dialog>
     </>
@@ -179,11 +203,15 @@ export function ReviewMarkdown({
   document,
   onOpenReference,
   className,
+  onAskTerm,
+  selectable = false,
   ...context
 }: Context & {
   document: ReviewDocument
   onOpenReference: (reference: DocumentReference) => void
   className?: string
+  selectable?: boolean
+  onAskTerm?: (term: DocumentTerm) => void
 }) {
   const [openedTerm, setOpenedTerm] = useState<DocumentTerm | null>(null)
   const [referenceError, setReferenceError] = useState("")
@@ -213,12 +241,17 @@ export function ReviewMarkdown({
         (t) => t.id === match[2]
       )
       return term ? (
-        <TermLink {...term}>{children}</TermLink>
+        <TermLink
+          {...term}
+          onAsk={onAskTerm ? () => onAskTerm(term) : undefined}
+        >
+          {children}
+        </TermLink>
       ) : (
         <span title="This definition is unavailable">{children}</span>
       )
     },
-    [context, document.references, document.terms, onOpenReference]
+    [context, document.references, document.terms, onOpenReference, onAskTerm]
   )
   const block = useCallback(
     (source: string, language?: string): ReactNode | undefined => {
@@ -259,6 +292,7 @@ export function ReviewMarkdown({
             <ReviewMarkdown
               document={{ ...document, body: source }}
               {...context}
+              onAskTerm={onAskTerm}
               onOpenReference={onOpenReference}
             />
           </aside>
@@ -344,13 +378,14 @@ export function ReviewMarkdown({
         </p>
       )
     },
-    [context, document, onOpenReference]
+    [context, document, onOpenReference, onAskTerm]
   )
   return (
     <>
       <MarkdownRenderer
         className={className}
         allowHtml={false}
+        selectable={selectable}
         glossary={[...(context.glossary ?? []), ...document.terms]}
         illustrations
         renderLink={link}
@@ -372,6 +407,18 @@ export function ReviewMarkdown({
             <DialogTitle>{openedTerm?.term}</DialogTitle>
             <DialogDescription>{openedTerm?.definition}</DialogDescription>
           </DialogHeader>
+          {openedTerm && onAskTerm && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                onAskTerm(openedTerm)
+                setOpenedTerm(null)
+              }}
+            >
+              Ask Rev
+            </Button>
+          )}
           {openedTerm && (
             <p className="text-sm text-muted-foreground">
               {openedTerm.context}

@@ -55,6 +55,15 @@ pub(super) async fn run_preparation(
         run_terminal(root, prompt, config, cancel, stream).await
     }
 }
+pub(super) async fn run_consultation(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+) -> AppResult<()> {
+    run_configured(root, prompt, config, cancel, stream, true, true).await
+}
 async fn run_configured(
     root: &std::path::Path,
     prompt: &str,
@@ -65,7 +74,17 @@ async fn run_configured(
     terminal_only: bool,
 ) -> AppResult<()> {
     let effort = models::effort(config, cancel.clone()).await?;
-    let mut command = providers::command(&providers::resolve_executable(&config.executable));
+    let executable = providers::resolve_executable(&config.executable);
+    let sandbox = if read_only && terminal_only {
+        Some(consultation::Sandbox::new()?)
+    } else {
+        None
+    };
+    let mut command = if let Some(sandbox) = &sandbox {
+        sandbox.command(&executable)?
+    } else {
+        providers::command(&executable)
+    };
     // The harness owns discovery, context compaction and its configured tools.
     // Full tool execution is the locally chosen ReviewBox runtime policy.
     command
@@ -84,7 +103,7 @@ async fn run_configured(
             },
         ])
         .current_dir(root);
-    if read_only {
+    if read_only && !terminal_only {
         command.args([
             "--safe-mode",
             "--restricted",
@@ -104,6 +123,14 @@ async fn run_configured(
             "--disable-slash-commands",
         ]);
     }
+    if read_only && terminal_only {
+        command.args([
+            "--allowedTools",
+            "Bash",
+            "--settings",
+            r#"{"disableAllHooks":true}"#,
+        ]);
+    }
     if let Some(model) = config.model.as_ref().filter(|m| !m.is_empty()) {
         command.args(["--model", model]);
     }
@@ -119,6 +146,20 @@ async fn run_configured(
             let value = transport.next().await?;
             activity(&value, stream)?;
             previews.receive(&value, stream)?;
+            if stream.live_text
+                && value["parent_tool_use_id"].is_null()
+                && value["type"] == "stream_event"
+            {
+                let event = &value["event"];
+                if event["type"] == "message_start" {
+                    stream.emit("textStart", "")?;
+                }
+                if event["delta"]["type"] == "text_delta"
+                    && let Some(delta) = event["delta"]["text"].as_str()
+                {
+                    stream.emit("textDelta", delta)?;
+                }
+            }
             if value["type"] == "result" {
                 if value["is_error"] == true {
                     return Err(failure(&value));
@@ -224,6 +265,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let output = seen.clone();
         let mut stream = Stream {
+            live_text: false,
             id: "test".into(),
             sequence: 0,
             text: String::new(),

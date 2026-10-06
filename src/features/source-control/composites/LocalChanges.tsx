@@ -61,6 +61,12 @@ import { LocalFileMenu } from "./LocalFileMenu"
 import { selectFiles } from "../helpers/file-selection"
 import { CommitDialog } from "./CommitDialog"
 
+import { CodeComments } from "@/features/review/components/CodeComments"
+import { useCodeComments } from "@/features/review/hooks/useReviewComments"
+import { commentAnchor } from "@/features/review/helpers/reviewComment.helpers"
+import type { ReviewCommentAnchor } from "@/lib/desktop/contracts.generated"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
+
 const initialPosition: ReadingPosition = {
   changeId: null,
   passageId: null,
@@ -75,13 +81,17 @@ const initialPosition: ReadingPosition = {
 export function LocalChanges({
   git,
   onBack,
-  onFinished,
 }: {
   git: SourceControlSession
   onBack: () => void
-  onFinished: () => void
 }) {
   const { state, busy, mutate, reload, setError } = git
+  const comments = useCodeComments(state?.repositoryId ?? "", null)
+  const [commentSelection, setCommentSelection] = useState<{
+    key: string
+    value: SourceSelection
+    anchor: ReviewCommentAnchor
+  } | null>(null)
   const [selection, setSelection] = useState({
     layer: "",
     paths: new Set<string>(),
@@ -100,7 +110,20 @@ export function LocalChanges({
     "local",
     !!filter.trim()
   )
-  const allFiles = navigation.value.mode !== "changes"
+  const noChanges = !!state && state.files.length === 0
+  const allFiles = noChanges || navigation.value.mode !== "changes"
+  useEffect(() => {
+    if (
+      noChanges &&
+      navigation.ready &&
+      state &&
+      navigation.value.mode !== "all"
+    )
+      updateTreeNavigation(state.repositoryId, "local", (tree) => ({
+        ...tree,
+        mode: "all",
+      }))
+  }, [noChanges, navigation.ready, navigation.value.mode, state])
   const inventory = useEditorInventory(
     state?.repositoryId,
     navigation.value.expandedPaths,
@@ -174,6 +197,7 @@ export function LocalChanges({
         .map((_, index) => parts.slice(0, index + 1).join("/")),
     }))
   }, [state?.repositoryId, navigation.ready, activePath])
+  const sourceKey = `${state?.repositoryId}/${activePath}/${file?.version ?? "file"}/${availableLayer(file, preferredLayer)}`
   const version = file?.version
   const layer = availableLayer(file, preferredLayer)
   const repositoryId = state?.repositoryId
@@ -233,6 +257,7 @@ export function LocalChanges({
           }
         />
         <Select
+          disabled={noChanges}
           value={allFiles ? "all" : "changes"}
           onValueChange={(mode) =>
             navigation.update((tree) => ({
@@ -464,6 +489,13 @@ export function LocalChanges({
           <h1 className="flex-1 truncate text-sm font-medium">
             {allFiles ? "Project files" : "Local changes"}
           </h1>
+          <CodeComments
+            key={state.repositoryId}
+            session={comments}
+            selection={
+              commentSelection?.key === sourceKey ? commentSelection : null
+            }
+          />
           {file?.stagedStatus && file.unstagedStatus && (
             <Tabs value={layer} onValueChange={setPreferredLayer}>
               <TabsList>
@@ -487,10 +519,55 @@ export function LocalChanges({
               key={activePath}
               repositoryId={state.repositoryId}
               path={activePath}
+              onSelection={(source, value) =>
+                setCommentSelection(
+                  value
+                    ? {
+                        key: sourceKey,
+                        value,
+                        anchor: {
+                          snapshotId: "",
+                          sourceId: "",
+                          path: source.path,
+                          contentHash: source.revision,
+                          range: value.range,
+                          excerpt: value.excerpt,
+                          local: {
+                            path: source.path,
+                            layer: "file",
+                            side: "after",
+                            version: source.revision,
+                          },
+                        },
+                      }
+                    : null
+                )
+              }
             />
           ) : content ? (
             <ReviewCodePane
               key={content.change.id}
+              onCommentSelection={(value) => {
+                const anchor = value && commentAnchor("", content.change, value)
+                setCommentSelection(
+                  value && anchor
+                    ? {
+                        key: sourceKey,
+                        value,
+                        anchor: {
+                          ...anchor,
+                          sourceId: "",
+                          local: {
+                            path: content.change.path,
+                            layer: content.change.layer,
+                            side: value.side,
+                            version: content.version,
+                          },
+                        },
+                      }
+                    : null
+                )
+              }}
               snapshot={{ id: `local-${state.repositoryId}` }}
               change={content.change}
               source={content.content}
@@ -557,8 +634,7 @@ export function LocalChanges({
         onOpenChange={setCommitting}
         state={state}
         onFinished={async () => {
-          const next = await reload()
-          if (next && !next.files.length) onFinished()
+          await reload()
         }}
       />
     </div>

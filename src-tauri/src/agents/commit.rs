@@ -31,6 +31,7 @@ pub(crate) async fn plan(
     let directory = tempfile::tempdir()?;
     let prompt = planning_prompt(&template, &context, &directory.path().join("staged.json"))?;
     let mut stream = Stream {
+        live_text: false,
         id: request.operation_id.clone(),
         sequence: 0,
         channel,

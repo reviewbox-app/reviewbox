@@ -166,6 +166,7 @@ impl PreparationRuntime {
             Ok(())
         });
         let mut stream = Stream {
+            live_text: false,
             id: id(),
             sequence: 0,
             channel,

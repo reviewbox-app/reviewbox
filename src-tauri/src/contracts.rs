@@ -22,6 +22,8 @@ mod language_setup;
 pub use language_setup::*;
 mod reader;
 pub use reader::*;
+mod rev_chat;
+pub use rev_chat::*;
 mod review_comments;
 pub use review_comments::*;
 mod notifications;
@@ -529,7 +531,14 @@ pub fn typescript() -> String {
         WorkingContextFile::decl(&cfg),
         ReviewWorkingContext::decl(&cfg),
         ReviewCommentRange::decl(&cfg),
+        RevChatContext::decl(&cfg),
+        RevChatRequest::decl(&cfg),
         ReviewCommentAnchor::decl(&cfg),
+        CodeCommentAnchor::decl(&cfg),
+        DocumentCommentAnchor::decl(&cfg),
+        DocumentSelection::decl(&cfg),
+        DocumentTextRange::decl(&cfg),
+        LocalCommentSource::decl(&cfg),
         ReviewCommentStatus::decl(&cfg),
         ReviewComment::decl(&cfg),
         ReviewCommentsDocument::decl(&cfg),

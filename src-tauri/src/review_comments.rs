@@ -94,13 +94,15 @@ fn parse(text: &str) -> AppResult<Vec<Block>> {
 fn encode(comment: &ReviewComment) -> AppResult<String> {
     let mut metadata = serde_json::to_value(comment)?;
     metadata.as_object_mut().unwrap().remove("text");
-    let range = &comment.anchor.range;
+    let location = match &comment.anchor {
+        ReviewCommentAnchor::Code(a) => format!(
+            "{}:{}<->{}:{}",
+            a.range.start_line, a.range.start_column, a.range.end_line, a.range.end_column
+        ),
+        ReviewCommentAnchor::Document(a) => format!("document:{}", a.document.step_id),
+    };
     Ok(format!(
-        "{START}{}:{}<->{}:{} {} -->\n{}\n{END}{} -->\n",
-        range.start_line,
-        range.start_column,
-        range.end_line,
-        range.end_column,
+        "{START}{location} {} -->\n{}\n{END}{} -->\n",
         serde_json::to_string(&metadata)?
             .replace('<', "\\u003c")
             .replace('>', "\\u003e"),
@@ -286,6 +288,7 @@ fn document(
         comments,
         shared_file_present,
         correction_prompt,
+        outdated_comment_ids: Vec::new(),
     })
 }
 fn load(
@@ -306,14 +309,26 @@ pub async fn read_review_comments(
     app: tauri::AppHandle,
     storage: State<'_, Storage>,
     repository_id: String,
-    review_id: String,
+    review_id: Option<String>,
 ) -> AppResult<ReviewCommentsDocument> {
     let storage = storage.inner().clone();
     let prompt_root = crate::commands::resource_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let (project, _) = load(&storage, &repository_id, &review_id)?;
-        let _lock = project.lock()?;
-        document(&project, &review_id, &prompt_root)
+        if let Some(review_id) = review_id {
+            let (project, workspace) = load(&storage, &repository_id, &review_id)?;
+            let _lock = project.lock()?;
+            let mut result = document(&project, &review_id, &prompt_root)?;
+            for comment in &result.comments {
+                if let ReviewCommentAnchor::Document(anchor) = &comment.anchor
+                    && crate::review_documents::verify(&workspace, &anchor.document).is_err()
+                {
+                    result.outdated_comment_ids.push(comment.id.clone());
+                }
+            }
+            Ok(result)
+        } else {
+            local_document(&storage, &repository_id, &prompt_root)
+        }
     })
     .await
     .map_err(|e| invalid(e.to_string()))?
@@ -323,34 +338,55 @@ pub async fn mutate_review_comment(
     app: tauri::AppHandle,
     storage: State<'_, Storage>,
     repository_id: String,
-    review_id: String,
+    review_id: Option<String>,
     expected_revision: String,
     mut mutation: ReviewCommentMutation,
 ) -> AppResult<ReviewCommentsDocument> {
     let storage = storage.inner().clone();
     let prompt_root = crate::commands::resource_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let Some(review_id) = review_id else {
+            return mutate_local(
+                &storage,
+                &repository_id,
+                &prompt_root,
+                &expected_revision,
+                mutation,
+            );
+        };
         let (project, workspace) = load(&storage, &repository_id, &review_id)?;
         crate::reviews::require_draft(&workspace.review)?;
-        if workspace.review.mode != ReviewMode::Manual {
-            return Err(invalid("Comments are available in a manual review."));
-        }
         if let ReviewCommentMutation::Add { anchor, .. } = &mut mutation {
-            if anchor.snapshot_id != workspace.snapshot.id {
-                return Err(invalid("The capture changed. Select the source again."));
+            match anchor {
+                ReviewCommentAnchor::Document(anchor) => {
+                    anchor.title = Some(
+                        crate::review_documents::step(&workspace.review, &anchor.document.step_id)?
+                            .title
+                            .clone(),
+                    );
+                    anchor.excerpt = crate::review_documents::verify(&workspace, &anchor.document)?;
+                    if anchor.excerpt.trim().is_empty() {
+                        return Err(invalid("Select document text before commenting."));
+                    }
+                }
+                ReviewCommentAnchor::Code(anchor) => {
+                    if anchor.local.is_some() || anchor.snapshot_id != workspace.snapshot.id {
+                        return Err(invalid("The capture changed. Select the source again."));
+                    }
+                    let source = crate::reader::source(
+                        &storage.scoped(Some(&repository_id)),
+                        &workspace.snapshot,
+                        &anchor.source_id,
+                    )?;
+                    if source.hash != anchor.content_hash || source.path != anchor.path {
+                        return Err(invalid("The comment does not match the captured source."));
+                    }
+                    let text = source
+                        .text
+                        .ok_or_else(|| invalid("This source cannot be commented."))?;
+                    anchor.excerpt = selected_text(&text, &anchor.range)?;
+                }
             }
-            let source = crate::reader::source(
-                &storage.scoped(Some(&repository_id)),
-                &workspace.snapshot,
-                &anchor.source_id,
-            )?;
-            if source.hash != anchor.content_hash || source.path != anchor.path {
-                return Err(invalid("The comment does not match the captured source."));
-            }
-            let text = source
-                .text
-                .ok_or_else(|| invalid("This source cannot be commented."))?;
-            anchor.excerpt = selected_text(&text, &anchor.range)?;
         }
         let _lock = project.lock()?;
         // A completion/refresh may have happened while source validation ran.
@@ -358,13 +394,26 @@ pub async fn mutate_review_comment(
         let current = documents
             .get(&("review".into(), review_id.clone()))
             .ok_or_else(|| invalid("This review no longer exists."))?;
-        if current["publication"]["status"] != "draft" || current["mode"] != "manual" {
-            return Err(invalid("Only a manual draft accepts comment changes."));
+        if current["publication"]["status"] != "draft" {
+            return Err(invalid("Only a draft accepts comment changes."));
         }
         if current["snapshotId"] != workspace.snapshot.id {
             return Err(invalid(
                 "The capture changed. Reload the review before saving.",
             ));
+        }
+        if let ReviewCommentMutation::Add {
+            anchor: ReviewCommentAnchor::Document(anchor),
+            ..
+        } = &mutation
+        {
+            let mut hydrated = current.clone();
+            project_storage::step_documents::hydrate(
+                &project.document_root("review", &review_id),
+                &mut hydrated,
+            )?;
+            let review: Review = serde_json::from_value(hydrated)?;
+            crate::review_documents::verify_review(&review, &anchor.document)?;
         }
         let path = project_storage::checked(&project.root, FILE)?;
         let before = read_text(&path)?;
@@ -384,6 +433,9 @@ pub async fn mutate_review_comment(
     .await
     .map_err(|e| invalid(e.to_string()))?
 }
+
+mod local;
+use local::{local_document, mutate_local};
 
 #[cfg(test)]
 mod tests;

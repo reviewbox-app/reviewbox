@@ -35,13 +35,46 @@ export type ReviewCommentRange = {
   endLine: number
   endColumn: number
 }
-export type ReviewCommentAnchor = {
+export type RevChatContext = {
+  selection: DocumentSelection
+  termId: string | null
+}
+export type RevChatRequest = {
+  conversationId: string
+  operationId: string
+  repositoryId: string
+  reviewId: string
+  context: RevChatContext
+  message: string
+}
+export type ReviewCommentAnchor = DocumentCommentAnchor | CodeCommentAnchor
+export type CodeCommentAnchor = {
+  local?: LocalCommentSource
   snapshotId: string
   sourceId: string
   path: string
   contentHash: string
   range: ReviewCommentRange
   excerpt: string
+}
+export type DocumentCommentAnchor = {
+  title?: string
+  document: DocumentSelection
+  excerpt: string
+}
+export type DocumentSelection = {
+  snapshotId: string
+  stepId: string
+  level: ReadingLevel
+  contentHash: string
+  ranges: Array<DocumentTextRange>
+}
+export type DocumentTextRange = { start: number; end: number }
+export type LocalCommentSource = {
+  path: string
+  layer: string
+  side: string
+  version: string
 }
 export type ReviewCommentStatus = "open" | "addressed"
 export type ReviewComment = {
@@ -60,6 +93,7 @@ export type ReviewCommentsDocument = {
   comments: Array<ReviewComment>
   sharedFilePresent: boolean
   correctionPrompt: string
+  outdatedCommentIds: Array<string>
 }
 export type ReviewCommentMutation =
   | { kind: "add"; id: string; anchor: ReviewCommentAnchor; text: string }
@@ -323,6 +357,7 @@ export type EditorRecovery = {
   saveActions?: { [key in string]: EditorSaveActions }
 }
 export type FileTreeNavigation = {
+  visible?: boolean
   expandedPaths: Array<string>
   selectedPath: string | null
   scrollTop: number

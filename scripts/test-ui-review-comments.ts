@@ -34,6 +34,7 @@ try {
   await ui.named("or enter a path")
   await ui.fill('[aria-label="Repository path"]', f.repo)
   await ui.named("Open")
+  await captureEditors("startup")
   await ui.startManualReview()
   if (
     await ui.execute(
@@ -43,7 +44,7 @@ try {
     await ui.click('[data-folder="src"][aria-expanded="false"]')
   await ui.click('[title="src/answer.ts"]')
   await ui.until(
-    "Array.from(document.querySelectorAll('.block-diff-main .view-line')).some(node => node.textContent.trim() && node.getBoundingClientRect().height > 0)",
+    "Array.from(document.querySelectorAll('.block-after .view-line')).some(node => node.textContent.trim() && node.getBoundingClientRect().height > 0)",
     "visible source text"
   )
   await captureEditors("before-comparison")
@@ -56,6 +57,11 @@ try {
       await ui.named("Show previous code")
     await captureEditors(`comparison-${side}`)
     await ui.click(`.block-${side} .view-line span`)
+    // The native WebDriver click omits Monaco's pointer-down focus transfer.
+    await ui.execute(
+      `document.querySelector(arguments[0]).closest('.monaco-editor').querySelector('textarea').focus();return true`,
+      [`.block-${side} .view-line span`]
+    )
     await ui.shortcut("a")
     await ui.has("Add comment")
     await ui.named("Add comment")

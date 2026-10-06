@@ -64,11 +64,13 @@
     "test:ui:terminal": "bun scripts/test-ui-terminal.ts",
     "test:ui:explorer": "bun scripts/test-ui-explorer.ts",
     "test:ui:review-comments": "bun scripts/test-ui-review-comments.ts",
+    "test:ui:local-comments": "bun scripts/test-ui-local-comments.ts",
     "test:ui:project-skills": "bun scripts/test-ui-project-skills.ts",
     "test:ui:code-editor": "bun scripts/test-ui-code-editor.ts",
     "test:ui:editor-languages": "bun scripts/test-ui-editor-languages.ts",
     "test:editor-extensions": "bun scripts/test-editor-extensions.ts",
-    "test:ui:editor-extensions": "bun scripts/test-ui-editor-extensions.ts"
+    "test:ui:editor-extensions": "bun scripts/test-ui-editor-extensions.ts",
+    "test:ui:document-chat": "bun scripts/test-ui-document-chat.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

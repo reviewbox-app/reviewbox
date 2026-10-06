@@ -27,6 +27,7 @@ mod repositories;
 mod repository_cache;
 mod review_comments;
 mod review_creation;
+mod review_documents;
 mod review_finalization;
 mod review_menu;
 mod reviews;
@@ -43,6 +44,7 @@ pub fn run() {
     #[cfg(feature = "native-validation")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
+        .manage(agents::chat::ChatManager::default())
         .manage(review_finalization::Finalizations::default())
         .manage(source_control::review_commit::ReviewCommits::default())
         .manage(illustrations::Illustrations::default())
@@ -159,6 +161,9 @@ pub fn run() {
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window
+                    .state::<agents::chat::ChatManager>()
+                    .release_window(window.label());
+                window
                     .state::<illustrations::Illustrations>()
                     .release_window(window.label());
                 window
@@ -197,6 +202,9 @@ pub fn run() {
             project_skills::import_project_skills,
             working_context::review_working_context,
             working_context::retry_working_context_cleanup,
+            agents::chat::rev_chat_send,
+            agents::chat::rev_chat_cancel,
+            agents::chat::rev_chat_close,
             review_comments::read_review_comments,
             review_comments::mutate_review_comment,
             editor::commands::editor_navigation,

@@ -24,8 +24,12 @@ export function ReviewCommentDialog({
   error,
   onSave,
   onClose,
+  initialText = "",
+  onReselect,
 }: {
   anchor: ReviewCommentAnchor
+  initialText?: string
+  onReselect?: (text: string) => void
   comment?: ReviewComment
   busy: boolean
   error?: string
@@ -33,7 +37,7 @@ export function ReviewCommentDialog({
   onClose: () => void
 }) {
   const [id] = useState(() => comment?.id ?? crypto.randomUUID())
-  const [text, setText] = useState(comment?.text ?? "")
+  const [text, setText] = useState(comment?.text ?? initialText)
   const [addressed, setAddressed] = useState(comment?.status === "addressed")
   const [resolution, setResolution] = useState(comment?.resolution ?? "")
   const [tests, setTests] = useState(comment?.tests ?? "")
@@ -122,6 +126,16 @@ export function ReviewCommentDialog({
             <p role="alert" className="text-sm text-destructive">
               {error}
             </p>
+          )}
+          {error && !comment && onReselect && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => onReselect(text)}
+            >
+              Select source again
+            </Button>
           )}
           <div className="flex justify-end gap-2">
             <Button

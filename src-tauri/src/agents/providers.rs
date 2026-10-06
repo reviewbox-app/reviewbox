@@ -420,6 +420,7 @@ mod tests {
             );
             if expected != ProviderCompatibility::Compatible {
                 let mut stream = crate::agents::Stream {
+                    live_text: false,
                     id: "test".into(),
                     sequence: 0,
                     channel: tauri::ipc::Channel::new(|_| Ok(())),
@@ -446,6 +447,7 @@ mod tests {
         );
         // Version support never bypasses the existing protocol check.
         let mut stream = crate::agents::Stream {
+            live_text: false,
             id: "test".into(),
             sequence: 0,
             channel: tauri::ipc::Channel::new(|_| Ok(())),

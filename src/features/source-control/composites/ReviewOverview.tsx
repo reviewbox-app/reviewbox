@@ -88,9 +88,11 @@ export function ReviewOverview({
           </EmptyHeader>
           <EmptyContent>
             <div className="flex flex-wrap justify-center gap-2">
-              {!!state?.files.length && (
+              {state && (
                 <Button variant="secondary" onClick={onLocal}>
-                  View local changes
+                  {state.files.length
+                    ? "View local changes"
+                    : "View local code"}
                 </Button>
               )}
               <Button onClick={onResume ?? onStart}>
