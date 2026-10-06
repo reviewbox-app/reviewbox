@@ -1,6 +1,6 @@
 "use client"
 import "@xterm/xterm/css/xterm.css"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
   DndContext,
   PointerSensor,
@@ -58,6 +58,10 @@ import {
 } from "../services/terminal.runtime"
 import { desktopAvailable } from "@/lib/desktop/review.commands"
 
+// Runtime availability is constant, but hydration must match the static export.
+const subscribeToDesktop = () => () => {}
+const serverDesktopAvailable = () => false
+
 /** Mounted with the application: hiding a section never disposes its shell or parser. */
 export function TerminalWorkspace({
   repositoryId,
@@ -66,6 +70,11 @@ export function TerminalWorkspace({
   repositoryId?: string
   visible: boolean
 }) {
+  const desktop = useSyncExternalStore(
+    subscribeToDesktop,
+    desktopAvailable,
+    serverDesktopAvailable
+  )
   const tabs = useTerminalStore((s) => s.tabs)
   const activeByRepository = useTerminalStore((s) => s.active)
   const creating = useTerminalStore((s) => s.creating)
@@ -240,7 +249,7 @@ export function TerminalWorkspace({
           variant="ghost"
           size="icon-sm"
           aria-label="New terminal"
-          disabled={creating || !desktopAvailable()}
+          disabled={creating || !desktop}
           onClick={create}
         >
           <HugeiconsIcon icon={Add01Icon} size={16} />
@@ -346,13 +355,13 @@ export function TerminalWorkspace({
               </EmptyMedia>
               <EmptyTitle>Open a terminal</EmptyTitle>
               <EmptyDescription>
-                {desktopAvailable()
+                {desktop
                   ? "Run commands in this project's shell."
                   : "Terminals are available in the desktop app."}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button size="sm" onClick={create} disabled={!desktopAvailable()}>
+              <Button size="sm" onClick={create} disabled={!desktop}>
                 New terminal
               </Button>
             </EmptyContent>
