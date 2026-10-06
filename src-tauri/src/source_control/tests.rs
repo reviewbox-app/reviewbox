@@ -727,9 +727,16 @@ fn index_writing_hooks_cannot_silently_add_unstaged_files_to_a_batch() {
     )
     .unwrap();
     assert_eq!(result.status, "failed");
-    assert!(result.error.unwrap().contains("temporary index"));
-    assert_eq!(git::head(&root), frozen.head);
-    assert_eq!(run(&root, &["diff", "--cached", "--name-only"]), "a.txt");
+    assert!(
+        result
+            .error
+            .as_ref()
+            .is_some_and(|error| error.contains("personal changes")),
+        "{:?}",
+        result.error
+    );
+    assert_eq!(result.commits.len(), 1);
+    assert_ne!(git::head(&root), frozen.head);
     assert_eq!(
         fs::read_to_string(root.join("extra.txt")).unwrap(),
         "unstaged\n"
@@ -893,4 +900,238 @@ fn commit_context_contains_only_frozen_git_references_even_for_large_changes() {
             assert!(run(&root, &["ls-tree", base]).is_empty());
         }
     }
+}
+
+#[cfg(unix)]
+fn install_commit_hook(root: &Path, name: &str, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let hooks = git::git_path(root, "hooks").unwrap();
+    fs::create_dir_all(&hooks).unwrap();
+    let path = hooks.join(name);
+    fs::write(&path, format!("#!/bin/sh\nset -e\n{body}\n")).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn formatting_hooks_continue_without_duplicate_or_stale_index() {
+    let (_dir, root, storage, repo) = fixture(true);
+    fs::write(root.join("a.txt"), "raw\n").unwrap();
+    fs::write(root.join("b.txt"), "second\n").unwrap();
+    stage(&root, "a.txt");
+    stage(&root, "b.txt");
+    install_commit_hook(
+        &root,
+        "pre-commit",
+        "printf 'formatted\\n' > a.txt\ngit add -- a.txt",
+    );
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    let result = commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![
+            commits::Batch {
+                message: "first".into(),
+                paths: vec!["a.txt".into()],
+            },
+            commits::Batch {
+                message: "second".into(),
+                paths: vec!["b.txt".into()],
+            },
+        ],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "completed", "{:?}", result.error);
+    assert_eq!(result.commits.len(), 2);
+    assert_eq!(run(&root, &["show", "HEAD:a.txt"]), "formatted");
+    assert!(run(&root, &["status", "--porcelain"]).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn residual_hook_output_gets_one_extra_commit_and_updates_later_batch() {
+    let (_dir, root, storage, repo) = fixture(true);
+    fs::write(root.join("a.txt"), "first\n").unwrap();
+    fs::write(root.join("b.txt"), "second\n").unwrap();
+    stage(&root, "a.txt");
+    stage(&root, "b.txt");
+    install_commit_hook(
+        &root,
+        "post-commit",
+        "printf 'formatted\\n' > b.txt\nprintf 'generated\\n' > generated.txt",
+    );
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    let result = commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![
+            commits::Batch {
+                message: "first".into(),
+                paths: vec!["a.txt".into()],
+            },
+            commits::Batch {
+                message: "second".into(),
+                paths: vec!["b.txt".into()],
+            },
+        ],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "completed", "{:?}", result.error);
+    assert_eq!(result.commits.len(), 2);
+    assert_eq!(result.commits[1].subject, "chore: apply git hook changes");
+    assert_eq!(run(&root, &["show", "HEAD:b.txt"]), "formatted");
+    assert!(run(&root, &["status", "--porcelain"]).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_overlap_preserves_personal_work_and_stops() {
+    let (_dir, root, storage, repo) = fixture(true);
+    fs::write(root.join("a.txt"), "staged\n").unwrap();
+    stage(&root, "a.txt");
+    fs::write(root.join("b.txt"), "personal\n").unwrap();
+    install_commit_hook(&root, "post-commit", "printf 'hook\\n' >> b.txt");
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    let result = commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![commits::Batch {
+            message: "first".into(),
+            paths: vec!["a.txt".into()],
+        }],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "failed");
+    assert!(result.error.unwrap().contains("personal changes"));
+    assert_eq!(result.commits.len(), 1);
+    assert_eq!(
+        fs::read_to_string(root.join("b.txt")).unwrap(),
+        "personal\nhook\n"
+    );
+    assert_eq!(run(&root, &["show", "HEAD:b.txt"]), "before");
+}
+
+#[cfg(unix)]
+#[test]
+fn unstable_hook_is_bounded_and_leaves_residual_staged() {
+    let (_dir, root, storage, repo) = fixture(true);
+    fs::write(root.join("a.txt"), "staged\n").unwrap();
+    stage(&root, "a.txt");
+    install_commit_hook(&root, "post-commit", "printf 'hook\\n' >> a.txt");
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    let result = commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![commits::Batch {
+            message: "first".into(),
+            paths: vec!["a.txt".into()],
+        }],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "failed");
+    assert!(result.error.unwrap().contains("still changes files"));
+    assert_eq!(result.commits.len(), 2);
+    assert_eq!(run(&root, &["diff", "--cached", "--name-only"]), "a.txt");
+    assert!(run(&root, &["diff", "--name-only"]).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_recovers_hook_changed_commit_and_reconciles_original_index() {
+    let (_dir, root, storage, repo) = fixture(true);
+    fs::write(root.join("a.txt"), "raw\n").unwrap();
+    stage(&root, "a.txt");
+    let index_path = git::git_path(&root, "index").unwrap();
+    let planned_tree = run(&root, &["write-tree"]);
+    let original_index = fs::read(&index_path).unwrap();
+    install_commit_hook(
+        &root,
+        "pre-commit",
+        "printf 'formatted\\n' > a.txt\ngit add -- a.txt",
+    );
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    let result = commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![commits::Batch {
+            message: "first".into(),
+            paths: vec!["a.txt".into()],
+        }],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "completed");
+    let path = storage.root().join("git-operations").join(format!(
+        "{}.json",
+        fingerprint(request.operation_id.as_bytes())
+    ));
+    let mut journal: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    journal["operation"]["status"] = "running".into();
+    journal["operation"]["commits"] = serde_json::json!([]);
+    journal["pending_head"] = serde_json::json!(frozen.head);
+    journal["pending_tree"] = planned_tree.clone().into();
+    journal["target_tree"] = planned_tree.into();
+    fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    fs::write(index_path, original_index).unwrap();
+    let recovered = commits::last(&storage, &repo.id).unwrap().unwrap();
+    assert_eq!(recovered.commits.len(), 1);
+    assert_eq!(recovered.commits[0].oid, result.commits[0].oid);
+    assert!(run(&root, &["status", "--porcelain"]).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_hook_preserves_modified_index_without_retrying() {
+    let (_dir, root, storage, repo) = fixture(true);
+    fs::write(root.join("a.txt"), "raw\n").unwrap();
+    stage(&root, "a.txt");
+    install_commit_hook(
+        &root,
+        "pre-commit",
+        "printf 'formatted\\n' > a.txt\ngit add -- a.txt\nexit 1",
+    );
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    let result = commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![commits::Batch {
+            message: "first".into(),
+            paths: vec!["a.txt".into()],
+        }],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "failed");
+    assert!(result.commits.is_empty());
+    assert_eq!(git::head(&root), frozen.head);
+    assert_eq!(run(&root, &["show", ":a.txt"]), "formatted");
+    assert!(run(&root, &["diff", "--name-only"]).is_empty());
 }

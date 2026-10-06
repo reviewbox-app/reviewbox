@@ -1,3 +1,4 @@
+mod trees;
 use super::{git, history, working};
 use crate::{contracts::*, storage::Storage};
 use serde::{Deserialize, Serialize};
@@ -72,37 +73,15 @@ pub(super) fn freeze(root: &Path, expected: &str) -> AppResult<Frozen> {
     // Freeze an addressable tree without touching the real index. The harness
     // inspects these Git objects itself, even if the live index changes later.
     let temporary = git::TempIndex::new(root)?;
-    let cancel = AtomicBool::new(false);
-    git::run(
+    trees::plumbing(root, Some(&temporary.0), &["read-tree", "--empty"], &[])?;
+    let empty_tree = trees::index_tree(root, &temporary.0)?;
+    trees::plumbing(
         root,
-        &["read-tree", "--empty"],
         Some(&temporary.0),
-        &[],
-        &cancel,
-    )?;
-    let empty_tree = String::from_utf8(git::run(
-        root,
-        &["write-tree"],
-        Some(&temporary.0),
-        &[],
-        &cancel,
-    )?)
-    .map_err(|_| AppError::new("git_encoding", "Invalid Git tree ID."))?;
-    git::run(
-        root,
         &["update-index", "-z", "--index-info"],
-        Some(&temporary.0),
         &raw,
-        &cancel,
     )?;
-    let staged_tree = String::from_utf8(git::run(
-        root,
-        &["write-tree"],
-        Some(&temporary.0),
-        &[],
-        &cancel,
-    )?)
-    .map_err(|_| AppError::new("git_encoding", "Invalid Git tree ID."))?;
+    let staged_tree = trees::index_tree(root, &temporary.0)?;
     let head = git::head(root);
     let context = serde_json::to_string(&serde_json::json!({
         "baseTree":head.as_deref().unwrap_or(empty_tree.trim()),
@@ -173,6 +152,16 @@ struct Journal {
     pending_head: Option<String>,
     #[serde(default)]
     pending_tree: Option<String>,
+    #[serde(default)]
+    target_tree: Option<String>,
+    #[serde(default)]
+    worktree_before: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    original_index_hash: Option<String>,
+    #[serde(default)]
+    pending_index: Option<PathBuf>,
 }
 fn journal_path(storage: &Storage, id: &str) -> PathBuf {
     storage
@@ -214,15 +203,17 @@ pub(super) fn last(storage: &Storage, repository_id: &str) -> AppResult<Option<G
             journal.operation.message="The commit sequence was interrupted. Completed commits remain in Git. Inspect the branch and remaining staged changes before starting a new operation.".into();
             // An interruption between Git's ref update and checkpoint persistence is
             // never retried. Discover only children of the recorded expected HEAD.
-            if let Some(tree) = &journal.pending_tree
+            if journal.pending_tree.is_some()
                 && let Ok(root) = crate::repositories::root(storage, repository_id)
                 && let Some(head) = git::head(&root)
                 && git::text(&root, &["rev-parse", &format!("{head}^")]).ok()
                     == journal.pending_head
-                && git::text(&root, &["rev-parse", &format!("{head}^{{tree}}")])
-                    .ok()
-                    .as_ref()
-                    == Some(tree)
+                && journal.branch.as_ref().is_none_or(|branch| {
+                    git::text(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+                        .ok()
+                        .as_ref()
+                        == Some(branch)
+                })
                 && !journal.operation.commits.iter().any(|c| c.oid == head)
             {
                 journal
@@ -230,12 +221,77 @@ pub(super) fn last(storage: &Storage, repository_id: &str) -> AppResult<Option<G
                     .commits
                     .push(history::commit(&root, &head)?);
             }
+            recover_index(storage, &mut journal)?;
             write(storage, &journal)?;
         }
         return Ok(Some(journal.operation));
     }
     Ok(None)
 }
+// Recovery only reconciles an unchanged original index on the recorded branch.
+// It never invokes commit or rewrites worktree files.
+fn recover_index(storage: &Storage, journal: &mut Journal) -> AppResult<()> {
+    let (Some(target_tree), Some(index_hash), Some(branch)) = (
+        &journal.target_tree,
+        &journal.original_index_hash,
+        &journal.branch,
+    ) else {
+        return Ok(());
+    };
+    let root = crate::repositories::root(storage, &journal.operation.repository_id)?;
+    let mut lock = git::IndexLock::acquire(&root)?;
+    if fingerprint(&fs::read(git::git_path(&root, "index")?)?) != *index_hash
+        || git::text(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"])? != *branch
+    {
+        return Ok(());
+    }
+    let head = git::head(&root);
+    let recorded = journal
+        .operation
+        .commits
+        .last()
+        .map(|c| c.oid.clone())
+        .or_else(|| journal.original_head.clone());
+    if head != recorded {
+        return Ok(());
+    }
+    let mut target = trees::read(&root, target_tree)?;
+    let recovery_baseline = target.clone();
+    if let (Some(planned), Some(head)) = (&journal.pending_tree, &head)
+        && git::text(&root, &["rev-parse", &format!("{head}^")]).ok() == journal.pending_head
+    {
+        let planned = trees::read(&root, planned)?;
+        let actual = trees::read(&root, head)?;
+        for path in trees::changed(&planned, &actual) {
+            trees::copy_path(&mut target, &actual, &path);
+        }
+    }
+    if let (Some(index), Some(before_tree), Some(head)) =
+        (&journal.pending_index, &journal.worktree_before, &head)
+    {
+        let owned = index.parent() == git::git_path(&root, "index")?.parent()
+            && index
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("reviewbox-") && name.ends_with(".index"));
+        if owned && index.is_file() {
+            let staged = trees::read(&root, &trees::index_tree(&root, index)?)?;
+            let actual = trees::read(&root, head)?;
+            let before = trees::read(&root, before_tree)?;
+            for path in trees::changed(&actual, &staged) {
+                if before.get(&path) == recovery_baseline.get(&path) {
+                    trees::copy_path(&mut target, &staged, &path);
+                }
+            }
+        }
+    }
+    // Worktree-only residuals remain visible unstaged after a crash. They cannot
+    // be attributed to the hook across an unbounded offline interval.
+    let temporary = git::TempIndex::new(&root)?;
+    journal.target_tree = Some(trees::write_index(&root, &temporary.0, &target)?);
+    lock.publish(&root, &temporary.0)
+}
+
 pub(super) fn execute(
     storage: &Storage,
     root: &Path,
@@ -252,7 +308,7 @@ pub(super) fn execute(
             "This operation already ran. Inspect its results before starting another.",
         ));
     }
-    let _lock = git::IndexLock::acquire(root)?;
+    let mut lock = git::IndexLock::acquire(root)?;
     if working::index_version(root)? != frozen.version {
         return Err(AppError::new(
             "git_changed",
@@ -260,6 +316,8 @@ pub(super) fn execute(
         ));
     }
     let original_index = fs::read(git::git_path(root, "index")?)?;
+    let target_index = git::TempIndex::new(root)?;
+    let mut target = frozen.entries.clone();
     let mut journal = Journal {
         operation: GitOperation {
             id: request.operation_id.clone(),
@@ -275,122 +333,199 @@ pub(super) fn execute(
         next: 0,
         pending_head: None,
         pending_tree: None,
+        target_tree: Some(trees::write_index(root, &target_index.0, &target)?),
+        worktree_before: None,
+        branch: Some(frozen.branch.clone()),
+        original_index_hash: Some(fingerprint(&original_index)),
+        pending_index: None,
     };
     write(storage, &journal)?;
-    let result = (|| {
-        let mut expected_head = frozen.head.clone();
+    let mut expected_head = frozen.head.clone();
+    let mut observed_worktree = trees::worktree(root)?;
+    let mut result = (|| {
         for index in 0..journal.batches.len() {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(AppError::new(
-                    "cancelled",
-                    "Commit sequence stopped. Completed commits and remaining staged changes are preserved.",
-                ));
+            let batch = journal.batches[index].clone();
+            let mut planned = match &expected_head {
+                Some(head) => trees::read(root, head)?,
+                None => BTreeMap::new(),
+            };
+            for path in &batch.paths {
+                let file = frozen.files.iter().find(|f| &f.path == path).unwrap();
+                for path in file.previous_path.iter().chain(std::iter::once(&file.path)) {
+                    trees::copy_path(&mut planned, &target, path);
+                }
             }
-            if git::head(root) != expected_head
-                || fs::read(git::git_path(root, "index")?)? != original_index
-                || git::text(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?
-                    != frozen.branch
-            {
-                return Err(AppError::new(
-                    "git_changed",
-                    "The branch or index changed in another tool. The sequence stopped.",
-                ));
-            }
-            let batch = &journal.batches[index];
-            let temporary = git::TempIndex::new(root)?;
-            let tree = expected_head.as_deref().unwrap_or("--empty");
-            git::run(root, &["read-tree", tree], Some(&temporary.0), &[], cancel)?;
-            let paths: BTreeSet<_> = batch
-                .paths
-                .iter()
-                .flat_map(|path| {
-                    let file = frozen.files.iter().find(|f| &f.path == path).unwrap();
-                    file.previous_path.iter().chain(std::iter::once(&file.path))
-                })
-                .collect();
-            let mut data = Vec::new();
-            let zeros = "0".repeat(
-                git::text(root, &["rev-parse", "--show-object-format"])
-                    .map_or(40, |f| if f == "sha256" { 64 } else { 40 }),
-            );
-            for path in &paths {
-                let entry = match frozen.entries.get(*path) {
-                    Some((mode, oid)) => format!("{mode} {oid}\t{path}\0"),
-                    None => format!("0 {zeros}\t{path}\0"),
-                };
-                data.extend(entry.as_bytes());
-            }
-            git::run(
-                root,
-                &["update-index", "-z", "--index-info"],
-                Some(&temporary.0),
-                &data,
-                cancel,
-            )?;
-            let planned_tree = String::from_utf8_lossy(&git::run(
-                root,
-                &["write-tree"],
-                Some(&temporary.0),
-                &[],
-                cancel,
-            )?)
-            .trim()
-            .to_string();
-            verify_temporary_index(root, &temporary.0, &paths, frozen, cancel)?;
-            journal.operation.message =
-                format!("Creating commit {} of {}", index + 1, journal.batches.len());
-            journal.pending_head = expected_head.clone();
-            journal.pending_tree = Some(planned_tree.clone());
-            write(storage, &journal)?;
-            notify(&journal.operation);
-            let commit_result = git::run(
-                root,
-                &["commit", "--file=-"],
-                Some(&temporary.0),
-                batch.message.as_bytes(),
-                cancel,
-            );
-            // Hooks can fail after a commit or cancellation can race its ref update.
-            // Record any actual new commit before returning an error.
-            let actual = git::head(root);
-            if actual != expected_head {
-                let oid = actual.clone().ok_or_else(|| {
-                    AppError::new("git_changed", "HEAD disappeared during commit.")
-                })?;
-                let parent = git::text(root, &["rev-parse", &format!("{oid}^")]).ok();
-                if parent != expected_head
+            for extra in [false, true] {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(AppError::new(
+                        "cancelled",
+                        "Commit sequence stopped. Completed commits and remaining staged changes are preserved.",
+                    ));
+                }
+                if git::head(root) != expected_head
+                    || fs::read(git::git_path(root, "index")?)? != original_index
                     || git::text(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?
                         != frozen.branch
+                    || trees::worktree(root)? != observed_worktree
                 {
                     return Err(AppError::new(
                         "git_changed",
-                        "The branch moved during commit. Inspect Git before continuing; no commit will be repeated.",
+                        "The branch, index or working files changed in another tool. The sequence stopped.",
                     ));
                 }
-                journal.operation.commits.push(history::commit(root, &oid)?);
-                journal.next = index + 1;
-                journal.pending_head = None;
-                journal.pending_tree = None;
+                let temporary = git::TempIndex::new(root)?;
+                let planned_tree = trees::write_index(root, &temporary.0, &planned)?;
+                if expected_head.as_ref().is_some_and(|head| {
+                    git::text(root, &["rev-parse", &format!("{head}^{{tree}}")])
+                        .ok()
+                        .as_ref()
+                        == Some(&planned_tree)
+                }) {
+                    break;
+                }
+                let before = trees::read(root, &observed_worktree)?;
+                let target_before = target.clone();
+                journal.operation.message = if extra {
+                    "Committing Git hook changes…".into()
+                } else {
+                    format!("Creating commit {} of {}", index + 1, journal.batches.len())
+                };
+                journal.pending_head = expected_head.clone();
+                journal.pending_tree = Some(planned_tree.clone());
+                journal.worktree_before = Some(observed_worktree.clone());
+                journal.pending_index = Some(temporary.0.clone());
                 write(storage, &journal)?;
                 notify(&journal.operation);
-                if git::text(root, &["rev-parse", &format!("{oid}^{{tree}}")])? != planned_tree {
+                // Recheck after notifying listeners; no live contents are staged here.
+                if trees::worktree(root)? != observed_worktree {
                     return Err(AppError::new(
-                        "hook_changed_index",
-                        "A Git hook changed the committed content. The commit is preserved; inspect it before continuing.",
+                        "git_changed",
+                        "Working files changed before the commit.",
                     ));
                 }
+                let commit_result = git::run(
+                    root,
+                    &["commit", "--file=-"],
+                    Some(&temporary.0),
+                    if extra {
+                        b"chore: apply git hook changes"
+                    } else {
+                        batch.message.as_bytes()
+                    },
+                    cancel,
+                );
+                let actual = git::head(root);
+                let created = actual != expected_head;
+                let mut committed = planned.clone();
+                if actual != expected_head {
+                    let oid = actual.as_ref().ok_or_else(|| {
+                        AppError::new("git_changed", "HEAD disappeared during commit.")
+                    })?;
+                    if git::text(root, &["rev-parse", &format!("{oid}^")]).ok() != expected_head
+                        || git::text(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?
+                            != frozen.branch
+                    {
+                        return Err(AppError::new(
+                            "git_changed",
+                            "The branch moved during commit. Inspect Git before continuing; no commit will be repeated.",
+                        ));
+                    }
+                    committed = trees::read(root, oid)?;
+                    journal.operation.commits.push(history::commit(root, oid)?);
+                    expected_head = actual.clone();
+                    for path in trees::changed(&planned, &committed) {
+                        trees::copy_path(&mut target, &committed, &path);
+                    }
+                    journal.target_tree = Some(trees::write_index(root, &target_index.0, &target)?);
+                    // Keep the pending snapshot until residual hook output is captured.
+                    write(storage, &journal)?;
+                    notify(&journal.operation);
+                }
+                let after_tree = trees::worktree(root)?;
+                let after = trees::read(root, &after_tree)?;
+                let index_after = trees::read(root, &trees::index_tree(root, &temporary.0)?)?;
+                let mut residual = committed.clone();
+                let mut ambiguity = None;
+                for path in trees::changed(&planned, &committed)
+                    .union(&trees::changed(&committed, &index_after))
+                {
+                    if before.get(path) != target_before.get(path) {
+                        ambiguity = Some(path.clone());
+                    }
+                }
+                for path in trees::changed(&committed, &index_after) {
+                    if before.get(&path) != target_before.get(&path) {
+                        ambiguity = Some(path);
+                        continue;
+                    }
+                    trees::copy_path(&mut residual, &index_after, &path);
+                }
+                for path in trees::changed(&before, &after) {
+                    if before.get(&path) != target_before.get(&path) {
+                        ambiguity = Some(path);
+                        continue;
+                    }
+                    if after.get(&path) != committed.get(&path) {
+                        trees::copy_path(&mut residual, &after, &path);
+                    }
+                }
+                for path in trees::changed(&committed, &residual) {
+                    trees::copy_path(&mut target, &residual, &path);
+                }
+                journal.target_tree = Some(trees::write_index(root, &target_index.0, &target)?);
+                journal.pending_head = None;
+                journal.pending_tree = None;
+                journal.pending_index = None;
+                observed_worktree = after_tree;
+                write(storage, &journal)?;
+                if let Some(path) = ambiguity {
+                    return Err(AppError::new(
+                        "hook_overlap",
+                        format!(
+                            "Git hook changes overlap pre-existing personal changes in {path}. Completed commits and remaining changes are preserved; inspect this file before continuing."
+                        ),
+                    ));
+                }
+                commit_result?;
+                if !created {
+                    return Err(AppError::new(
+                        "git",
+                        "Git did not create the expected commit.",
+                    ));
+                }
+                if residual == committed {
+                    break;
+                }
+                if extra {
+                    return Err(AppError::new(
+                        "hook_unstable",
+                        "The Git hook still changes files after the additional commit. Completed commits and remaining staged changes are preserved.",
+                    ));
+                }
+                planned = residual;
             }
-            commit_result?;
-            if actual == expected_head {
-                return Err(AppError::new(
-                    "git",
-                    "Git did not create the expected commit.",
-                ));
-            }
-            expected_head = actual;
+            journal.next = index + 1;
+            write(storage, &journal)?;
         }
         Ok::<_, AppError>(())
     })();
+    // Publish only when the index and branch still belong to this operation.
+    // The target contains actual hook output plus all uncommitted planned batches.
+    if git::head(root) == expected_head
+        && fs::read(git::git_path(root, "index")?)? == original_index
+        && git::text(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])? == frozen.branch
+    {
+        if let Err(error) = trees::write_index(root, &target_index.0, &target)
+            .and_then(|_| lock.publish(root, &target_index.0))
+        {
+            result = Err(error);
+        }
+    } else {
+        result = Err(AppError::new(
+            "git_changed",
+            "The branch or index changed externally. Completed commits are preserved; inspect the index before continuing.",
+        ));
+    }
     journal.operation.status = match &result {
         Ok(()) => "completed",
         Err(e) if e.code == "cancelled" => "cancelled",
@@ -398,75 +533,13 @@ pub(super) fn execute(
     }
     .into();
     journal.operation.message = if result.is_ok() {
-        "Commits created".into()
+        "Commits created"
     } else {
-        "Commit sequence stopped".into()
-    };
+        "Commit sequence stopped"
+    }
+    .into();
     journal.operation.error = result.err().map(|e| e.message);
     write(storage, &journal)?;
     notify(&journal.operation);
     Ok(journal.operation)
-}
-
-/// Index-writing hooks may run even during plumbing commands. Verify the exact
-/// planned paths and blobs before allowing the user-facing commit command.
-fn verify_temporary_index(
-    root: &Path,
-    index: &Path,
-    paths: &BTreeSet<&String>,
-    frozen: &Frozen,
-    cancel: &AtomicBool,
-) -> AppResult<()> {
-    let changed = git::run(
-        root,
-        &[
-            "diff",
-            "--cached",
-            "--name-only",
-            "--no-renames",
-            "--no-ext-diff",
-            "--no-textconv",
-            "-z",
-        ],
-        Some(index),
-        &[],
-        cancel,
-    )?;
-    let invalid = || {
-        AppError::new(
-            "hook_changed_index",
-            "A Git hook changed the temporary index outside the planned staged contents. No further commit was created; inspect the hook before retrying.",
-        )
-    };
-    for path in changed.split(|b| *b == 0).filter(|b| !b.is_empty()) {
-        let path = std::str::from_utf8(path).map_err(|_| invalid())?;
-        if !paths.iter().any(|p| p.as_str() == path) {
-            return Err(invalid());
-        }
-    }
-    let raw = git::run(
-        root,
-        &["ls-files", "--stage", "-z"],
-        Some(index),
-        &[],
-        cancel,
-    )?;
-    let mut entries = BTreeMap::new();
-    for entry in raw.split(|b| *b == 0).filter(|b| !b.is_empty()) {
-        let (metadata, path) = std::str::from_utf8(entry)
-            .map_err(|_| invalid())?
-            .split_once('\t')
-            .ok_or_else(invalid)?;
-        let fields: Vec<_> = metadata.split(' ').collect();
-        if fields.len() != 3 || fields[2] != "0" {
-            return Err(invalid());
-        }
-        entries.insert(path, (fields[0].to_string(), fields[1].to_string()));
-    }
-    for path in paths {
-        if entries.get(path.as_str()) != frozen.entries.get(*path) {
-            return Err(invalid());
-        }
-    }
-    Ok(())
 }

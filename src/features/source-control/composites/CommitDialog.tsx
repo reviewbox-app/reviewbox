@@ -77,6 +77,7 @@ export function CommitDialog({
       commits: [],
       error: null,
     })
+    let planPrepared = false
     try {
       const result = await commands.commit(
         {
@@ -86,7 +87,18 @@ export function CommitDialog({
           message,
         },
         (value) => {
-          if (running.current === id) setOperation(value)
+          if (running.current === id) {
+            setOperation(value)
+            if (
+              value.message.startsWith("Creating commit") ||
+              value.commits.length
+            ) {
+              planPrepared = true
+              setProgress((progress) =>
+                progress ? finishProgress(progress, "completed") : progress
+              )
+            }
+          }
         },
         (event) => {
           if (running.current === id && event.kind !== "delta")
@@ -100,7 +112,7 @@ export function CommitDialog({
         value
           ? finishProgress(
               value,
-              result.status === "completed"
+              planPrepared || result.status === "completed"
                 ? "completed"
                 : result.status === "cancelled"
                   ? "cancelled"
@@ -138,7 +150,11 @@ export function CommitDialog({
             }
           : value
       )
-      setProgress((value) => (value ? finishProgress(value, status) : value))
+      setProgress((value) =>
+        value
+          ? finishProgress(value, planPrepared ? "completed" : status)
+          : value
+      )
       await onFinished().catch(() => {})
     } finally {
       running.current = null
@@ -229,7 +245,7 @@ export function CommitDialog({
           {progress && (
             <PreparationProgress
               progress={progress}
-              complete={!active}
+              complete={Boolean(progress.endedAt)}
               checking={false}
               status="Rev is preparing commits…"
               showDraft={false}

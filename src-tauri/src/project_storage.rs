@@ -81,6 +81,37 @@ fn bytes(value: &impl Serialize) -> AppResult<Vec<u8>> {
     b.push(b'\n');
     Ok(b)
 }
+// Shared JSON may be reformatted by Git hooks. Accept only a representation
+// that reconstructs the original writer hash, never arbitrary semantic changes.
+fn verified_json_asset<T: Serialize + serde::de::DeserializeOwned>(
+    content: &[u8],
+    expected: &str,
+    message: &str,
+) -> AppResult<T> {
+    let raw_matches = fingerprint(content) == expected;
+    let value: T = serde_json::from_slice(content).map_err(|error| {
+        if raw_matches {
+            AppError::from(error)
+        } else {
+            AppError::new("corrupt_asset", message)
+        }
+    })?;
+    if !raw_matches {
+        let original: Value = serde_json::from_slice(content)?;
+        let reconstructed = serde_json::to_value(&value)
+            .ok()
+            .filter(|candidate| candidate == &original)
+            .and_then(|_| bytes(&value).ok());
+        if reconstructed
+            .as_ref()
+            .is_none_or(|bytes| fingerprint(bytes) != expected)
+        {
+            return Err(AppError::new("corrupt_asset", message));
+        }
+    }
+    Ok(value)
+}
+
 fn identifier(id: &str) -> AppResult<()> {
     if id.is_empty()
         || id.len() > 160

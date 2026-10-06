@@ -179,13 +179,11 @@ pub(crate) fn hydrate(root: &Path, value: &mut Value) -> AppResult<()> {
                 ));
             }
             let content = fs::read(path)?;
-            if fingerprint(&content) != location.hash {
-                return Err(AppError::new(
-                    "corrupt_asset",
-                    "Step document hash does not match.",
-                ));
-            }
-            let pack: Pack = serde_json::from_slice(&content)?;
+            let pack: Pack = verified_json_asset(
+                &content,
+                &location.hash,
+                "Step document hash does not match.",
+            )?;
             if pack.format != "reviewbox" || pack.version != VERSION || pack.review_id != review {
                 return Err(AppError::new(
                     "invalid_asset",
@@ -218,4 +216,63 @@ pub(crate) fn schema() -> Value {
 
 pub(crate) fn reference_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["path","hash"],"properties":{"path":{"type":"string"},"hash":{"type":"string","pattern":"^[a-f0-9]{64}$"}}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "read-only diagnostic for a user-supplied step asset"]
+    fn verify_external_reformatted_asset() {
+        let path = std::env::var("REVIEWBOX_STEP_ASSET").expect("REVIEWBOX_STEP_ASSET");
+        let path = Path::new(&path);
+        let content = fs::read(path).unwrap();
+        let pack: Pack = serde_json::from_slice(&content).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&content).unwrap(),
+            serde_json::to_value(&pack).unwrap()
+        );
+        assert_eq!(
+            fingerprint(&bytes(&pack).unwrap()),
+            path.file_stem().unwrap().to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn reformatted_step_assets_keep_their_hash_but_content_edits_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let empty = json!({"body":"A document", "references":[], "terms":[], "readingSeconds":0});
+        let original = json!({"id":"review", "topics":[{"steps":[{"id":"step", "documents":{"essential":empty,"explained":empty,"technical":empty}}]}]});
+        let mut metadata = original.clone();
+        let files = extract(&mut metadata).unwrap();
+        for (path, data) in &files {
+            let path = directory.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let value: Value = serde_json::from_slice(data).unwrap();
+            // Compact JSON also changes key order from struct serialization.
+            fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+        }
+        let mut loaded = metadata.clone();
+        hydrate(directory.path(), &mut loaded).unwrap();
+        let expected: LevelDocuments =
+            serde_json::from_value(original["topics"][0]["steps"][0]["documents"].clone()).unwrap();
+        assert_eq!(
+            loaded["topics"][0]["steps"][0]["documents"],
+            serde_json::to_value(expected).unwrap()
+        );
+        let path = directory.path().join(files.keys().next().unwrap());
+        let mut changed: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        changed["documents"]["step"]["essential"]["body"] = json!("Changed content");
+        fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert_eq!(
+            hydrate(directory.path(), &mut metadata).unwrap_err().code,
+            "corrupt_asset"
+        );
+        fs::write(&path, "invalid JSON").unwrap();
+        assert_eq!(
+            hydrate(directory.path(), &mut metadata).unwrap_err().code,
+            "corrupt_asset"
+        );
+    }
 }
