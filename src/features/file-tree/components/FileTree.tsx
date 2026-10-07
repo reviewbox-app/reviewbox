@@ -12,44 +12,7 @@ import { FileIcon, FolderIcon } from "@/features/file-icons/components/FileIcon"
 import { folderGitStatuses, type GitFileStatus } from "@/lib/git/file-status"
 import { GitStatusBadge, gitStatusColor } from "./GitStatusBadge"
 
-interface Folder {
-  name: string
-  path: string
-  folders: Map<string, Folder>
-  files: string[]
-}
-
-function buildTree(paths: string[]) {
-  const root: Folder = { name: "", path: "", folders: new Map(), files: [] }
-  for (const path of paths) {
-    const parts = path.split("/")
-    let node = root
-    for (const part of parts.slice(0, -1)) {
-      const next = node.path ? `${node.path}/${part}` : part
-      if (!node.folders.has(part))
-        node.folders.set(part, {
-          name: part,
-          path: next,
-          folders: new Map(),
-          files: [],
-        })
-      node = node.folders.get(part)!
-    }
-    if (!path.endsWith("/")) node.files.push(path)
-  }
-  // Collapse single-child chains ("src-tauri/src") like the prototype.
-  const compact = (folder: Folder): Folder => {
-    folder.folders.forEach((child, key) =>
-      folder.folders.set(key, compact(child))
-    )
-    if (folder.name && folder.folders.size === 1 && folder.files.length === 0) {
-      const only = [...folder.folders.values()][0]
-      return { ...only, name: `${folder.name}/${only.name}` }
-    }
-    return folder
-  }
-  return compact(root)
-}
+import { buildTree, type Folder } from "../helpers/tree.helpers"
 
 export type FileMark = "validated" | "unavailable"
 

@@ -30,6 +30,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { FileTreeExpansion } from "@/features/file-tree/components/FileTreeExpansion"
+import { folderPaths } from "@/features/file-tree/helpers/tree.helpers"
 import { FileTree } from "@/features/file-tree/components/FileTree"
 import { ReviewCodePane } from "@/features/review/composites/ReviewCodePane"
 import { reviewReaderLayout } from "@/features/review/reader.config"
@@ -99,6 +101,10 @@ export function LocalChanges({
   })
   const [preferredLayer, setPreferredLayer] = useState("unstaged")
   const [filter, setFilter] = useState("")
+  const [searchExpansion, setSearchExpansion] = useState({
+    key: "",
+    paths: [] as string[],
+  })
   const [tree, setTree] = useState(true)
   const [committing, setCommitting] = useState(false)
   const [loaded, setLoaded] = useState<LocalFileDiff | null>(null)
@@ -171,6 +177,28 @@ export function LocalChanges({
         paths.push(file.path)
     return [...new Set(paths)]
   }, [inventory.entries, state?.files, filter])
+  const searchKey = `${state?.repositoryId}/${filter}`
+  const expandedPaths = filter.trim()
+    ? searchExpansion.key === searchKey
+      ? searchExpansion.paths
+      : folderPaths(paths)
+    : navigation.value.expandedPaths
+  const updateExpanded = (update: (paths: string[]) => string[]) => {
+    if (filter.trim()) {
+      setSearchExpansion({ key: searchKey, paths: update(expandedPaths) })
+    } else {
+      navigation.update((tree) => ({
+        ...tree,
+        expandedPaths: update(tree.expandedPaths),
+      }))
+    }
+  }
+  const toggleFolder = (path: string) =>
+    updateExpanded((paths) =>
+      paths.includes(path)
+        ? paths.filter((value) => value !== path)
+        : [...paths, path]
+    )
   const attachNavigation = navigation.ref
   const attachTree = useCallback(
     (node: HTMLElement | null) => {
@@ -250,36 +278,49 @@ export function LocalChanges({
       >
         <FileTreeSearch
           value={filter}
-          onChange={setFilter}
+          onChange={(value) => {
+            setFilter(value)
+            setSearchExpansion({ key: "", paths: [] })
+          }}
           label="Filter local files"
           placeholder={
             allFiles ? "Search files…" : `Filter ${state.files.length} files`
           }
         />
-        <Select
-          disabled={noChanges}
-          value={allFiles ? "all" : "changes"}
-          onValueChange={(mode) =>
-            navigation.update((tree) => ({
-              ...tree,
-              mode: mode === "changes" ? "changes" : "all",
-            }))
-          }
-        >
-          <SelectTrigger
-            aria-label="Review file mode"
-            size="sm"
-            className="w-full bg-transparent text-xs text-muted-foreground"
+        <div className="flex items-center gap-2">
+          <Select
+            disabled={noChanges}
+            value={allFiles ? "all" : "changes"}
+            onValueChange={(mode) =>
+              navigation.update((tree) => ({
+                ...tree,
+                mode: mode === "changes" ? "changes" : "all",
+              }))
+            }
           >
-            <SelectValue>
-              {allFiles ? "All files" : "Local changes"}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All files</SelectItem>
-            <SelectItem value="changes">Local changes</SelectItem>
-          </SelectContent>
-        </Select>
+            <SelectTrigger
+              aria-label="Review file mode"
+              size="sm"
+              className="w-full bg-transparent text-xs text-muted-foreground"
+            >
+              <SelectValue>
+                {allFiles ? "All files" : "Local changes"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All files</SelectItem>
+              <SelectItem value="changes">Local changes</SelectItem>
+            </SelectContent>
+          </Select>
+          {allFiles && (
+            <FileTreeExpansion
+              paths={paths}
+              expandedPaths={expandedPaths}
+              onChange={updateExpanded}
+              disabled={!navigation.ready}
+            />
+          )}
+        </div>
         <nav
           aria-label="Changed files"
           ref={attachTree}
@@ -302,9 +343,8 @@ export function LocalChanges({
                 marks={{}}
                 statuses={localFileStatuses(state.files)}
                 ignoredPaths={ignoredPaths}
-                alwaysExpanded={!!filter.trim()}
-                toggledFolders={new Set(navigation.value.expandedPaths)}
-                onToggleFolder={navigation.toggle}
+                toggledFolders={new Set(expandedPaths)}
+                onToggleFolder={toggleFolder}
                 onSelect={setChosen}
                 renderRow={(row, target) => (
                   <FileMenu
@@ -335,51 +375,59 @@ export function LocalChanges({
                         {group === "unstaged" ? "Unstaged" : "Staged"} ·{" "}
                         {visible.length}
                       </h2>
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              className="size-4 rounded-sm p-0"
-                              aria-label={
-                                group === "unstaged"
-                                  ? "Stage all changes"
-                                  : "Unstage all changes"
-                              }
-                              disabled={
-                                busy ||
-                                !files.length ||
-                                files.some((file) => file.conflicted)
-                              }
-                              onClick={() =>
-                                void mutate(() =>
-                                  commands.stageFiles(
-                                    state.repositoryId,
-                                    files.map(({ path, version }) => ({
-                                      path,
-                                      version,
-                                    })),
-                                    group === "unstaged"
+                      <div className="flex items-center gap-2">
+                        <FileTreeExpansion
+                          paths={visible.map((file) => file.path)}
+                          expandedPaths={expandedPaths}
+                          onChange={updateExpanded}
+                          disabled={!navigation.ready}
+                        />
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                className="size-4 rounded-sm p-0"
+                                aria-label={
+                                  group === "unstaged"
+                                    ? "Stage all changes"
+                                    : "Unstage all changes"
+                                }
+                                disabled={
+                                  busy ||
+                                  !files.length ||
+                                  files.some((file) => file.conflicted)
+                                }
+                                onClick={() =>
+                                  void mutate(() =>
+                                    commands.stageFiles(
+                                      state.repositoryId,
+                                      files.map(({ path, version }) => ({
+                                        path,
+                                        version,
+                                      })),
+                                      group === "unstaged"
+                                    )
                                   )
-                                )
-                              }
-                            />
-                          }
-                        >
-                          <HugeiconsIcon
-                            icon={
-                              group === "unstaged" ? Add01Icon : MinusSignIcon
+                                }
+                              />
                             }
-                            className="size-3"
-                          />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {group === "unstaged"
-                            ? "Stage all changes"
-                            : "Unstage all changes"}
-                        </TooltipContent>
-                      </Tooltip>
+                          >
+                            <HugeiconsIcon
+                              icon={
+                                group === "unstaged" ? Add01Icon : MinusSignIcon
+                              }
+                              className="size-3"
+                            />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {group === "unstaged"
+                              ? "Stage all changes"
+                              : "Unstage all changes"}
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
                     </div>
                     <FileTree
                       paths={visible.map((file) => file.path)}
@@ -426,9 +474,8 @@ export function LocalChanges({
                           : undefined
                       }
                       dimmedLabel="Staged."
-                      alwaysExpanded={!!filter.trim()}
-                      toggledFolders={new Set(navigation.value.expandedPaths)}
-                      onToggleFolder={navigation.toggle}
+                      toggledFolders={new Set(expandedPaths)}
+                      onToggleFolder={toggleFolder}
                       onSelect={(value, event, visiblePaths) => {
                         const sameLayer = selection.layer === group
                         setSelection({
