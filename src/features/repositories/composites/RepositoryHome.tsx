@@ -31,7 +31,7 @@ export function RepositoryHome({
   const [typing, setTyping] = useState(false)
   return (
     <main className="flex min-h-0 flex-1 flex-col items-center overflow-auto px-4 pt-16 pb-10">
-      <div className="mb-6 flex size-16 items-center justify-center rounded-[20px] border bg-card">
+      <div className="mb-6 flex size-16 shrink-0 items-center justify-center rounded-[20px] border bg-card">
         <ReviewBoxMark className="h-7" />
       </div>
       <h1 className="text-2xl font-semibold tracking-tight">ReviewBox</h1>
