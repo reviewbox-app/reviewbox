@@ -179,7 +179,7 @@ impl Storage {
             }
             if kind == "review" {
                 self.fill_reading(&mut value)?;
-                self.enrich_publication(&mut value)?;
+                self.enrich_publication(&mut value, true)?;
             }
             if kind == "review" {
                 self.fill_step_documents(&mut value)?;
@@ -222,7 +222,7 @@ impl Storage {
                 .map(|(_, mut value)| {
                     if kind == "review" {
                         self.fill_reading(&mut value)?;
-                        self.enrich_publication(&mut value)?;
+                        self.enrich_publication(&mut value, false)?;
                     }
                     if (kind == "review") && value["publication"]["status"] != "archived" {
                         self.fill_step_documents(&mut value)?;

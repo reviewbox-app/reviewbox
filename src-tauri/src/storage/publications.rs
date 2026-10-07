@@ -19,7 +19,7 @@ fn reference_review(reference: &Value) -> Value {
     value
 }
 impl Storage {
-    pub(crate) fn enrich_publication(&self, review: &mut Value) -> AppResult<()> {
+    pub(crate) fn enrich_publication(&self, review: &mut Value, discover: bool) -> AppResult<()> {
         if !self.enrich_reviews {
             return Ok(());
         }
@@ -57,6 +57,11 @@ impl Storage {
             cached.filter(|v| v["head"] == head && v["scope"] == scope && v["history"] == history)
         {
             cached["commits"].clone()
+        } else if !discover {
+            // Repository opening and history refresh must not walk every Git
+            // tree for every completed review while holding the storage lock.
+            // Full discovery remains available when opening a specific review.
+            json!([])
         } else {
             let snapshot: Snapshot = self.get(
                 "snapshot",

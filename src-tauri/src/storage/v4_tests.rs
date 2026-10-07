@@ -566,6 +566,32 @@ fn committing_a_publication_updates_local_get_and_list_associations_without_bund
     );
     let carrier = git(root, &["rev-parse", "HEAD"]);
     let index = fs::read(root.join(".git/index")).unwrap();
+    // Opening a repository lists reviews before choosing one. A cache miss
+    // must not discover associations across the repository's entire history.
+    let key = format!("{}:{}", repo.id, first.review.id);
+    storage
+        .connection()
+        .unwrap()
+        .execute(
+            "DELETE FROM documents WHERE kind='review_commit_association' AND id=?1",
+            params![key],
+        )
+        .unwrap();
+    let listed: Vec<Review> = storage.list("review").unwrap();
+    assert!(
+        listed
+            .iter()
+            .find(|r| r.id == first.review.id)
+            .unwrap()
+            .publication
+            .matching_commit_ids
+            .is_empty()
+    );
+    assert!(
+        storage
+            .local_get::<Value>("review_commit_association", &key)
+            .is_err()
+    );
     let loaded: Review = storage.get("review", &first.review.id).unwrap();
     assert_eq!(
         loaded.publication.matching_commit_ids,
@@ -599,6 +625,20 @@ fn committing_a_publication_updates_local_get_and_list_associations_without_bund
         root,
         &["commit", "--allow-empty", "-m", "later empty commit"],
     );
+    let listed: Vec<Review> = storage.list("review").unwrap();
+    assert!(
+        listed
+            .iter()
+            .find(|r| r.id == first.review.id)
+            .unwrap()
+            .publication
+            .matching_commit_ids
+            .is_empty()
+    );
+    let cached: Value = storage
+        .local_get("review_commit_association", &key)
+        .unwrap();
+    assert_eq!(cached["head"], carrier);
     let loaded: Review = storage.get("review", &first.review.id).unwrap();
     assert_eq!(
         loaded.publication.matching_commit_ids,
