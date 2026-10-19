@@ -559,7 +559,9 @@ export async function applyWorkspaceEdit() {
     ...s,
     buffers: s.buffers.map((b) => {
       const edit = preview.files.find((f) => f.key === b.id)
-      return edit ? { ...b, text: edit.after, version: b.version + 1 } : b
+      return edit
+        ? { ...b, text: edit.after, version: b.version + 1, temporary: false }
+        : b
     }),
   }))
   for (const binding of bindings.values()) {

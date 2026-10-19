@@ -28,13 +28,15 @@ export const liveCommands = {
     repositoryId: string,
     path: string,
     languageId: string,
-    serverId?: string
+    serverId?: string,
+    inspectionId?: string
   ) =>
     call<LiveLanguageSession>("live_language_open", {
       repositoryId,
       path,
       languageId,
       serverId: serverId ?? null,
+      inspectionId: inspectionId ?? null,
     }),
   sync: (sessionId: string, document: LiveLanguageDocument, saved: boolean) =>
     call<void>("live_language_sync", { sessionId, document, saved }),

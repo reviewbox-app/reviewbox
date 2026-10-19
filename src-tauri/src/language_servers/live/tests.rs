@@ -26,10 +26,19 @@ while True:
     elif method=='textDocument/hover':threading.Thread(target=late,args=(id,),daemon=True).start()
 "#;
 fn entry(root: &Path, executable: &str, args: Vec<String>) -> Arc<Entry> {
+    entry_with_kind(root, executable, args, false, "test")
+}
+fn entry_with_kind(
+    root: &Path,
+    executable: &str,
+    args: Vec<String>,
+    inspection: bool,
+    server_id: &str,
+) -> Arc<Entry> {
     let canonical = root.canonicalize().unwrap();
     let root = canonical.as_path();
     let server = LanguageServerConfig {
-        id: "test".into(),
+        id: server_id.into(),
         name: "Live test".into(),
         extensions: vec![],
         executable: executable.into(),
@@ -37,6 +46,7 @@ fn entry(root: &Path, executable: &str, args: Vec<String>) -> Arc<Entry> {
     };
     let session = Session::spawn(server, Workspace::live(root.to_path_buf()), vec![]).unwrap();
     Arc::new(Entry {
+        inspection,
         id: "test-session".into(),
         root: root.to_path_buf(),
         session,
@@ -402,6 +412,7 @@ fn configuration_changes_restart_only_the_affected_project() {
             .unwrap();
             session.initialize().await.unwrap();
             let e = Arc::new(Entry {
+                inspection: false,
                 id: name.into(),
                 root: checkout.clone(),
                 session,
@@ -493,6 +504,7 @@ fn a_new_nested_root_reconfigures_the_second_document_of_a_shared_session() {
         .unwrap();
         session.initialize().await.unwrap();
         let e = Arc::new(Entry {
+            inspection: false,
             id: "shared".into(),
             root: checkout.clone(),
             session,
@@ -675,5 +687,63 @@ fn real_servers_complete_unsaved_documents() {
             assert_eq!(fs::read(temp.path().join(name)).unwrap(), disk);
             println!("{language}: unsaved completion and cross-file definition verified");
         }
+    });
+}
+
+#[test]
+fn inspection_sessions_never_join_editor_mirroring() {
+    tauri::async_runtime::block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("main.ts"), "disk").unwrap();
+        let editor = entry_with_kind(
+            temp.path(),
+            "python3",
+            vec!["-u".into(), "-c".into(), PEER.into()],
+            false,
+            "typescript",
+        );
+        let review = entry_with_kind(
+            temp.path(),
+            "python3",
+            vec!["-u".into(), "-c".into(), PEER.into()],
+            true,
+            "typescript",
+        );
+        editor.session.initialize().await.unwrap();
+        review.session.initialize().await.unwrap();
+        let manager = LiveLanguages::default();
+        manager
+            .0
+            .lock()
+            .unwrap()
+            .insert("editor".into(), editor.clone());
+        manager
+            .0
+            .lock()
+            .unwrap()
+            .insert("review".into(), review.clone());
+        assert_eq!(manager.peers(&editor.root, "other").len(), 1);
+        synchronize(&editor, document("unsaved editor", 1), false)
+            .await
+            .unwrap();
+        synchronize(&review, document("review text", 1), false)
+            .await
+            .unwrap();
+        manager.mirror(&review, &document("review text", 1)).await;
+        assert_eq!(
+            editor.documents.lock().await["main.ts"].text,
+            "unsaved editor"
+        );
+        assert_eq!(review.documents.lock().await["main.ts"].text, "review text");
+        assert_eq!(
+            fs::read_to_string(temp.path().join("main.ts")).unwrap(),
+            "disk"
+        );
+        fs::remove_file(temp.path().join("main.ts")).unwrap();
+        let source = inspection_source(&review, uri(&review, "main.ts").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(source.text, "review text");
+        assert!(source.read_only);
     });
 }

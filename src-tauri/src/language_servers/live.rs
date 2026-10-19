@@ -10,6 +10,7 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
 struct Entry {
+    inspection: bool,
     id: String,
     root: std::path::PathBuf,
     session: Arc<Session>,
@@ -40,7 +41,8 @@ impl LiveLanguages {
             .unwrap_or_else(|e| e.into_inner())
             .values()
             .filter(|e| {
-                e.root == root
+                !e.inspection
+                    && e.root == root
                     && e.id != except
                     && !e.session.is_stopped()
                     && matches!(e.session.server.id.as_str(), "typescript" | "vue")
@@ -49,7 +51,7 @@ impl LiveLanguages {
             .collect()
     }
     async fn mirror(&self, entry: &Entry, document: &LiveLanguageDocument) {
-        if !matches!(entry.session.server.id.as_str(), "typescript" | "vue") {
+        if entry.inspection || !matches!(entry.session.server.id.as_str(), "typescript" | "vue") {
             return;
         }
         let Ok(uri) = uri(entry, &document.path) else {
@@ -206,6 +208,8 @@ impl Session {
 }
 
 #[tauri::command]
+// Tauri injects three runtime handles; keep the existing named IPC arguments stable.
+#[allow(clippy::too_many_arguments)]
 pub async fn live_language_open(
     app: tauri::AppHandle,
     storage: State<'_, Storage>,
@@ -214,7 +218,17 @@ pub async fn live_language_open(
     path: String,
     language_id: Option<String>,
     server_id: Option<String>,
+    inspection_id: Option<String>,
 ) -> AppResult<LiveLanguageSession> {
+    if inspection_id
+        .as_ref()
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+    {
+        return Err(AppError::new(
+            "invalid_request",
+            "Invalid inspection identity.",
+        ));
+    }
     let installer = app
         .state::<super::install::LanguageServerInstaller>()
         .inner()
@@ -257,10 +271,11 @@ pub async fn live_language_open(
     }
     let key = fingerprint(
         format!(
-            "{repository_id}/{}/{}/{}",
+            "{repository_id}/{}/{}/{}/{}",
             server.id,
             project.root.display(),
-            project.context.signature
+            project.context.signature,
+            inspection_id.as_deref().unwrap_or("editor")
         )
         .as_bytes(),
     );
@@ -354,7 +369,9 @@ pub async fn live_language_open(
             session.stop();
             return Err(error);
         }
-        manager.hydrate(&session, &root, &id).await;
+        if inspection_id.is_none() {
+            manager.hydrate(&session, &root, &id).await;
+        }
         manager
             .0
             .lock()
@@ -363,6 +380,7 @@ pub async fn live_language_open(
         manager.0.lock().unwrap_or_else(|e| e.into_inner()).insert(
             key.clone(),
             Arc::new(Entry {
+                inspection: inspection_id.is_some(),
                 id: id.clone(),
                 root: root.clone(),
                 session: session.clone(),
@@ -631,7 +649,11 @@ pub async fn live_language_close(
     let unused = documents.is_empty();
     drop(documents);
     let uri = uri(&entry, &path)?;
-    for peer in manager.peers(&entry.root, &entry.id) {
+    for peer in if entry.inspection {
+        Vec::new()
+    } else {
+        manager.peers(&entry.root, &entry.id)
+    } {
         let _ = peer.session.close_mirrored_document(&uri).await;
     }
     if unused {
@@ -670,11 +692,30 @@ pub async fn live_language_source(
     uri: String,
 ) -> AppResult<EditorFile> {
     let entry = manager.entry(&session_id)?;
+    inspection_source(&entry, uri).await
+}
+
+async fn inspection_source(entry: &Entry, uri: String) -> AppResult<EditorFile> {
     let path = url::Url::parse(&uri)
         .map_err(|e| AppError::new("invalid_uri", e.to_string()))?
         .to_file_path()
-        .map_err(|_| AppError::new("invalid_uri", "Only file definitions can be opened."))?
-        .canonicalize()?;
+        .map_err(|_| AppError::new("invalid_uri", "Only file definitions can be opened."))?;
+    // A definition in the inspected side must retain its exact text, including deleted files.
+    if entry.inspection {
+        for document in entry.documents.lock().await.values() {
+            if crate::editor::path(&entry.root, &document.path)? == path {
+                return Ok(EditorFile {
+                    path: document.path.clone(),
+                    uri,
+                    text: document.text.clone(),
+                    revision: fingerprint(document.text.as_bytes()),
+                    read_only: true,
+                    reason: Some("Review source inspection.".into()),
+                });
+            }
+        }
+    }
+    let path = path.canonicalize()?;
     if let Ok(relative) = path.strip_prefix(&entry.root) {
         crate::editor::read(&entry.root, &relative.to_string_lossy().replace('\\', "/"))
     } else {

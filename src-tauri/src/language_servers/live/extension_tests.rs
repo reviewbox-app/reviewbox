@@ -19,6 +19,7 @@ fn installed_entry(storage: &Storage, root: &Path, path: &str, id: &str) -> Arc<
     *session.live_settings.lock().unwrap() = project.settings;
     *session.live_initialization_options.lock().unwrap() = project.initialization_options;
     Arc::new(Entry {
+        inspection: false,
         id: format!("test-{id}"),
         session,
         root: root.clone(),
