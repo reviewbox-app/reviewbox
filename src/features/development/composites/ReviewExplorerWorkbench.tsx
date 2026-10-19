@@ -1,4 +1,5 @@
 "use client"
+import { ExplorerSearchProvider } from "@/features/file-tree/components/ExplorerSearchProvider"
 import { useEffect, useState } from "react"
 import { ReviewFiles } from "@/features/review/components/ReviewFiles"
 import { ReviewCodePane } from "@/features/review/composites/ReviewCodePane"
@@ -79,47 +80,49 @@ export function ReviewExplorerWorkbench() {
   }, [])
   const change = changes.find((c) => c.id === active)!
   return (
-    <main className="flex h-screen gap-2 p-3">
-      {error && <p role="alert">{error}</p>}
-      <aside className="w-72 shrink-0">
-        {ready && (
-          <ReviewFiles
-            workspace={workspace}
-            selectedId={active}
-            visible
-            onError={setError}
-            onSelect={(id) => {
-              setTarget(undefined)
-              setActive(id)
-            }}
-            onMatch={(id, match) => {
-              setActive(id)
-              setTarget({ ...match, token: crypto.randomUUID() })
-            }}
-          />
-        )}
-      </aside>
-      <section
-        className="relative flex min-w-0 flex-1 flex-col"
-        aria-label="Captured source"
-      >
-        {ready && (
-          <ReviewCodePane
-            key={active}
-            modelScope="local"
-            snapshot={workspace.snapshot}
-            change={change}
-            source={{
-              ...contents[active as keyof typeof contents],
-              unavailableReason: null,
-            }}
-            selection={null}
-            position={initialPosition}
-            onPosition={() => {}}
-            searchTarget={target}
-          />
-        )}
-      </section>
-    </main>
+    <ExplorerSearchProvider>
+      <main className="flex h-screen gap-2 p-3">
+        {error && <p role="alert">{error}</p>}
+        <aside className="w-72 shrink-0">
+          {ready && (
+            <ReviewFiles
+              workspace={workspace}
+              selectedId={active}
+              visible
+              onError={setError}
+              onSelect={(id) => {
+                setTarget(undefined)
+                setActive(id)
+              }}
+              onMatch={(id, match) => {
+                setActive(id)
+                setTarget({ ...match, token: crypto.randomUUID() })
+              }}
+            />
+          )}
+        </aside>
+        <section
+          className="relative flex min-w-0 flex-1 flex-col"
+          aria-label="Captured source"
+        >
+          {ready && (
+            <ReviewCodePane
+              key={active}
+              modelScope="local"
+              snapshot={workspace.snapshot}
+              change={change}
+              source={{
+                ...contents[active as keyof typeof contents],
+                unavailableReason: null,
+              }}
+              selection={null}
+              position={initialPosition}
+              onPosition={() => {}}
+              searchTarget={target}
+            />
+          )}
+        </section>
+      </main>
+    </ExplorerSearchProvider>
   )
 }

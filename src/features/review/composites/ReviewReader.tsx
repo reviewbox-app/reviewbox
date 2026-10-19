@@ -1,4 +1,5 @@
 "use client"
+import { ExplorerSearchProvider } from "@/features/file-tree/components/ExplorerSearchProvider"
 import type { SourceSearchTarget } from "@/features/code-editor/contracts/sourceSelection.types"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -499,7 +500,8 @@ export function ReviewReader({
     : "clamp(180px,var(--review-files-width,240px),35%)"
 
   return (
-    <div
+    <ExplorerSearchProvider
+      onReveal={() => setFilesOpen(true)}
       data-resize-workspace
       className="grid min-h-0 min-w-0 flex-1 transition-[grid-template-columns,column-gap] duration-200 ease-out data-[resizing=true]:transition-none motion-reduce:transition-none"
       style={{
@@ -1018,6 +1020,6 @@ export function ReviewReader({
         )}
       </div>
       <RevChat repositoryId={review.repositoryId} reviewId={review.id} />
-    </div>
+    </ExplorerSearchProvider>
   )
 }

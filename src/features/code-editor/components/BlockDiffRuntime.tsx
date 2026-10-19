@@ -1,4 +1,5 @@
 "use client"
+import { useExplorerSearch } from "@/features/file-tree/components/ExplorerSearchProvider"
 import { useSourceInspection } from "@/features/language-servers/hooks/useSourceInspection"
 import {
   useCallback,
@@ -52,6 +53,11 @@ type Runtime = {
 type Match = { side: CodeSide; range: monaco.Range }
 
 export function BlockDiffRuntime(props: BlockDiffProps) {
+  const explorerSearch = useExplorerSearch()?.search
+  const searchExplorer = useRef(explorerSearch)
+  useLayoutEffect(() => {
+    searchExplorer.current = explorerSearch
+  }, [explorerSearch])
   const language = useSourceLanguage(
     props.sourcePath ?? props.afterDocument?.path ?? props.beforeDocument?.path,
     props.after || props.before,
@@ -174,10 +180,10 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
       compare: () => latest.current.onCompare(true),
       changed: () => persist(),
       cursor: (line, column) => latest.current.onCursor({ line, column }),
-      find: (text) => {
-        if (text) setQuery(text)
-        setSearch(true)
-      },
+      searchSelection: explorerSearch
+        ? (text) => searchExplorer.current?.(text)
+        : undefined,
+      find: () => setSearch(true),
       selection: (selection) => latest.current.onCommentSelection?.(selection),
     })
     const state: Runtime = {

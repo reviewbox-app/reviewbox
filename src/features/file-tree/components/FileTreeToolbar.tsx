@@ -1,3 +1,5 @@
+import { useEffect, useLayoutEffect, useRef } from "react"
+import { useExplorerSearch } from "./ExplorerSearchProvider"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   MoreHorizontalIcon,
@@ -42,6 +44,14 @@ export function FileTreeToolbar({
   onNewFolder?: () => void
   disabled?: boolean
 }) {
+  const request = useExplorerSearch()?.request
+  const change = useRef(onChange)
+  useLayoutEffect(() => {
+    change.current = onChange
+  })
+  useEffect(() => {
+    if (request) change.current(request.text)
+  }, [request])
   const folders = folderPaths(paths)
   const expanded = folders.some(
     (path) => !path.includes("/") && expandedPaths.includes(path)
@@ -49,6 +59,7 @@ export function FileTreeToolbar({
   return (
     <>
       <FileTreeSearch
+        focusToken={request?.token}
         value={value}
         onChange={onChange}
         label={mode === "content" ? "Search file contents" : "Filter files"}

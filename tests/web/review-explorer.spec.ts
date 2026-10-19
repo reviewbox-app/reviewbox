@@ -51,13 +51,20 @@ test("captured code shares color highlights and Git change gutters", async ({
   ).toBeVisible()
 })
 
-test("selected review text opens find from its shortcut and context menu", async ({
+test("selected review text opens explorer search and preserves the last mode", async ({
   page,
 }) => {
   await page.goto("/dev/review-explorer/")
   await page
     .getByRole("button", { name: "Hide previous code", exact: true })
     .click()
+  await page
+    .getByRole("textbox", { name: "Filter files", exact: true })
+    .fill("color")
+  await page.getByRole("tab", { name: "Content", exact: true }).click()
+  await page
+    .getByRole("textbox", { name: "Search file contents", exact: true })
+    .fill("")
   const editor = page.locator(".block-diff-main > .monaco-editor")
   await expect(editor).toBeVisible()
   await editor
@@ -70,9 +77,17 @@ test("selected review text opens find from its shortcut and context menu", async
   await expect(editor.locator(".selected-text").first()).toBeVisible()
   await page.keyboard.press("ControlOrMeta+Shift+f")
   await expect(
+    page.getByRole("textbox", { name: "Search file contents", exact: true })
+  ).toHaveValue(/const color/)
+  await expect(
+    page.getByRole("tab", { name: "Content", exact: true })
+  ).toHaveAttribute("aria-selected", "true")
+  await expect(
     page.getByRole("textbox", { name: "Find in file", exact: true })
-  ).toHaveValue(/.+/)
-  await page.keyboard.press("Escape")
+  ).toHaveCount(0)
+  await page
+    .getByRole("textbox", { name: "Search file contents", exact: true })
+    .fill("")
   await editor
     .locator(".view-line")
     .filter({ hasText: "const color" })
@@ -94,6 +109,29 @@ test("selected review text opens find from its shortcut and context menu", async
     .click({ delay: 150 })
 
   await expect(
-    page.getByRole("textbox", { name: "Find in file", exact: true })
-  ).toHaveValue(/.+/)
+    page.getByRole("textbox", { name: "Search file contents", exact: true })
+  ).toHaveValue(/const color/)
+})
+
+test("explorer remembers File and Content across reloads", async ({ page }) => {
+  await page.goto("/dev/review-explorer/")
+  await page
+    .getByRole("textbox", { name: "Filter files", exact: true })
+    .fill("color")
+  await page.getByRole("tab", { name: "Content", exact: true }).click()
+  await page.reload()
+  await page
+    .getByRole("textbox", { name: "Search file contents", exact: true })
+    .fill("color")
+  await expect(
+    page.getByRole("tab", { name: "Content", exact: true })
+  ).toHaveAttribute("aria-selected", "true")
+  await page.getByRole("tab", { name: "File", exact: true }).click()
+  await page.reload()
+  await page
+    .getByRole("textbox", { name: "Filter files", exact: true })
+    .fill("color")
+  await expect(
+    page.getByRole("tab", { name: "File", exact: true })
+  ).toHaveAttribute("aria-selected", "true")
 })

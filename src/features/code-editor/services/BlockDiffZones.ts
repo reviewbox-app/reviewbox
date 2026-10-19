@@ -51,7 +51,8 @@ export class BlockDiffZones {
       compare: () => void
       changed: () => void
       cursor: (line: number, column: number) => void
-      find: (text?: string) => void
+      find: () => void
+      searchSelection?: (text: string) => void
       selection?: (selection: SourceSelection | null) => void
     }
   ) {
@@ -70,7 +71,7 @@ export class BlockDiffZones {
     )
     this.marks = main.createDecorationsCollection()
     this.listeners = [
-      bindSelectionSearch(monaco, main, (text) => this.callbacks.find(text)),
+      bindSelectionSearch(monaco, main, this.callbacks.searchSelection),
       observeSourceSelection(main, "after", (selection) =>
         this.callbacks.selection?.(selection)
       ),
@@ -354,9 +355,7 @@ export class BlockDiffZones {
           )
           this.callbacks.changed()
         }),
-        bindSelectionSearch(monaco, instance, (text) =>
-          this.callbacks.find(text)
-        ),
+        bindSelectionSearch(monaco, instance, this.callbacks.searchSelection),
         instance.onDidFocusEditorText(() => {
           this.activeSide = side
           this.activeCell = cell

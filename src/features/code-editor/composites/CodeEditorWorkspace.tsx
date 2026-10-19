@@ -1,4 +1,6 @@
 "use client"
+import { useExplorerSearchMode } from "@/features/file-tree/hooks/useExplorerSearchMode"
+import { ExplorerSearchProvider } from "@/features/file-tree/components/ExplorerSearchProvider"
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -93,7 +95,7 @@ export function CodeEditorWorkspace({
     toggle: toggleTree,
     update: updateTree,
   } = useFileTreeNavigation(id, "editor", searching)
-  const searchMode = session?.searchMode ?? "file"
+  const [searchMode, setSearchMode] = useExplorerSearchMode()
   const fileIndex = useMemo(
     () => indexEditorFiles(entries ?? [], ignoredPaths ?? new Set()),
     [entries, ignoredPaths]
@@ -179,7 +181,10 @@ export function CodeEditorWorkspace({
     setAction({ kind, path, revision })
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <ExplorerSearchProvider
+      onReveal={() => updateEditor(id, (s) => ({ ...s, tree: true }))}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <LanguageEditPreview />
       {session.watchHealthy === false && (
         <EditorWatchNotice repositoryId={id} />
@@ -212,9 +217,7 @@ export function CodeEditorWorkspace({
             value={session.filter}
             onChange={(filter) => updateEditor(id, (s) => ({ ...s, filter }))}
             mode={searchMode}
-            onModeChange={(searchMode) =>
-              updateEditor(id, (s) => ({ ...s, searchMode }))
-            }
+            onModeChange={setSearchMode}
             paths={treePaths}
             expandedPaths={[...session.toggledFolders]}
             disabled={searching}
@@ -604,6 +607,6 @@ export function CodeEditorWorkspace({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </ExplorerSearchProvider>
   )
 }

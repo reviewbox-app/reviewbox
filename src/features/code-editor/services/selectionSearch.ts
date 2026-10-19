@@ -6,6 +6,7 @@ export function bindSelectionSearch(
   editor: Monaco.editor.IStandaloneCodeEditor,
   search?: (text: string) => void
 ) {
+  if (!search) return { dispose() {} }
   const selectedText = () => {
     const selection = editor.getSelection()
     return (selection && editor.getModel()?.getValueInRange(selection)) || ""
@@ -22,8 +23,7 @@ export function bindSelectionSearch(
     run: () => {
       const text = selectedText()
       if (!text) return
-      if (search) search(text)
-      else void editor.getAction("actions.find")?.run()
+      search(text)
     },
   })
   return {

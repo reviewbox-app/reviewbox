@@ -1,5 +1,6 @@
 "use client"
 
+import { useExplorerSearch } from "@/features/file-tree/components/ExplorerSearchProvider"
 import { bindSelectionSearch } from "../services/selectionSearch"
 import { useSourceInspection } from "@/features/language-servers/hooks/useSourceInspection"
 import Editor from "@monaco-editor/react"
@@ -27,6 +28,11 @@ export function CodeEditorRuntime(props: CodeEditorProps) {
     overlayTop = 0,
     ...editorProps
   } = props
+  const explorerSearch = useExplorerSearch()?.search
+  const searchExplorer = useRef(explorerSearch)
+  useLayoutEffect(() => {
+    searchExplorer.current = explorerSearch
+  }, [explorerSearch])
   const selectionSearch = useRef<{ dispose(): void } | null>(null)
   useEffect(() => () => selectionSearch.current?.dispose(), [])
   const readFeatures = useRef<ReturnType<typeof bindReadOnlyFeatures> | null>(
@@ -87,7 +93,13 @@ export function CodeEditorRuntime(props: CodeEditorProps) {
           }}
           onMount={(editor, monaco) => {
             selectionSearch.current?.dispose()
-            selectionSearch.current = bindSelectionSearch(monaco, editor)
+            selectionSearch.current = bindSelectionSearch(
+              monaco,
+              editor,
+              explorerSearch
+                ? (text) => searchExplorer.current?.(text)
+                : undefined
+            )
             changes.current?.dispose()
             changes.current = bindChangeDecorations(
               editor,

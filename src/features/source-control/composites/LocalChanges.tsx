@@ -1,4 +1,6 @@
 "use client"
+import { useExplorerSearchMode } from "@/features/file-tree/hooks/useExplorerSearchMode"
+import { ExplorerSearchProvider } from "@/features/file-tree/components/ExplorerSearchProvider"
 import type { SourceSearchTarget } from "@/features/code-editor/contracts/sourceSelection.types"
 import { Button } from "@/components/ui/button"
 import {
@@ -119,7 +121,7 @@ export function LocalChanges({
   const [preferredLayer, setPreferredLayer] = useState("unstaged")
   const [searchTarget, setSearchTarget] = useState<SourceSearchTarget>()
   const [filter, setFilter] = useState("")
-  const [searchMode, setSearchMode] = useState<"file" | "content">("file")
+  const [searchMode, setSearchMode] = useExplorerSearchMode()
   const contentSearch = useEditorContentSearch(
     state?.repositoryId ?? "",
     filter.trim(),
@@ -406,7 +408,8 @@ export function LocalChanges({
   const groups = localFileGroups(state.files)
   const staged = state.files.filter((file) => file.stagedStatus).length
   return (
-    <div
+    <ExplorerSearchProvider
+      onReveal={() => setTree(true)}
       data-resize-workspace
       className="group/local flex min-h-0 flex-1 gap-0 px-2 pb-2"
     >
@@ -947,6 +950,6 @@ export function LocalChanges({
           await reload()
         }}
       />
-    </div>
+    </ExplorerSearchProvider>
   )
 }

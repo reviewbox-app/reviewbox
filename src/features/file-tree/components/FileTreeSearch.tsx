@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useEffect, useRef, type ReactNode } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Search01Icon } from "@hugeicons/core-free-icons"
 import {
@@ -13,13 +13,22 @@ export function FileTreeSearch({
   label = "Filter files",
   placeholder = "Search files…",
   children,
+  focusToken,
 }: {
   value: string
   onChange: (value: string) => void
   label?: string
   placeholder?: string
   children?: ReactNode
+  focusToken?: string
 }) {
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (focusToken) {
+      input.current?.focus()
+      input.current?.select()
+    }
+  }, [focusToken])
   return (
     <div className="flex items-center gap-1">
       <InputGroup className="min-w-0 flex-1">
@@ -27,6 +36,7 @@ export function FileTreeSearch({
           <HugeiconsIcon icon={Search01Icon} size={14} />
         </InputGroupAddon>
         <InputGroupInput
+          ref={input}
           aria-label={label}
           placeholder={placeholder}
           value={value}

@@ -1,3 +1,4 @@
+import { useExplorerSearchMode } from "@/features/file-tree/hooks/useExplorerSearchMode"
 import { FileMenu } from "@/features/file-tree/components/FileMenu"
 import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import { useScrollEdgeMask } from "@/hooks/use-scroll-edge-mask"
@@ -33,7 +34,7 @@ export function ReviewFiles({
   onMatch: (fileId: string, match: ReviewSearchMatch) => void
 }) {
   const [filter, setFilter] = useState("")
-  const [mode, setMode] = useState<"file" | "content">("file")
+  const [mode, setMode] = useExplorerSearchMode()
   const content = useReviewContentSearch(
     workspace,
     filter,
