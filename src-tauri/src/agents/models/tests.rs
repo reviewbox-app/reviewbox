@@ -158,7 +158,7 @@ fn discovery_paginates_and_filters_without_starting_a_turn() {
             runtime
                 .block_on(effort(&config, Arc::new(AtomicBool::new(false))))
                 .unwrap()
-                .is_none()
+                .is_some_and(|effort| effort == "low")
         );
         config.model = Some(
             if provider == "codex" {
@@ -172,14 +172,14 @@ fn discovery_paginates_and_filters_without_starting_a_turn() {
             runtime
                 .block_on(effort(&config, Arc::new(AtomicBool::new(false))))
                 .unwrap(),
-            Some("medium")
+            Some("low")
         );
         config.model = Some("unlisted".into());
         assert!(
             runtime
                 .block_on(effort(&config, Arc::new(AtomicBool::new(false))))
                 .unwrap()
-                .is_none()
+                .is_some_and(|effort| effort == "low")
         );
     }
 }

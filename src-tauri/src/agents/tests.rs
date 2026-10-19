@@ -327,7 +327,7 @@ for line in sys.stdin:
         send({'id':2,'result':{'thread':{'id':'review-thread','ephemeral':True}}})
     elif method == 'turn/start':
         assert value['params']['sandboxPolicy'] == {'type':'dangerFullAccess'}
-        assert value['params'].get('effort') == ('medium' if model else None)
+        assert value['params'].get('effort') == 'low'
         text = value['params']['input'][0]['text']
         pointer = next(line for line in text.splitlines() if line.strip().startswith('"reviewManifest":'))
         manifest = json.loads(pathlib.Path(json.loads(pointer.split(':',1)[1].strip().rstrip(','))).read_text())

@@ -193,7 +193,7 @@ export function ProviderSettingsPanel() {
       {settings && (
         <SettingRow
           title="Helper model"
-          description="Codex delegates preparation tasks to this model, using high reasoning effort. Up to three coordinators can each use two helpers."
+          description="Codex delegates preparation tasks to this model. All models use no reasoning when supported, otherwise low reasoning."
           className="flex-wrap gap-3 border-0 py-3 [&>div:first-child]:basis-48"
         >
           <div className="w-60">

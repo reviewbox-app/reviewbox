@@ -268,6 +268,7 @@ pub(super) use session::Session;
 pub(super) struct Prepared {
     pub effort: Option<String>,
     pub helper: Option<String>,
+    pub helper_effort: String,
 }
 pub(super) async fn prepare(
     config: &ProviderConfig,
@@ -328,34 +329,27 @@ pub(super) async fn prepare(
         ));
     }
 
-    let effort = if let Some(helper) = &helper {
-        let catalog = models::discover(config, cancel.clone()).await?;
-        let child = catalog.iter().find(|model| &model.id == helper).ok_or_else(|| AppError::new("helper_model", "The selected helper model is unavailable. Choose another helper in Settings > Rev."))?;
-        if !child
-            .supported_efforts
-            .iter()
-            .any(|effort| effort == "high")
-        {
-            return Err(AppError::new(
-                "helper_model",
-                "The helper model must support high reasoning effort. Choose another helper in Settings > Rev.",
-            ));
-        }
-        config
-            .model
-            .as_ref()
-            .and_then(|selected| catalog.iter().find(|model| &model.id == selected))
-            .filter(|model| {
-                model
-                    .supported_efforts
-                    .iter()
-                    .any(|effort| effort == "medium")
-            })
-            .map(|_| "medium".to_owned())
-    } else {
-        models::effort(config, cancel).await?.map(str::to_owned)
+    let catalog = match models::discover(config, cancel).await {
+        Ok(catalog) => Some(catalog),
+        Err(error) if error.code == "cancelled" => return Err(error),
+        Err(_) => None,
     };
-    Ok(Prepared { effort, helper })
+    if let (Some(helper), Some(catalog)) = (&helper, &catalog)
+        && !catalog.iter().any(|model| &model.id == helper)
+    {
+        return Err(AppError::new(
+            "helper_model",
+            "The selected helper model is unavailable. Choose another helper in Settings > Rev.",
+        ));
+    }
+    let catalog = catalog.as_deref().unwrap_or(&[]);
+    let effort = Some(models::catalog_effort(catalog, config.model.as_deref()).into());
+    let helper_effort = models::catalog_effort(catalog, helper.as_deref()).into();
+    Ok(Prepared {
+        effort,
+        helper,
+        helper_effort,
+    })
 }
 #[cfg(test)]
 pub(super) async fn run(

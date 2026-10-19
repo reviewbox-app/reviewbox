@@ -22,7 +22,9 @@ for line in sys.stdin:
  if method=='initialize':send({'id':rpc,'result':{}})
  if method=='model/list':
   models=[{'model':'gpt-6.1-sol','displayName':'Sol','supportedReasoningEfforts':[{'reasoningEffort':'medium'}]}]
-  if not (base/'missing-helper').exists():models.append({'model':'gpt-6-luna','displayName':'Luna','supportedReasoningEfforts':[{'reasoningEffort':'high'}]})
+  if not (base/'missing-helper').exists():models.append({'model':'gpt-6-luna','displayName':'Luna','supportedReasoningEfforts':[{'reasoningEffort':'low'}]})
+  if (base/'none-supported').exists():
+   for m in models:m['supportedReasoningEfforts'].append({'reasoningEffort':'none'})
   send({'id':rpc,'result':{'data':models,'nextCursor':None}})
  if method=='thread/start':
   model=value['params'].get('model');thread='thread-'+str(rpc);send({'id':rpc,'result':{'thread':{'id':thread,'ephemeral':True}}})
@@ -33,6 +35,9 @@ for line in sys.stdin:
  if method!='turn/start':continue
  turn='turn-'+str(rpc);send({'id':rpc,'result':{'turn':{'id':turn}}})
  params=value['params'];assert 'outputSchema' in params
+ expected='none' if (base/'none-supported').exists() else 'low'
+ assert params.get('effort')==expected,params.get('effort')
+ if 'agents.enabled=true' in args:assert 'agents.default_subagent_reasoning_effort='+json.dumps(expected) in args,args
  def check_schema(schema):
   if isinstance(schema,dict):
    if schema.get('type')=='object' and 'properties' in schema:assert schema.get('additionalProperties') is False and set(schema.get('required',[]))==set(schema['properties'])
@@ -937,4 +942,16 @@ fn analysis_dossier_validates_sources_ranges_and_legacy_decoding() {
         .remove("analysis");
     let legacy: Outline = serde_json::from_value(legacy).unwrap();
     assert!(validate_analysis(&legacy, &workspace.snapshot, &storage).is_err());
+}
+
+#[test]
+fn advertised_none_reaches_coordinators_and_delegated_models() {
+    let (dir, storage, workspace) = fixture();
+    fs::write(dir.path().join("none-supported"), "").unwrap();
+    let manager = PreparationManager::default();
+    start(&manager, &storage, &workspace);
+    let state = wait(&manager, &storage, &workspace.review.id, |s| {
+        s.status != PreparationStatus::Running
+    });
+    assert_eq!(state.status, PreparationStatus::Ready, "{:?}", state.error);
 }

@@ -66,9 +66,12 @@ impl Session {
                     "-c",
                     "agents.max_concurrent_threads_per_session=3",
                     "-c",
-                    "agents.default_subagent_reasoning_effort=\"high\"",
-                    "-c",
                 ])
+                .arg(format!(
+                    "agents.default_subagent_reasoning_effort={}",
+                    serde_json::to_string(&prepared.helper_effort)?
+                ))
+                .arg("-c")
                 .arg(format!(
                     "agents.default_subagent_model={}",
                     serde_json::to_string(helper)?
@@ -208,6 +211,15 @@ impl Session {
                 }
                 continue;
             }
+            if value["method"] == "thread/tokenUsage/updated" {
+                let usage = &params["tokenUsage"]["total"];
+                stream.progress(AgentProgress::Usage {
+                    id: thread.clone(),
+                    input: usage["inputTokens"].as_u64().unwrap_or(0),
+                    cached: usage["cachedInputTokens"].as_u64().unwrap_or(0),
+                    output: usage["outputTokens"].as_u64().unwrap_or(0),
+                })?;
+            }
             if turn_id.is_none() {
                 if pending.len() >= 100 {
                     return Err(AppError::new(
@@ -298,15 +310,6 @@ impl Session {
                         status,
                     })?;
                 }
-            }
-            if value["method"] == "thread/tokenUsage/updated" {
-                let usage = &params["tokenUsage"]["total"];
-                stream.progress(AgentProgress::Usage {
-                    id: thread.clone(),
-                    input: usage["inputTokens"].as_u64().unwrap_or(0),
-                    cached: usage["cachedInputTokens"].as_u64().unwrap_or(0),
-                    output: usage["outputTokens"].as_u64().unwrap_or(0),
-                })?;
             }
             messages.receive(&value, stream)?;
             if value["method"] == "turn/completed" {

@@ -4,7 +4,9 @@ The scheduler supplies an items array. Return {"items":[{"id":"exact supplied id
 Return each requested item exactly once. Keep progress separate from final JSON.
 
 Follow the task-specific division of work. Analysis may delegate independent
-research; document writing uses one writer without subagents. Reuse findings,
+research; document writing uses one writer without subagents.
+Delegated models must use their configured reasoning effort: none when supported,
+otherwise low. Never override it with medium, high or a higher effort. Reuse findings,
 check key facts and references, then assemble without unnecessary rewriting.
 Native ReviewBox persists results. Preserve valid work during corrections.
 Source metadata points to the frozen manifest; no source bytes are injected.
