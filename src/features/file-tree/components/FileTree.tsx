@@ -12,6 +12,8 @@ import { FileIcon, FolderIcon } from "@/features/file-icons/components/FileIcon"
 import { folderGitStatuses, type GitFileStatus } from "@/lib/git/file-status"
 import { GitStatusBadge, gitStatusColor } from "./GitStatusBadge"
 
+import { treeRowOpacity } from "../helpers/treeRowOpacity"
+
 import { buildTree, type Folder } from "../helpers/tree.helpers"
 
 export type FileMark = "validated" | "unavailable"
@@ -24,16 +26,17 @@ const markLabels: Record<FileMark, string> = {
 /** Shared file tree with Git statuses and review decisions. */
 export function FileTree({
   paths,
-  allPaths = paths,
   selected,
   marks,
   statuses = {},
+  staged = false,
   reviewedPaths,
   ignoredPaths,
   dimmedLabel = "Reviewed.",
   alwaysExpanded = false,
   defaultExpanded = false,
   onSelect,
+  onKeepOpen,
   selectedPaths,
   renderRow,
   toggledFolders,
@@ -45,6 +48,7 @@ export function FileTree({
   selected: string
   marks: Record<string, FileMark>
   statuses?: Record<string, GitFileStatus>
+  staged?: boolean
   reviewedPaths?: ReadonlySet<string>
   ignoredPaths?: ReadonlySet<string>
   dimmedLabel?: string
@@ -57,6 +61,7 @@ export function FileTree({
     row: React.ReactElement,
     target: { path: string; folder: boolean }
   ) => React.ReactNode
+  onKeepOpen?: (path: string) => void
   onSelect: (
     path: string,
     event: React.MouseEvent,
@@ -64,20 +69,6 @@ export function FileTree({
   ) => void
 }) {
   const tree = useMemo(() => buildTree(paths), [paths])
-  const ignoredFolders = useMemo(() => {
-    const folders = new Map<string, boolean>()
-    for (const path of allPaths) {
-      if (path.endsWith("/")) continue
-      const ignored = ignoredPaths?.has(path) ?? false
-      let end = path.lastIndexOf("/")
-      while (end > 0) {
-        const folder = path.slice(0, end)
-        folders.set(folder, (folders.get(folder) ?? true) && ignored)
-        end = path.lastIndexOf("/", end - 1)
-      }
-    }
-    return folders
-  }, [allPaths, ignoredPaths])
   const folderStatuses = useMemo(() => folderGitStatuses(statuses), [statuses])
   const [internalToggled, setToggled] = useState<Set<string>>(new Set())
   const toggled = toggledFolders ?? internalToggled
@@ -143,9 +134,7 @@ export function FileTree({
                     tabIndex={renderRow ? 0 : undefined}
                     className={cn(
                       row,
-                      (ignoredPaths?.has(child.path) ||
-                        ignoredFolders.get(child.path)) &&
-                        "opacity-60"
+                      treeRowOpacity(staged, selected === child.path)
                     )}
                   >
                     {content}
@@ -156,9 +145,7 @@ export function FileTree({
                     aria-expanded={open}
                     className={cn(
                       row,
-                      (ignoredPaths?.has(child.path) ||
-                        ignoredFolders.get(child.path)) &&
-                        "opacity-60"
+                      treeRowOpacity(staged, selected === child.path)
                     )}
                     onClick={() => toggle(child.path)}
                   >
@@ -180,20 +167,19 @@ export function FileTree({
               title={path}
               className={cn(
                 row,
+                treeRowOpacity(
+                  staged,
+                  selectedPaths ? selectedPaths.has(path) : path === selected,
+                  ignoredPaths?.has(path)
+                ),
                 (selectedPaths ? selectedPaths.has(path) : path === selected) &&
                   "bg-accent hover:bg-accent"
               )}
               onClick={(event) => onSelect(path, event, visiblePaths)}
+              onDoubleClick={() => onKeepOpen?.(path)}
             >
               <span
-                className={cn(
-                  "flex min-w-0 flex-1 items-center gap-1.5",
-                  ignoredPaths?.has(path)
-                    ? "opacity-60"
-                    : reviewedPaths?.has(path)
-                      ? "opacity-50"
-                      : statuses[path] === "D" && "opacity-75"
-                )}
+                className="flex min-w-0 flex-1 items-center gap-1.5"
                 style={{ marginLeft: 30 + depth * 8 }}
               >
                 <FileIcon path={path} size={16} />
@@ -209,7 +195,7 @@ export function FileTree({
                   {path.split("/").at(-1)}
                 </span>
               </span>
-              <GitStatusBadge status={statuses[path]} className="opacity-50" />
+              <GitStatusBadge status={statuses[path]} />
               {marks[path] === "validated" ? (
                 <HugeiconsIcon
                   icon={Tick02Icon}

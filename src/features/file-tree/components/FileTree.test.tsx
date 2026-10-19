@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { Snapshot } from "@/lib/desktop/contracts.generated"
 import { capturedFileStatuses, folderGitStatuses } from "@/lib/git/file-status"
 import { FileTree } from "./FileTree"
+import { GroupedFileTree } from "./GroupedFileTree"
 
 const blob = { hash: "hash", size: 1, mode: "100644" }
 function change(
@@ -89,7 +90,7 @@ test("Code Editor keeps folders collapsible and initially closed", () => {
   expect(html).not.toContain('title="src/feature/a.ts"')
 })
 
-test("reviewed files fade while folders stay fully opaque", () => {
+test("selected files are fully opaque while reviewed semantics remain accessible", () => {
   const html = renderToStaticMarkup(
     <FileTree
       paths={["src/feature/a.ts"]}
@@ -100,14 +101,14 @@ test("reviewed files fade while folders stay fully opaque", () => {
       onSelect={() => {}}
     />
   )
-  expect(html.match(/opacity-50/g)).toHaveLength(1)
+  expect(html).toContain("opacity-100")
   expect(html).not.toContain("All files reviewed.")
   expect(html).toContain("Reviewed.")
   expect(html).not.toMatch(/<li[^>]*opacity-50/)
   expect(html).not.toContain("disabled")
 })
 
-test("local files start expanded with collapse controls, status colors and file-only dimmed badges", () => {
+test("local files start expanded with collapse controls, status colors and uniform row opacity", () => {
   const html = renderToStaticMarkup(
     <FileTree
       paths={["src/deleted.ts", "src/ready.ts"]}
@@ -123,8 +124,8 @@ test("local files start expanded with collapse controls, status colors and file-
   expect(html.match(/data-git-status=/g)).toHaveLength(2)
   expect(html).toContain("text-diff-removed")
   expect(html).toContain("text-git-modified")
-  expect(html).toContain("opacity-75")
-  expect(html.match(/opacity-50/g)).toHaveLength(3)
+  expect(html).toContain("opacity-80")
+  expect(html).not.toContain("opacity-50")
   expect(html).not.toMatch(/<li[^>]*opacity-/)
 })
 
@@ -161,7 +162,7 @@ test("local folder colors prioritize added, edited, then deleted at every ancest
   )
   expect(html).toContain('text-diff-added">src</span>')
   expect(html).toContain('text-git-modified">edited</span>')
-  expect(html).toContain('text-diff-removed">removed/deep</span>')
+  expect(html).toContain('text-diff-removed">removed</span>')
 })
 
 test("folder color uses filtered-out descendants and folder rows support shared menus", () => {
@@ -186,11 +187,11 @@ test("folder color uses filtered-out descendants and folder rows support shared 
   expect(html).toContain('text-diff-added">src</span>')
   expect(html).toContain('aria-label="Validated"')
   expect(html).toContain('aria-current="page"')
-  expect(html).not.toMatch(/data-folder="src"[^>]*opacity-/)
+  expect(html).toMatch(/data-folder="src"[^>]*opacity-80/)
   expect(html.match(/data-git-status=/g)).toHaveLength(1)
 })
 
-test("only entirely ignored folders fade, using the full inventory without cascading opacity", () => {
+test("all folders fade uniformly without cascading opacity", () => {
   const html = renderToStaticMarkup(
     <FileTree
       paths={[
@@ -215,14 +216,14 @@ test("only entirely ignored folders fade, using the full inventory without casca
       onSelect={() => {}}
     />
   )
-  expect(html).toMatch(/data-folder="cache"[^>]*opacity-60/)
-  expect(html).toMatch(/data-folder="cache\/deep"[^>]*opacity-60/)
-  expect(html).not.toMatch(/data-folder="mixed"[^>]*opacity-/)
-  expect(html).not.toMatch(/data-folder="empty"[^>]*opacity-/)
+  expect(html).toMatch(/data-folder="cache"[^>]*opacity-80/)
+  expect(html).toMatch(/data-folder="cache\/deep"[^>]*opacity-80/)
+  expect(html).toMatch(/data-folder="mixed"[^>]*opacity-80/)
+  expect(html).toMatch(/data-folder="empty"[^>]*opacity-80/)
   expect(html).not.toMatch(/<(?:li|ul)[^>]*opacity-/)
 })
 
-test("compacted ignored-only folder chains also fade", () => {
+test("separate ignored-only nested folders also fade", () => {
   const html = renderToStaticMarkup(
     <FileTree
       paths={["cache/nested/only.txt"]}
@@ -233,5 +234,43 @@ test("compacted ignored-only folder chains also fade", () => {
       onSelect={() => {}}
     />
   )
-  expect(html).toMatch(/data-folder="cache\/nested"[^>]*opacity-60/)
+  expect(html).toMatch(/data-folder="cache\/nested"[^>]*opacity-80/)
+})
+
+test("nested single-child folders remain individually expandable", () => {
+  const html = renderToStaticMarkup(
+    <FileTree
+      paths={["src/feature/nested/file.ts"]}
+      selected=""
+      marks={{}}
+      toggledFolders={new Set(["src"])}
+      onSelect={() => {}}
+    />
+  )
+  expect(html).toContain('data-folder="src" aria-expanded="true"')
+  expect(html).toContain('data-folder="src/feature" aria-expanded="false"')
+  expect(html).not.toContain('data-folder="src/feature/nested"')
+  expect(html).not.toContain(">src/feature<")
+})
+
+test("staged trees and groups dim whole rows and start closed", () => {
+  for (const Component of [FileTree, GroupedFileTree]) {
+    const props = {
+      paths: ["src/a.ts", "src/b.ts"],
+      selected: "",
+      marks: {},
+      staged: true,
+      onSelect: () => {},
+    }
+    const closed = renderToStaticMarkup(<Component {...props} />)
+    expect(closed).toContain('aria-expanded="false"')
+    expect(closed).toContain("opacity-50 hover:opacity-100")
+    expect(closed).not.toContain('title="src/a.ts"')
+    const opened = renderToStaticMarkup(
+      <Component {...props} alwaysExpanded selected="src/a.ts" />
+    )
+    expect(opened).toMatch(/title="src\/a.ts"[^>]*opacity-100/)
+    expect(opened).toMatch(/title="src\/b.ts"[^>]*opacity-50/)
+    expect(opened).not.toMatch(/<(?:li|ul|section)[^>]*opacity-/)
+  }
 })

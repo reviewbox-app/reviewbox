@@ -23,18 +23,7 @@ export function buildTree(paths: string[]) {
     }
     if (!path.endsWith("/")) node.files.push(path)
   }
-  // Collapse single-child chains ("src-tauri/src") like the prototype.
-  const compact = (folder: Folder): Folder => {
-    folder.folders.forEach((child, key) =>
-      folder.folders.set(key, compact(child))
-    )
-    if (folder.name && folder.folders.size === 1 && folder.files.length === 0) {
-      const only = [...folder.folders.values()][0]
-      return { ...only, name: `${folder.name}/${only.name}` }
-    }
-    return folder
-  }
-  return compact(root)
+  return root
 }
 
 export function folderPaths(paths: string[]) {
@@ -48,4 +37,15 @@ export function folderPaths(paths: string[]) {
       })
     ),
   ]
+}
+
+/** Depth-first order used by tree rows, including children of collapsed folders. */
+export function orderedTreeFiles(paths: string[]): string[] {
+  const visit = (folder: Folder): string[] => [
+    ...[...folder.folders.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .flatMap(visit),
+    ...folder.files,
+  ]
+  return visit(buildTree(paths))
 }
