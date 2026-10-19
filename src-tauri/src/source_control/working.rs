@@ -278,25 +278,53 @@ pub(super) fn stage_files_version(
         }
         paths.insert(file.path.as_str());
     }
-    let mut input = Vec::new();
-    for path in paths {
-        input.extend_from_slice(path.as_bytes());
-        input.push(0);
-    }
-    let args = if stage {
-        vec!["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]
-    } else if git::head(root).is_some() {
-        vec![
-            "reset",
-            "-q",
-            "HEAD",
-            "--pathspec-from-file=-",
-            "--pathspec-file-nul",
-        ]
-    } else {
-        vec!["update-index", "--force-remove", "-z", "--stdin"]
+    let encode = |paths: Vec<&str>| {
+        paths
+            .into_iter()
+            .flat_map(|path| path.bytes().chain(std::iter::once(0)))
+            .collect::<Vec<_>>()
     };
-    git::run(root, &args, Some(&temporary.0), &input, cancel)?;
+    if stage {
+        // Updating tracked files must work even when a parent directory was
+        // subsequently ignored. Never force-add ignored untracked siblings.
+        let raw = git::run(root, &["ls-files", "-z"], Some(&temporary.0), &[], cancel)?;
+        let tracked: std::collections::BTreeSet<_> = raw.split(|b| *b == 0).collect();
+        for (update, flag) in [(true, "-u"), (false, "-A")] {
+            let selected = paths
+                .iter()
+                .copied()
+                .filter(|path| tracked.contains(path.as_bytes()) == update)
+                .collect::<Vec<_>>();
+            if !selected.is_empty() {
+                git::run(
+                    root,
+                    &["add", flag, "--pathspec-from-file=-", "--pathspec-file-nul"],
+                    Some(&temporary.0),
+                    &encode(selected),
+                    cancel,
+                )?;
+            }
+        }
+    } else {
+        let args = if git::head(root).is_some() {
+            vec![
+                "reset",
+                "-q",
+                "HEAD",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ]
+        } else {
+            vec!["update-index", "--force-remove", "-z", "--stdin"]
+        };
+        git::run(
+            root,
+            &args,
+            Some(&temporary.0),
+            &encode(paths.into_iter().collect()),
+            cancel,
+        )?;
+    }
     selected_files(root, selections)?;
     if fs::read(git::git_path(root, "index")?).ok() != original {
         return Err(AppError::new(

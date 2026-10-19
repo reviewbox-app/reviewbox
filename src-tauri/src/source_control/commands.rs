@@ -118,36 +118,29 @@ pub async fn commit_local_changes(
     let root = repositories::root(&s, &request.repository_id)?;
     let _invalidation = storage.repository_cache.git_mutation(&root);
     let operation = manager.begin(&root, &request.operation_id)?;
-    let reading_root = root.clone();
-    let expected = request.index_version.clone();
-    let frozen = blocking(move || commits::freeze(&reading_root, &expected)).await?;
-    let batches = if let Some(message) = &request.message {
-        vec![commits::Batch {
-            message: message.clone(),
-            paths: frozen.files.iter().map(|f| f.path.clone()).collect(),
-        }]
-    } else {
-        let _ = channel.send(GitOperation {
-            id: request.operation_id.clone(),
-            repository_id: request.repository_id.clone(),
-            status: "running".into(),
-            message: "Rev is organizing the staged changes…".into(),
-            commits: vec![],
-            error: None,
-        });
+    if request.message.is_none() {
         let resources = crate::commands::resource_root(&app)?;
-        let text = crate::agents::commit::plan(
+        return commits::autonomous::run(
             &s,
             &root,
             &resources,
             &request,
-            frozen.context.clone(),
+            false,
             operation.cancel.clone(),
-            activity,
+            |state| {
+                let _ = channel.send(state.clone());
+            },
         )
-        .await?;
-        commits::plan(&text, &frozen)?
-    };
+        .await;
+    }
+    let _ = activity;
+    let reading_root = root.clone();
+    let expected = request.index_version.clone();
+    let frozen = blocking(move || commits::freeze(&reading_root, &expected)).await?;
+    let batches = vec![commits::Batch {
+        message: request.message.clone().unwrap_or_default(),
+        paths: frozen.files.iter().map(|f| f.path.clone()).collect(),
+    }];
     blocking(move || {
         let result = commits::execute(
             &s,

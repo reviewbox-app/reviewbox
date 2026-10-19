@@ -869,39 +869,6 @@ fn branch_switch_refuses_overwrites_and_keeps_index() {
     );
 }
 
-#[test]
-fn commit_context_contains_only_frozen_git_references_even_for_large_changes() {
-    for initial in [false, true] {
-        let (_dir, root, _storage, repo) = fixture(initial);
-        let content = "staged payload only\n".repeat(70_000);
-        fs::write(root.join("a.txt"), &content).unwrap();
-        stage(&root, "a.txt");
-        let request = request(&root, &repo);
-        let frozen = commits::freeze(&root, &request.index_version).unwrap();
-        assert_eq!(
-            working::index_version(&root).unwrap(),
-            request.index_version
-        );
-        assert!(frozen.context.len() < 4096);
-        assert!(!frozen.context.contains("staged payload"));
-        let context: serde_json::Value = serde_json::from_str(&frozen.context).unwrap();
-        assert!(context.get("stagedDiff").is_none());
-        let tree = context["stagedTree"].as_str().unwrap();
-        fs::write(root.join("a.txt"), "newer staged content").unwrap();
-        stage(&root, "a.txt");
-        assert_eq!(
-            git::read(&root, &["show", &format!("{tree}:a.txt")]).unwrap(),
-            content.as_bytes()
-        );
-        let base = context["baseTree"].as_str().unwrap();
-        let paths = run(&root, &["diff", "--name-only", base, tree]);
-        assert!(paths.lines().any(|p| p == "a.txt"));
-        if !initial {
-            assert!(run(&root, &["ls-tree", base]).is_empty());
-        }
-    }
-}
-
 #[cfg(unix)]
 fn install_commit_hook(root: &Path, name: &str, body: &str) {
     use std::os::unix::fs::PermissionsExt;
@@ -1134,4 +1101,108 @@ fn failed_hook_preserves_modified_index_without_retrying() {
     assert_eq!(git::head(&root), frozen.head);
     assert_eq!(run(&root, &["show", ":a.txt"]), "formatted");
     assert!(run(&root, &["diff", "--name-only"]).is_empty());
+}
+
+#[test]
+fn stages_tracked_files_under_ignored_parents_without_adding_ignored_siblings() {
+    let (_dir, root, storage, repo) = fixture(true);
+    for parent in [".codex", ".next-docs", "docs/audits", "tmp"] {
+        fs::create_dir_all(root.join(parent)).unwrap();
+        fs::write(root.join(parent).join("tracked.txt"), "old").unwrap();
+        fs::write(root.join(parent).join("deleted.txt"), "old").unwrap();
+    }
+    run(&root, &["add", "."]);
+    run(&root, &["commit", "-qm", "tracked tooling"]);
+    fs::write(
+        root.join(".gitignore"),
+        "/.codex\n/.next-docs\n/docs/audits\n/tmp\n",
+    )
+    .unwrap();
+    for parent in [".codex", ".next-docs", "docs/audits", "tmp"] {
+        fs::write(root.join(parent).join("tracked.txt"), "changed").unwrap();
+        fs::remove_file(root.join(parent).join("deleted.txt")).unwrap();
+        fs::write(root.join(parent).join("private.txt"), "never stage").unwrap();
+    }
+    fs::write(root.join("new.txt"), "new").unwrap();
+    let selections = working::files(&root)
+        .unwrap()
+        .into_iter()
+        .map(|f| LocalFileSelection {
+            path: f.path,
+            version: f.version,
+        })
+        .collect::<Vec<_>>();
+    working::stage_files(&root, &selections, true, &AtomicBool::new(false)).unwrap();
+    for parent in [".codex", ".next-docs", "docs/audits", "tmp"] {
+        assert_eq!(
+            run(&root, &["show", &format!(":{parent}/tracked.txt")]),
+            "changed"
+        );
+        assert!(
+            run(
+                &root,
+                &[
+                    "ls-files",
+                    "--",
+                    &format!("{parent}/private.txt"),
+                    &format!("{parent}/deleted.txt")
+                ]
+            )
+            .is_empty()
+        );
+    }
+    assert_eq!(run(&root, &["show", ":new.txt"]), "new");
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    let paths = frozen.files.iter().map(|file| file.path.clone()).collect();
+    let result = commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![commits::Batch {
+            message: "tracked ignored parents".into(),
+            paths,
+        }],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "completed", "{:?}", result.error);
+    assert!(run(&root, &["diff", "--cached", "--name-only"]).is_empty());
+}
+
+#[test]
+fn clearing_old_plans_preserves_commits_and_the_index() {
+    let (_dir, root, storage, repo) = fixture(true);
+    fs::write(root.join("a.txt"), "new").unwrap();
+    stage(&root, "a.txt");
+    let request = request(&root, &repo);
+    let frozen = commits::freeze(&root, &request.index_version).unwrap();
+    commits::execute(
+        &storage,
+        &root,
+        &request,
+        &frozen,
+        vec![commits::Batch {
+            message: "change".into(),
+            paths: vec!["a.txt".into()],
+        }],
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let head = git::head(&root);
+    let index = fs::read(root.join(".git/index")).unwrap();
+    assert!(commits::last(&storage, &repo.id).unwrap().is_some());
+    commits::dismiss(&storage, &repo.id).unwrap();
+    assert!(commits::last(&storage, &repo.id).unwrap().is_none());
+    assert_eq!(git::head(&root), head);
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    assert!(
+        !fs::read_dir(storage.root().join("git-operations"))
+            .unwrap()
+            .collect::<Vec<_>>()
+            .is_empty()
+    );
 }

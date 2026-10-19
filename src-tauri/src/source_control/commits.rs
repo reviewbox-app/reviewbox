@@ -1,3 +1,4 @@
+pub(super) mod autonomous;
 mod trees;
 use super::{git, history, working};
 use crate::{contracts::*, storage::Storage};
@@ -15,6 +16,7 @@ pub(super) struct Batch {
     pub message: String,
     pub paths: Vec<String>,
 }
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Plan {
@@ -27,7 +29,6 @@ pub(super) struct Frozen {
     pub version: String,
     pub entries: BTreeMap<String, (String, String)>,
     pub files: Vec<LocalFile>,
-    pub context: String,
 }
 pub(super) fn freeze(root: &Path, expected: &str) -> AppResult<Frozen> {
     let _lock = git::IndexLock::acquire(root)?;
@@ -70,40 +71,24 @@ pub(super) fn freeze(root: &Path, expected: &str) -> AppResult<Frozen> {
         }
         entries.insert(path.into(), (parts[0].into(), parts[1].into()));
     }
-    // Freeze an addressable tree without touching the real index. The harness
-    // inspects these Git objects itself, even if the live index changes later.
-    let temporary = git::TempIndex::new(root)?;
-    trees::plumbing(root, Some(&temporary.0), &["read-tree", "--empty"], &[])?;
-    let empty_tree = trees::index_tree(root, &temporary.0)?;
-    trees::plumbing(
-        root,
-        Some(&temporary.0),
-        &["update-index", "-z", "--index-info"],
-        &raw,
-    )?;
-    let staged_tree = trees::index_tree(root, &temporary.0)?;
     let head = git::head(root);
-    let context = serde_json::to_string(&serde_json::json!({
-        "baseTree":head.as_deref().unwrap_or(empty_tree.trim()),
-        "stagedTree":staged_tree.trim(),
-        "files":files.iter().map(|f|serde_json::json!({"path":f.path,"previousPath":f.previous_path})).collect::<Vec<_>>(),
-    }))?;
     Ok(Frozen {
         head,
         branch,
         version,
         entries,
         files,
-        context,
     })
 }
+#[cfg(test)]
 pub(super) fn plan(text: &str, frozen: &Frozen) -> AppResult<Vec<Batch>> {
     let text = text.trim();
     let text = text
         .strip_prefix("```json\n")
         .and_then(|t| t.strip_suffix("``` ").or_else(|| t.strip_suffix("```")))
         .unwrap_or(text);
-    let plan: Plan = serde_json::from_str(text.trim())?;
+    let plan: Plan = serde_json::from_str(text.trim())
+        .map_err(|e| AppError::new("commit_plan", format!("Invalid plan JSON: {e}")))?;
     validate(&plan.commits, frozen)?;
     Ok(plan.commits)
 }
@@ -125,10 +110,20 @@ fn validate(batches: &[Batch], frozen: &Frozen) -> AppResult<()> {
             ));
         }
         for path in &batch.paths {
-            if !expected.contains(path.as_str()) || !seen.insert(path.as_str()) {
+            if !expected.contains(path.as_str()) {
                 return Err(AppError::new(
                     "commit_plan",
-                    "The commit plan has an unknown or duplicate file.",
+                    format!(
+                        "Unknown path {path:?}. Use only exact file paths from the frozen manifest, never directories or ignored/unselected files."
+                    ),
+                ));
+            }
+            if !seen.insert(path.as_str()) {
+                return Err(AppError::new(
+                    "commit_plan",
+                    format!(
+                        "Duplicate path {path:?}. Each manifest file must belong to exactly one commit."
+                    ),
                 ));
             }
         }
@@ -136,15 +131,24 @@ fn validate(batches: &[Batch], frozen: &Frozen) -> AppResult<()> {
     if seen != expected {
         return Err(AppError::new(
             "commit_plan",
-            "The commit plan must include every staged file exactly once.",
+            format!(
+                "Missing staged files: {}. Include each manifest file exactly once.",
+                expected
+                    .difference(&seen)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         ));
     }
     Ok(())
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Journal {
     operation: GitOperation,
+    #[serde(default)]
+    observed_from: Option<Vec<String>>,
     original_head: Option<String>,
     index_version: String,
     batches: Vec<Batch>,
@@ -195,7 +199,9 @@ pub(super) fn last(storage: &Storage, repository_id: &str) -> AppResult<Option<G
         .filter(|e| e.path().extension().is_some_and(|e| e == "json"))
     {
         let mut journal: Journal = serde_json::from_slice(&fs::read(entry.path())?)?;
-        if journal.operation.repository_id != repository_id {
+        if journal.operation.repository_id != repository_id
+            || journal.operation.status == "dismissed"
+        {
             continue;
         }
         if journal.operation.status == "running" {
@@ -221,13 +227,29 @@ pub(super) fn last(storage: &Storage, repository_id: &str) -> AppResult<Option<G
                     .commits
                     .push(history::commit(&root, &head)?);
             }
-            recover_index(storage, &mut journal)?;
+            if journal.observed_from.is_some() {
+                let root = crate::repositories::root(storage, repository_id)?;
+                autonomous::observe(&root, &mut journal)?;
+            } else {
+                recover_index(storage, &mut journal)?;
+            }
             write(storage, &journal)?;
         }
         return Ok(Some(journal.operation));
     }
     Ok(None)
 }
+pub(super) fn dismiss(storage: &Storage, repository_id: &str) -> AppResult<()> {
+    // Complete interruption reconciliation before hiding its receipt.
+    while let Some(operation) = last(storage, repository_id)? {
+        let path = journal_path(storage, &operation.id);
+        let mut journal: Journal = serde_json::from_slice(&fs::read(path)?)?;
+        journal.operation.status = "dismissed".into();
+        write(storage, &journal)?;
+    }
+    Ok(())
+}
+
 // Recovery only reconciles an unchanged original index on the recorded branch.
 // It never invokes commit or rewrites worktree files.
 fn recover_index(storage: &Storage, journal: &mut Journal) -> AppResult<()> {
@@ -327,6 +349,7 @@ pub(super) fn execute(
             commits: vec![],
             error: None,
         },
+        observed_from: None,
         original_head: frozen.head.clone(),
         index_version: frozen.version.clone(),
         batches,

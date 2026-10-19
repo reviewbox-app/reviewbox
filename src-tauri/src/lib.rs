@@ -269,6 +269,8 @@ pub fn run() {
             source_control::commands::commit_local_changes,
             source_control::commands::cancel_git_operation,
             source_control::commands::last_git_operation,
+            source_control::recovery::recover_git_lock,
+            source_control::recovery::clear_git_plans,
             review_menu::configure_review_menu,
             editor_menu::configure_editor_menu,
             review_menu::configure_repository_menu,

@@ -1,15 +1,33 @@
 //! A user-started stage-all/Rev commit job survives navigation away from the summary.
-use super::{SourceControl, commits, working};
+use super::{SourceControl, commits};
 use crate::{contracts::*, storage::Storage};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use tauri::{Emitter, State, ipc::Channel};
+use tauri::{Emitter, State};
 
 #[derive(Default, Clone)]
 pub(crate) struct ReviewCommits(Arc<Mutex<HashMap<String, ReviewCommitOperation>>>);
 impl ReviewCommits {
+    pub(super) fn dismiss(
+        &self,
+        storage: &Storage,
+        app: &tauri::AppHandle,
+        repository_id: &str,
+    ) -> AppResult<()> {
+        let states: Vec<ReviewCommitOperation> = storage.local_list("review_commit")?;
+        for mut state in states
+            .into_iter()
+            .filter(|s| s.operation.repository_id == repository_id)
+        {
+            state.sequence += 1;
+            state.operation.status = "dismissed".into();
+            state.operation.error = None;
+            self.publish(storage, app, &state)?;
+        }
+        Ok(())
+    }
     fn publish(
         &self,
         storage: &Storage,
@@ -48,43 +66,6 @@ impl Drop for JobCompletion {
             let _ = self.jobs.publish(&self.storage, &self.app, &state);
         }
     }
-}
-
-fn stage_and_freeze(
-    root: &std::path::Path,
-    cancel: &std::sync::atomic::AtomicBool,
-) -> AppResult<Option<commits::Frozen>> {
-    let expected = working::index_version(root)?;
-    let files = working::files(root)?;
-    if files.is_empty() {
-        return Ok(None);
-    }
-    if files.iter().any(|f| f.conflicted) {
-        return Err(AppError::new(
-            "git_conflict",
-            "Resolve Git conflicts before committing.",
-        ));
-    }
-    if working::index_version(root)? != expected {
-        return Err(AppError::new(
-            "git_changed",
-            "The Git index changed. Try again.",
-        ));
-    }
-    let selections: Vec<_> = files
-        .into_iter()
-        .filter(|f| f.unstaged_status.is_some())
-        .map(|f| LocalFileSelection {
-            path: f.path,
-            version: f.version,
-        })
-        .collect();
-    let version = if selections.is_empty() {
-        expected
-    } else {
-        working::stage_files_version(root, &selections, true, cancel)?
-    };
-    commits::freeze(root, &version).map(Some)
 }
 
 #[tauri::command]
@@ -158,12 +139,12 @@ pub async fn start_review_commit(
         let value = ReviewCommitOperation {
             review_id,
             sequence,
-            phase: "stage".into(),
+            phase: "commit".into(),
             operation: GitOperation {
                 id,
                 repository_id: repository_id.clone(),
                 status: "running".into(),
-                message: "Staging all saved changes…".into(),
+                message: "Rev is creating commits…".into(),
                 commits: vec![],
                 error: None,
             },
@@ -192,68 +173,32 @@ pub async fn start_review_commit(
         };
         let _invalidation = s.repository_cache.git_mutation(&root);
         let mut state = value;
-        let result = async {
-            let staging_root = root.clone();
-            let cancel = guard.cancel.clone();
-            let frozen = tauri::async_runtime::spawn_blocking(move || {
-                stage_and_freeze(&staging_root, &cancel)
-            })
-            .await
-            .map_err(|e| AppError::new("task", e.to_string()))??;
-            let Some(frozen) = frozen else {
-                state.operation.message = "Nothing to commit".into();
-                return Ok::<_, AppError>(());
-            };
+        let result: AppResult<()> = async {
             let request = GitCommitRequest {
                 operation_id: state.operation.id.clone(),
                 repository_id: state.operation.repository_id.clone(),
-                index_version: frozen.version.clone(),
+                index_version: String::new(),
                 message: None,
             };
-            state.phase = "plan".into();
-            state.sequence += 1;
-            state.operation.message = "Rev is preparing commits…".into();
-            jobs.publish(&s, &app, &state)?;
             let resources = crate::commands::resource_root(&app)?;
-            let plan = crate::agents::commit::plan(
+            let base = state.clone();
+            let sequence = std::sync::atomic::AtomicU32::new(state.sequence);
+            state.operation = commits::autonomous::run(
                 &s,
                 &root,
                 &resources,
                 &request,
-                frozen.context.clone(),
+                true,
                 guard.cancel.clone(),
-                Channel::new(|_| Ok(())),
+                |operation| {
+                    let mut progress = base.clone();
+                    progress.operation = operation.clone();
+                    progress.sequence =
+                        sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    let _ = jobs.publish(&s, &app, &progress);
+                },
             )
             .await?;
-            let batches = commits::plan(&plan, &frozen)?;
-            state.phase = "commit".into();
-            state.sequence += 1;
-            state.operation.message = "Creating commits…".into();
-            jobs.publish(&s, &app, &state)?;
-            let data = s.clone();
-            let root = root.clone();
-            let cancel = guard.cancel.clone();
-            let updates = jobs.clone();
-            let handle = app.clone();
-            let base = state.clone();
-            state.operation = tauri::async_runtime::spawn_blocking(move || {
-                commits::execute(
-                    &data,
-                    &root,
-                    &request,
-                    &frozen,
-                    batches,
-                    &cancel,
-                    |operation| {
-                        let mut progress = base.clone();
-                        progress.operation = operation.clone();
-                        progress.sequence += operation.commits.len() as u32 + 1;
-                        let _ = updates.publish(&data, &handle, &progress);
-                    },
-                )
-            })
-            .await
-            .map_err(|e| AppError::new("task", e.to_string()))??;
             Ok(())
         }
         .await;
@@ -342,67 +287,4 @@ pub async fn get_review_commit(
     })
     .await
     .map_err(|e| AppError::new("task", e.to_string()))?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{fs, path::Path, process::Command, sync::atomic::AtomicBool};
-    fn git(root: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).unwrap()
-    }
-    #[test]
-    fn stages_saved_changes_including_partial_and_untracked_but_not_ignored() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        git(root, &["init", "-q"]);
-        git(root, &["config", "user.name", "Test"]);
-        git(root, &["config", "user.email", "test@example.invalid"]);
-        fs::write(root.join("a.ts"), "base\n").unwrap();
-        fs::write(root.join("deleted.ts"), "old\n").unwrap();
-        fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
-        git(root, &["add", "."]);
-        git(root, &["commit", "-qm", "base"]);
-        fs::write(root.join("a.ts"), "staged\n").unwrap();
-        git(root, &["add", "a.ts"]);
-        fs::write(root.join("a.ts"), "all saved\n").unwrap();
-        fs::remove_file(root.join("deleted.ts")).unwrap();
-        fs::write(root.join("new.ts"), "new\n").unwrap();
-        fs::write(root.join("ignored.txt"), "private\n").unwrap();
-        let frozen = stage_and_freeze(root, &AtomicBool::new(false))
-            .unwrap()
-            .unwrap();
-        assert_eq!(git(root, &["show", ":a.ts"]), "all saved\n");
-        assert_eq!(frozen.files.len(), 3);
-        assert!(!frozen.files.iter().any(|f| f.path == "ignored.txt"));
-        assert_eq!(git(root, &["diff", "--name-only"]), "");
-        assert_eq!(
-            fs::read_to_string(root.join("ignored.txt")).unwrap(),
-            "private\n"
-        );
-    }
-    #[test]
-    fn clean_checkout_has_no_plan_and_cancel_does_not_stage() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        git(root, &["init", "-q"]);
-        assert!(
-            stage_and_freeze(root, &AtomicBool::new(false))
-                .unwrap()
-                .is_none()
-        );
-        fs::write(root.join("a.ts"), "saved\n").unwrap();
-        assert!(stage_and_freeze(root, &AtomicBool::new(true)).is_err());
-        assert_eq!(git(root, &["ls-files"]), "");
-    }
 }

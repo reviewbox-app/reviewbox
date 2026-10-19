@@ -67,6 +67,8 @@ fn main() {
         "commit_local_changes",
         "cancel_git_operation",
         "last_git_operation",
+        "recover_git_lock",
+        "clear_git_plans",
         "configure_review_menu",
         "configure_editor_menu",
         "configure_repository_menu",

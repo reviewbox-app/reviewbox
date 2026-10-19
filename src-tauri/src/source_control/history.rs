@@ -29,7 +29,11 @@ fn counts(root: &Path, reference: &str) -> AppResult<(u32, u32)> {
     let ahead = parts.next().and_then(Result::ok).unwrap_or(0);
     Ok((ahead, behind))
 }
-fn summaries(root: &Path, refs: &[&str], limit: Option<u32>) -> AppResult<Vec<GitCommitSummary>> {
+pub(super) fn summaries(
+    root: &Path,
+    refs: &[&str],
+    limit: Option<u32>,
+) -> AppResult<Vec<GitCommitSummary>> {
     let format = "--format=%H%x00%an%x00%aI%x00%s";
     let max = limit.map(|n| format!("--max-count={n}"));
     let mut args = vec!["log", "-z", format];

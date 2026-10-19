@@ -4,6 +4,7 @@ pub(crate) mod commands;
 mod commits;
 mod git;
 mod history;
+pub(crate) mod recovery;
 pub(crate) mod review_commit;
 #[cfg(test)]
 mod tests;

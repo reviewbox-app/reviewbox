@@ -54,16 +54,12 @@ pub(super) fn index_tree(root: &Path, index: &Path) -> AppResult<String> {
 pub(super) fn worktree(root: &Path) -> AppResult<String> {
     let temporary = git::TempIndex::new(root)?;
     fs::copy(git::git_path(root, "index")?, &temporary.0)?;
+    // Tracked files remain eligible even when their parent is now ignored.
+    plumbing(root, Some(&temporary.0), &["add", "-u"], &[])?;
     let paths = plumbing(
         root,
         Some(&temporary.0),
-        &[
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ],
+        &["ls-files", "-z", "--others", "--exclude-standard"],
         &[],
     )?;
     if !paths.is_empty() {
