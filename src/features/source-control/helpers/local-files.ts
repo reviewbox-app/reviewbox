@@ -69,3 +69,27 @@ export function nextLocalFile(
       .find((path) => eligible.has(path))
   )
 }
+
+/** Resolve against the Git result, never the pre-mutation file statuses. */
+export function nextLocalFileInLayer(
+  order: string[],
+  files: LocalFile[],
+  current: string,
+  layer: "staged" | "unstaged",
+  excluded: ReadonlySet<string>
+) {
+  return nextLocalFile(
+    order,
+    new Set(
+      files
+        .filter(
+          (file) =>
+            !excluded.has(file.path) &&
+            !file.conflicted &&
+            (layer === "unstaged" ? file.unstagedStatus : file.stagedStatus)
+        )
+        .map((file) => file.path)
+    ),
+    current
+  )
+}

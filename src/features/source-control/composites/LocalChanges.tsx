@@ -45,6 +45,7 @@ import { reviewReaderLayout } from "@/features/review/reader.config"
 import { useScrollEdgeMask } from "@/hooks/use-scroll-edge-mask"
 import type {
   LocalFileDiff,
+  LocalGitState,
   LocalFile,
   ReadingPosition,
 } from "@/lib/desktop/contracts.generated"
@@ -61,7 +62,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   availableLayer,
-  nextLocalFile,
+  nextLocalFileInLayer,
   fullyStagedPaths,
   localFileStatuses,
   localFileGroups,
@@ -169,20 +170,24 @@ export function LocalChanges({
     navigation.value.expandedPaths,
     (allFiles || !!filter.trim()) && navigation.ready
   )
+  const [finishedStaging, setFinishedStaging] = useState<string>()
   const chosen = navigation.value.selectedPath ?? ""
   const setChosen = (path: string) => {
     setSearchTarget(undefined)
+    setFinishedStaging(undefined)
     navigation.update((tree) => ({ ...tree, selectedPath: path }))
   }
   const existing = inventory.entries.some(
     (entry) => !entry.directory && entry.path === chosen
   )
   const activePath =
-    allFiles && existing
-      ? chosen
-      : (state?.files.find((file) => file.path === chosen)?.path ??
-        state?.files[0]?.path ??
-        inventory.entries.find((entry) => !entry.directory)?.path)
+    finishedStaging === state?.repositoryId && !chosen
+      ? undefined
+      : allFiles && existing
+        ? chosen
+        : (state?.files.find((file) => file.path === chosen)?.path ??
+          state?.files[0]?.path ??
+          inventory.entries.find((entry) => !entry.directory)?.path)
   const file = state?.files.find((file) => file.path === activePath)
   const path = file?.path
   const ignoredPaths = useMemo(
@@ -306,43 +311,51 @@ export function LocalChanges({
       !allFiles && fileLayout === "grouped"
         ? changedGroups.flatMap((group) => group.paths)
         : orderedTreeFiles(state.files.map((entry) => entry.path))
-    const eligible = order.filter((candidate) => {
-      const entry = state.files.find((entry) => entry.path === candidate)
-      return (
-        !removed.has(candidate) &&
-        (staged ? entry?.stagedStatus : entry?.unstagedStatus) &&
-        (!filter.trim() ||
-          (searchMode === "content"
-            ? contentSearch.result?.matches.some(
-                (match) => match.path === candidate
-              )
-            : candidate.toLowerCase().includes(filter.trim().toLowerCase())))
-      )
-    })
-    const next = nextLocalFile(order, new Set(eligible), path ?? "")
+    const visibleOrder = order.filter(
+      (candidate) =>
+        !filter.trim() ||
+        candidate === path ||
+        (searchMode === "content"
+          ? contentSearch.result?.matches.some(
+              (match) => match.path === candidate
+            )
+          : candidate.toLowerCase().includes(filter.trim().toLowerCase()))
+    )
     const selectedBefore = chosen
-    const ok = await mutate(() =>
-      commands.stageFiles(
+    let updated: LocalGitState | undefined
+    const ok = await mutate(async () => {
+      updated = await commands.stageFiles(
         state.repositoryId,
         files.map(({ path, version }) => ({ path, version })),
         !staged
       )
-    )
+      return updated
+    })
+    const next =
+      updated &&
+      nextLocalFileInLayer(
+        visibleOrder,
+        updated.files,
+        path ?? "",
+        stagingLayer,
+        removed
+      )
     // Do not steal navigation if the user selected another file during the write.
     if (
       ok &&
       removed.has(path ?? "") &&
       layer === stagingLayer &&
-      next &&
       (treeNavigation(state.repositoryId, "local")?.selectedPath ?? "") ===
         selectedBefore
     ) {
-      setChosen(next)
+      if (!next && staged) return
+      setChosen(next ?? "")
+      setFinishedStaging(next ? undefined : state.repositoryId)
       setPreferredLayer(stagingLayer)
       setSelection({
         layer: stagingLayer,
-        paths: new Set([next]),
-        anchor: next,
+        paths: new Set(next ? [next] : []),
+        anchor: next ?? "",
       })
       setPosition(initialPosition)
     }
@@ -883,12 +896,18 @@ export function LocalChanges({
                   <HugeiconsIcon icon={GitCommitIcon} />
                 </EmptyMedia>
                 <EmptyTitle>
-                  {file ? "Loading changes" : "No local changes"}
+                  {file
+                    ? "Loading changes"
+                    : finishedStaging === state.repositoryId
+                      ? "No more unstaged files"
+                      : "No local changes"}
                 </EmptyTitle>
                 <EmptyDescription>
                   {file
                     ? "Reading the current file versions…"
-                    : "Your working tree is clean."}
+                    : finishedStaging === state.repositoryId
+                      ? "No unstaged files remain in this view. Staged files are still available in the explorer."
+                      : "Your working tree is clean."}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>

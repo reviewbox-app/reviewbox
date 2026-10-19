@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   availableLayer,
   nextLocalFile,
+  nextLocalFileInLayer,
   fullyStagedPaths,
   localFileStatuses,
   localFileGroups,
@@ -86,4 +87,66 @@ test("staging advances in displayed order, skipping the batch and opposite layer
   )
   expect(nextLocalFile(["c", "a", "b", "d"], new Set(["c"]), "d")).toBe("c")
   expect(nextLocalFile(["only"], new Set(), "only")).toBeUndefined()
+})
+
+test("after staging, skip already staged files using the returned Git state", () => {
+  const files = [
+    file("a", "M", null),
+    file("b", "M", null),
+    file("c", null, "M"),
+  ]
+  expect(
+    nextLocalFileInLayer(
+      ["a", "b", "c"],
+      files,
+      "a",
+      "unstaged",
+      new Set(["a"])
+    )
+  ).toBe("c")
+  expect(
+    nextLocalFileInLayer(
+      ["c", "a", "b"],
+      files,
+      "a",
+      "unstaged",
+      new Set(["a"])
+    )
+  ).toBe("c")
+  expect(
+    nextLocalFileInLayer(
+      ["a", "b"],
+      files.slice(0, 2),
+      "a",
+      "unstaged",
+      new Set(["a"])
+    )
+  ).toBeUndefined()
+})
+
+test("remaining unstaged work includes partial files but excludes conflicts and the batch", () => {
+  const files = [
+    file("a", "M", null),
+    file("b", "M", "M"),
+    file("c", "U", "U", true),
+    file("d", null, "M"),
+  ]
+  expect(
+    nextLocalFileInLayer(
+      ["a", "b", "c", "d"],
+      files,
+      "a",
+      "unstaged",
+      new Set(["a"])
+    )
+  ).toBe("b")
+  expect(
+    nextLocalFileInLayer(
+      ["a", "b", "c", "d"],
+      files,
+      "a",
+      "unstaged",
+      new Set(["a", "b"])
+    )
+  ).toBe("d")
 })
