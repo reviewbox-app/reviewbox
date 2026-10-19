@@ -26,6 +26,7 @@ export interface EditorBuffer extends EditorFile {
   version: number
   external?: EditorFile | null
   preview: boolean
+  temporary?: boolean
   language?: string
   detectedLanguage?: ContentLanguageDetection
   navigation?: { line: number; column: number; length: number; token: string }
@@ -159,44 +160,73 @@ export async function initializeEditor(id: string) {
   pending.set(key, work)
   return work
 }
+const openRequests = new Map<string, number>()
+const reads = new Map<string, Promise<EditorFile>>()
+export function keepEditorFile(id: string, path: string) {
+  updateEditor(id, (s) => ({
+    ...s,
+    buffers: s.buffers.map((b) =>
+      b.path === path && b.temporary ? { ...b, temporary: false } : b
+    ),
+  }))
+}
 export async function openEditorFile(
   id: string,
   path: string,
-  activate = true
+  activate = true,
+  temporary = false
 ) {
-  if (getEditor(id)?.buffers.some((b) => b.path === path)) {
+  const request = (openRequests.get(id) ?? 0) + 1
+  if (activate) openRequests.set(id, request)
+  const existing = getEditor(id)?.buffers.find((b) => b.path === path)
+  if (existing) {
+    if (!temporary) keepEditorFile(id, path)
     if (activate) updateEditor(id, (s) => ({ ...s, active: path }))
     return
   }
-  const key = `open/${id}/${path}`
-  if (pending.has(key)) {
-    await pending.get(key)
-    if (activate) updateEditor(id, (s) => ({ ...s, active: path }))
-    return
+  const key = `${id}/${path}`
+  let read = reads.get(key)
+  if (!read) {
+    read = editorCommands.read(id, path).finally(() => reads.delete(key))
+    reads.set(key, read)
   }
-  const work = (async () => {
-    const file = await editorCommands.read(id, path)
-    updateEditor(id, (s) => ({
-      ...s,
-      active: activate ? path : s.active,
-      buffers: [
-        ...s.buffers,
-        {
-          ...file,
-          id: crypto.randomUUID(),
-          baseText: file.text,
-          version: 1,
-          preview: isDocumentFile(path),
-        },
-      ],
-    }))
-  })().finally(() => pending.delete(key))
-  pending.set(key, work)
-  return work
+  const file = await read
+  const current = !activate || openRequests.get(id) === request
+  if (temporary && !current) return
+  updateEditor(id, (s) => {
+    const existing = s.buffers.find((b) => b.path === path)
+    if (existing)
+      return {
+        ...s,
+        active: activate && current ? path : s.active,
+        buffers: s.buffers.map((b) =>
+          b === existing && !temporary ? { ...b, temporary: false } : b
+        ),
+      }
+    const buffer: EditorBuffer = {
+      ...file,
+      id: crypto.randomUUID(),
+      baseText: file.text,
+      version: 1,
+      preview: isDocumentFile(path),
+      temporary,
+    }
+    const replaced = temporary
+      ? s.buffers.findIndex(
+          (b) => b.temporary && !dirty(b) && b.external === undefined
+        )
+      : -1
+    const buffers = [...s.buffers]
+    if (replaced < 0) buffers.push(buffer)
+    else buffers.splice(replaced, 1, buffer)
+    return { ...s, active: activate && current ? path : s.active, buffers }
+  })
 }
 export function editBuffer(id: string, key: string, text: string) {
   updateBuffer(id, key, (b) =>
-    b.text === text ? b : { ...b, text, version: b.version + 1 }
+    b.text === text
+      ? b
+      : { ...b, text, version: b.version + 1, temporary: false }
   )
 }
 export type SaveReason = "manual" | "all" | "close" | "automatic"
@@ -206,6 +236,8 @@ export async function saveBuffer(
   overwrite = false,
   reason: SaveReason = "manual"
 ) {
+  const selected = getEditor(id)?.buffers.find((b) => b.id === key)
+  if (selected && reason !== "automatic") keepEditorFile(id, selected.path)
   const lock = `save/${id}/${key}`
   if (pending.has(lock)) {
     await pending.get(lock)
@@ -423,7 +455,7 @@ export function editorRecovery(s: EditorSession): EditorRecovery {
     servers: s.servers,
     active: s.active || null,
     paths: s.buffers
-      .filter((b) => !b.path.startsWith("file:"))
+      .filter((b) => !b.path.startsWith("file:") && (!b.temporary || dirty(b)))
       .map((b) => b.path),
     drafts: s.buffers
       .filter((b) => dirty(b) && !b.readOnly)
@@ -500,6 +532,10 @@ export function moveEditorBuffer(
   if (!buffer || !buffers.some((b) => b.id === target)) return buffers
   const next = buffers.filter((b) => b.id !== source)
   const position = next.findIndex((b) => b.id === target) + Number(after)
-  next.splice(position, 0, buffer)
+  next.splice(
+    position,
+    0,
+    buffer.temporary ? { ...buffer, temporary: false } : buffer
+  )
   return next
 }

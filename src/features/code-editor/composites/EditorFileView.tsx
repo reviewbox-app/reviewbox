@@ -29,6 +29,8 @@ import {
 import { EditorLanguageStatus } from "@/features/language-servers/composites/EditorLanguageStatus"
 import { useLanguageRegistry } from "@/features/language-servers/services/languageRegistry.service"
 
+import { useGitBaseline } from "../hooks/useGitBaseline"
+
 const previewStates = new Map<string, SourceViewPosition>()
 const viewStates = new Map<string, editor.ICodeEditorViewState>()
 export function EditorFileView({
@@ -41,24 +43,38 @@ export function EditorFileView({
   onSave: () => void
   onConflict: () => void
 }) {
+  const baseline = useGitBaseline(repositoryId, buffer.path)
   const { resolvedTheme } = useTheme()
   useLanguageRegistry((s) => s.registry)
   const instance = useRef<editor.IStandaloneCodeEditor | null>(null)
   const preview = useRef<SourceViewHandle>(null)
   const capturePreview = useCallback(
     (position: SourceViewPosition) => {
-      previewStates.set(buffer.id, position)
+      if (getEditor(repositoryId)?.buffers.some((b) => b.id === buffer.id))
+        previewStates.set(buffer.id, position)
     },
-    [buffer.id]
+    [buffer.id, repositoryId]
   )
   const language = bufferLanguage(repositoryId, buffer)
   useEffect(
     () => () => {
       const view = instance.current?.saveViewState()
-      if (view) viewStates.set(buffer.id, view)
+      const model = instance.current?.getModel()
+      const retained = getEditor(repositoryId)?.buffers.some(
+        (b) => b.id === buffer.id
+      )
+      if (view && retained) viewStates.set(buffer.id, view)
+      if (!retained) {
+        viewStates.delete(buffer.id)
+        previewStates.delete(buffer.id)
+        // React's Monaco wrapper must detach the model before it is released.
+        setTimeout(() => {
+          if (model && !model.isDisposed()) model.dispose()
+        }, 0)
+      }
       instance.current = null
     },
-    [buffer.id, buffer.preview]
+    [buffer.id, buffer.preview, repositoryId]
   )
   const revealNavigation = useCallback(
     (current: editor.IStandaloneCodeEditor) => {
@@ -166,6 +182,7 @@ export function EditorFileView({
           />
         ) : (
           <CodeEditor
+            changeBaseline={baseline}
             path={`reviewbox-editor://${repositoryId}/${buffer.id}`}
             keepCurrentModel
             saveViewState

@@ -5,7 +5,7 @@ test("editor actions are compact and creation leads both context menus", async (
 }) => {
   await page.goto("/dev/editor-chrome/")
   await expect(
-    page.getByRole("button", { name: "Create file or folder" })
+    page.getByRole("button", { name: "Explorer actions" })
   ).toBeVisible()
   await expect(
     page.getByRole("checkbox", { name: "Show ignored files" })
@@ -17,10 +17,11 @@ test("editor actions are compact and creation leads both context menus", async (
   await expect(
     page.locator('button[title="ignored.txt"] > span').first()
   ).toHaveCSS("opacity", "0.6")
-  await page.getByRole("button", { name: "Create file or folder" }).click()
+  await page.getByRole("button", { name: "Explorer actions" }).click()
   await expect(page.getByRole("menuitem")).toHaveText([
     "New file",
     "New folder",
+    "Expand all",
   ])
   await page.getByRole("menuitem", { name: "New file", exact: true }).click()
   await expect(page.getByRole("dialog")).toBeVisible()
@@ -51,7 +52,7 @@ test("editor tabs retain dirty state, keyboard navigation and close actions", as
 }) => {
   await page.goto("/dev/editor-chrome/")
   await expect(
-    page.getByRole("button", { name: "Create file or folder" })
+    page.getByRole("button", { name: "Explorer actions" })
   ).toBeVisible()
   const preview = page.getByRole("region", { name: "Tab design preview" })
   const first = preview.getByRole("tab", {
@@ -101,7 +102,7 @@ test("whole tabs select, overlay close stays separate and dragging preserves sel
 }) => {
   await page.goto("/dev/editor-chrome/")
   await expect(
-    page.getByRole("button", { name: "Create file or folder" })
+    page.getByRole("button", { name: "Explorer actions" })
   ).toBeVisible()
   const preview = page.getByRole("region", { name: "Tab design preview" })
   const first = preview.getByRole("tab", {
@@ -152,7 +153,7 @@ test("tabs reorder with the keyboard and Escape cancels without changing selecti
   await page.emulateMedia({ reducedMotion: "reduce" })
   await page.goto("/dev/editor-chrome/")
   await expect(
-    page.getByRole("button", { name: "Create file or folder" })
+    page.getByRole("button", { name: "Explorer actions" })
   ).toBeVisible()
   const preview = page.getByRole("region", { name: "Tab design preview" })
   const first = preview.getByRole("tab", {
@@ -218,4 +219,70 @@ test("tabs reorder with the keyboard and Escape cancels without changing selecti
   )
   await expect(first).toHaveAttribute("aria-selected", "true")
   await expect(second).toHaveAttribute("aria-selected", "false")
+})
+
+test("single click previews replace each other; double click and editing retain tabs", async ({
+  page,
+}) => {
+  await page.goto("/dev/editor-chrome/")
+  const tree = page.getByRole("navigation", { name: "Project files" })
+  await tree.locator('[data-folder="docs"]').click()
+  const tabs = page.getByRole("tablist", { name: "Open files" }).last()
+  await tree.locator('[title="docs/guide.md"]').click()
+  await expect(tabs.getByRole("tab")).toHaveCount(1)
+  await expect(tabs.getByRole("tab").locator("span").first()).toHaveCSS(
+    "font-style",
+    "italic"
+  )
+  await tree.locator('[title="docs/notes.txt"]').click()
+  await expect(tabs.getByRole("tab")).toHaveCount(1)
+  await expect(tabs.getByRole("tab")).toHaveAttribute("title", "docs/notes.txt")
+  await tabs.getByRole("tab").dblclick()
+  await expect(tabs.getByRole("tab").locator("span").first()).toHaveCSS(
+    "font-style",
+    "normal"
+  )
+  await tree.locator('[title="docs/guide.md"]').dblclick()
+  await expect(tabs.getByRole("tab")).toHaveCount(2)
+  await expect(
+    tabs
+      .getByRole("tab", { name: "docs/guide.md", exact: true })
+      .locator("span")
+      .first()
+  ).toHaveCSS("font-style", "normal")
+  await tree.locator('[data-folder="src"]').click()
+  await tree.locator('[title="src/example.ts"]').click()
+  const editor = page
+    .getByRole("region", { name: "Project file" })
+    .locator(".monaco-editor")
+  await expect(editor).toBeVisible()
+  await editor.locator(".view-lines").click()
+  await page.keyboard.type("modified")
+  await expect(
+    tabs
+      .getByRole("tab", { name: "src/example.ts (unsaved)", exact: true })
+      .locator("span")
+      .first()
+  ).toHaveCSS("font-style", "normal")
+  await tree.locator('[title="ignored.txt"]').click()
+  await expect(tabs.getByRole("tab")).toHaveCount(4)
+})
+
+test("editor resize handle sits on the central pane and responds to the keyboard", async ({
+  page,
+}) => {
+  await page.goto("/dev/editor-chrome/")
+  const handle = page.getByRole("separator", {
+    name: "Resize Code Editor files",
+  })
+  await expect(handle).toBeVisible()
+  expect(
+    await handle.evaluate((node) => !!node.parentElement?.querySelector("main"))
+  ).toBe(true)
+  const before = Number(await handle.getAttribute("aria-valuenow"))
+  await handle.focus()
+  await page.keyboard.press("ArrowRight")
+  await expect
+    .poll(async () => Number(await handle.getAttribute("aria-valuenow")))
+    .toBeGreaterThan(before)
 })

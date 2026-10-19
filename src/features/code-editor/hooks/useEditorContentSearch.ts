@@ -14,7 +14,8 @@ import { dirty, getEditor, useEditorStore } from "../stores/editor.store"
 export function useEditorContentSearch(
   repositoryId: string,
   query: string,
-  enabled: boolean
+  enabled: boolean,
+  includeUnsaved = true
 ) {
   const [generation, setGeneration] = useState(0)
   const key = JSON.stringify([repositoryId, query])
@@ -30,7 +31,7 @@ export function useEditorContentSearch(
       owner: crypto.randomUUID(),
       initial: cache.current.key === key ? cache.current.result : undefined,
       buffers: () =>
-        (getEditor(repositoryId)?.buffers ?? [])
+        (includeUnsaved ? (getEditor(repositoryId)?.buffers ?? []) : [])
           .filter((buffer) => dirty(buffer) && !buffer.path.startsWith("file:"))
           .map(({ path, version, text }) => ({ path, version, text })),
       publish: (snapshot) => {
@@ -48,6 +49,7 @@ export function useEditorContentSearch(
     })
     let previous = getEditor(repositoryId)?.buffers
     const stopBuffers = useEditorStore.subscribe(() => {
+      if (!includeUnsaved) return
       const buffers = getEditor(repositoryId)?.buffers
       if (buffers === previous) return
       const old = new Map(
@@ -76,7 +78,7 @@ export function useEditorContentSearch(
       stopFiles()
       stopBuffers()
     }
-  }, [repositoryId, query, enabled, key, generation])
+  }, [repositoryId, query, enabled, key, generation, includeUnsaved])
   const current = enabled && state?.key === key ? state : undefined
   return {
     refresh: () => setGeneration((value) => value + 1),

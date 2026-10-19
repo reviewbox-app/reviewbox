@@ -13,11 +13,13 @@ export function SortableEditorTab({
   buffer,
   selected,
   onSelect,
+  onKeepOpen,
   onClose,
   onNavigate,
 }: {
   buffer: EditorBuffer
   selected: boolean
+  onKeepOpen: (path: string) => void
   onSelect: (path: string) => void
   onClose: (buffer: EditorBuffer) => void
   onNavigate: (event: KeyboardEvent<HTMLButtonElement>) => void
@@ -58,13 +60,16 @@ export function SortableEditorTab({
         title={buffer.path}
         className={`flex h-full w-full min-w-0 touch-none items-center gap-2 rounded-lg p-1 pr-2 text-xs transition-all duration-150 outline-none select-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-foreground/5" : "hover:bg-foreground/5"}`}
         onClick={() => onSelect(buffer.path)}
+        onDoubleClick={() => onKeepOpen(buffer.path)}
         onKeyDown={(event) => {
           listeners?.onKeyDown?.(event)
           if (!event.defaultPrevented && !isSorting) onNavigate(event)
         }}
       >
         <FileIcon path={buffer.path} size={20} />
-        <span className="max-w-56 truncate">
+        <span
+          className={`max-w-56 truncate ${buffer.temporary ? "italic" : ""}`}
+        >
           {buffer.path.split("/").at(-1)}
         </span>
       </button>

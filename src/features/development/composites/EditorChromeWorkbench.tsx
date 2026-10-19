@@ -130,6 +130,7 @@ export function EditorChromeWorkbench() {
         className="mb-4 rounded-panel border bg-card"
       >
         <EditorTabs
+          onKeepOpen={() => {}}
           onMove={(source, target, after) =>
             setBuffers((current) =>
               moveEditorBuffer(current, source, target, after)

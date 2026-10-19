@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test"
 test.beforeEach(async ({ page }) => {
   await page.goto("/dev/editor-chrome/")
   await expect(
-    page.getByRole("button", { name: "Create file or folder" })
+    page.getByRole("button", { name: "Explorer actions" })
   ).toBeVisible()
 })
 

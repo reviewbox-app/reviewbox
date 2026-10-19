@@ -26,11 +26,13 @@ export function EditorTabs({
   buffers,
   active,
   onSelect,
+  onKeepOpen,
   onClose,
   onMove,
 }: {
   buffers: EditorBuffer[]
   active: string
+  onKeepOpen: (path: string) => void
   onSelect: (path: string) => void
   onClose: (buffer: EditorBuffer) => void
   onMove: (source: string, target: string, after: boolean) => void
@@ -110,6 +112,7 @@ export function EditorTabs({
               buffer={buffer}
               selected={buffer.path === active}
               onSelect={onSelect}
+              onKeepOpen={onKeepOpen}
               onClose={onClose}
               onNavigate={(event) => {
                 const next =

@@ -2,18 +2,12 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
-  Add01Icon,
   FileAddIcon,
   FolderAddIcon,
   Edit02Icon,
   Delete02Icon,
 } from "@hugeicons/core-free-icons"
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu"
+
 import {
   canCreateProjectFile,
   editableProjectPath,
@@ -21,7 +15,6 @@ import {
 } from "../helpers/editorPaths"
 import { EditorTabs } from "../components/EditorTabs"
 import { useEditorMenu } from "../hooks/useEditorMenu"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { EditorSearchMatch } from "@/lib/desktop/contracts.generated"
 import { EditorSearchResults } from "../components/EditorSearchResults"
 import { useEditorContentSearch } from "../hooks/useEditorContentSearch"
@@ -38,7 +31,7 @@ import {
   EmptyContent,
 } from "@/components/ui/empty"
 import { Button } from "@/components/ui/button"
-import { FileTreeSearch } from "@/features/file-tree/components/FileTreeSearch"
+import { FileTreeToolbar } from "@/features/file-tree/components/FileTreeToolbar"
 import {
   Dialog,
   DialogContent,
@@ -59,6 +52,7 @@ import { CodeDiffEditor } from "../components/CodeDiffEditor"
 import { editorCommands } from "../services/editor.commands"
 import {
   closeBuffer,
+  keepEditorFile,
   moveEditorBuffer,
   dirty,
   editorError,
@@ -86,6 +80,7 @@ export function CodeEditorWorkspace({
 }) {
   const session = useEditorStore((s) => s.sessions[id])
   useEditorMenu(id, session)
+  const filesPanel = useRef<HTMLElement>(null)
   const navigationRequest = useRef(0)
   const entries = session?.entries
   const ignoredPaths = session?.ignoredPaths
@@ -209,66 +204,43 @@ export function CodeEditorWorkspace({
         data-resize-workspace
       >
         <aside
+          ref={filesPanel}
           aria-label="Code Editor files"
           className="relative flex w-[clamp(180px,var(--explain-files-width,272px),30%)] shrink-0 flex-col gap-2"
         >
-          <FileTreeSearch
-            label={
-              searching && searchMode === "content"
-                ? "Search file contents"
-                : "Filter files"
-            }
+          <FileTreeToolbar
             value={session.filter}
             onChange={(filter) => updateEditor(id, (s) => ({ ...s, filter }))}
-          >
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Create file or folder"
-                  />
-                }
-              >
-                <HugeiconsIcon icon={Add01Icon} />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem
-                  onClick={() =>
-                    setAction({ kind: "file", path: "", revision: "" })
-                  }
-                >
-                  <HugeiconsIcon icon={FileAddIcon} />
-                  New file
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() =>
-                    setAction({ kind: "folder", path: "", revision: "" })
-                  }
-                >
-                  <HugeiconsIcon icon={FolderAddIcon} />
-                  New folder
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </FileTreeSearch>
-          {searching && (
-            <Tabs
-              value={searchMode}
-              onValueChange={(value) =>
-                updateEditor(id, (s) => ({
-                  ...s,
-                  searchMode: value === "content" ? "content" : "file",
-                }))
-              }
-            >
-              <TabsList aria-label="Search mode" className="w-full">
-                <TabsTrigger value="file">File</TabsTrigger>
-                <TabsTrigger value="content">Content</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          )}
+            mode={searchMode}
+            onModeChange={(searchMode) =>
+              updateEditor(id, (s) => ({ ...s, searchMode }))
+            }
+            paths={treePaths}
+            expandedPaths={[...session.toggledFolders]}
+            disabled={searching}
+            onExpand={(expandedPaths) => {
+              updateTree((tree) => ({ ...tree, expandedPaths }))
+              updateEditor(id, (s) => ({
+                ...s,
+                toggledFolders: new Set(expandedPaths),
+              }))
+              report(
+                refreshEditor(id, {
+                  repositoryId: id,
+                  paths: [],
+                  tree: true,
+                  git: false,
+                  full: false,
+                })
+              )
+            }}
+            onNewFile={() =>
+              setAction({ kind: "file", path: "", revision: "" })
+            }
+            onNewFolder={() =>
+              setAction({ kind: "folder", path: "", revision: "" })
+            }
+          />
           <nav
             ref={attachTree}
             onScroll={saveTreeScroll}
@@ -333,8 +305,9 @@ export function CodeEditorWorkspace({
                       ...tree,
                       selectedPath: path,
                     }))
-                    report(openEditorFile(id, path))
+                    report(openEditorFile(id, path, true, true))
                   }}
+                  onKeepOpen={(path) => report(openEditorFile(id, path))}
                   renderRow={(row, target) => (
                     <FileMenu
                       row={row}
@@ -426,81 +399,88 @@ export function CodeEditorWorkspace({
               </>
             )}
           </nav>
+        </aside>
+        <div className="relative flex min-h-0 min-w-0 flex-1">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-panel border bg-card">
+            <EditorTabs
+              onKeepOpen={(path) => keepEditorFile(id, path)}
+              onMove={(source, target, after) =>
+                updateEditor(id, (s) => ({
+                  ...s,
+                  buffers: moveEditorBuffer(s.buffers, source, target, after),
+                }))
+              }
+              buffers={session.buffers}
+              active={session.active}
+              onSelect={(path) => {
+                navigationRequest.current++
+                updateEditor(id, (s) => ({ ...s, active: path }))
+              }}
+              onClose={(buffer) =>
+                dirty(buffer)
+                  ? setClosing(buffer.id)
+                  : closeBuffer(id, buffer.id)
+              }
+            />
+            {active ? (
+              <EditorFileView
+                key={active.id}
+                repositoryId={id}
+                buffer={active}
+                onSave={() =>
+                  active.external !== undefined
+                    ? setConflict(active.id)
+                    : report(saveBuffer(id, active.id))
+                }
+                onConflict={() => setConflict(active.id)}
+              />
+            ) : (
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <HugeiconsIcon icon={FileAddIcon} />
+                  </EmptyMedia>
+                  <EmptyTitle>
+                    {session.ready
+                      ? "Open a file to start editing"
+                      : "Reading project files…"}
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    Select a file in the explorer or create one in this project.
+                  </EmptyDescription>
+                </EmptyHeader>
+                {session.ready && (
+                  <EmptyContent className="flex-row justify-center">
+                    <Button
+                      onClick={() =>
+                        setAction({ kind: "file", path: "", revision: "" })
+                      }
+                    >
+                      <HugeiconsIcon icon={FileAddIcon} />
+                      New file
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() =>
+                        setAction({ kind: "folder", path: "", revision: "" })
+                      }
+                    >
+                      <HugeiconsIcon icon={FolderAddIcon} />
+                      New folder
+                    </Button>
+                  </EmptyContent>
+                )}
+              </Empty>
+            )}
+          </main>
           <SidebarResizeHandle
             name="Code Editor files"
             property="--explain-files-width"
             maxRatio={0.3}
+            panelRef={filesPanel}
+            edge="left"
           />
-        </aside>
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-panel border bg-card">
-          <EditorTabs
-            onMove={(source, target, after) =>
-              updateEditor(id, (s) => ({
-                ...s,
-                buffers: moveEditorBuffer(s.buffers, source, target, after),
-              }))
-            }
-            buffers={session.buffers}
-            active={session.active}
-            onSelect={(path) => {
-              navigationRequest.current++
-              updateEditor(id, (s) => ({ ...s, active: path }))
-            }}
-            onClose={(buffer) =>
-              dirty(buffer) ? setClosing(buffer.id) : closeBuffer(id, buffer.id)
-            }
-          />
-          {active ? (
-            <EditorFileView
-              key={active.id}
-              repositoryId={id}
-              buffer={active}
-              onSave={() =>
-                active.external !== undefined
-                  ? setConflict(active.id)
-                  : report(saveBuffer(id, active.id))
-              }
-              onConflict={() => setConflict(active.id)}
-            />
-          ) : (
-            <Empty>
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <HugeiconsIcon icon={FileAddIcon} />
-                </EmptyMedia>
-                <EmptyTitle>
-                  {session.ready
-                    ? "Open a file to start editing"
-                    : "Reading project files…"}
-                </EmptyTitle>
-                <EmptyDescription>
-                  Select a file in the explorer or create one in this project.
-                </EmptyDescription>
-              </EmptyHeader>
-              {session.ready && (
-                <EmptyContent className="flex-row justify-center">
-                  <Button
-                    onClick={() =>
-                      setAction({ kind: "file", path: "", revision: "" })
-                    }
-                  >
-                    <HugeiconsIcon icon={FileAddIcon} />
-                    New file
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() =>
-                      setAction({ kind: "folder", path: "", revision: "" })
-                    }
-                  >
-                    <HugeiconsIcon icon={FolderAddIcon} />
-                    New folder
-                  </Button>
-                </EmptyContent>
-              )}
-            </Empty>
-          )}
-        </main>
+        </div>
       </div>
       {action && (
         <EditorFileDialog
