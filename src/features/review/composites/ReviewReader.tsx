@@ -1,4 +1,5 @@
 "use client"
+import type { SourceSearchTarget } from "@/features/code-editor/contracts/sourceSelection.types"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -383,7 +384,9 @@ export function ReviewReader({
     setExplanationRequested(true)
     setView("code")
   }
+  const [searchTarget, setSearchTarget] = useState<SourceSearchTarget>()
   const selectFile = (fileId: string, changeId?: string) => {
+    setSearchTarget(undefined)
     setPinned(null)
     onSelectFile(fileId, changeId)
     setView("code")
@@ -527,6 +530,10 @@ export function ReviewReader({
             selectedId={displayedFile?.id ?? null}
             visible={showFiles}
             onSelect={selectFile}
+            onMatch={(fileId, match) => {
+              selectFile(fileId, match.changeId)
+              setSearchTarget({ ...match, token: crypto.randomUUID() })
+            }}
             onError={(message) => setFileFailure({ key: contentKey, message })}
           />
         )}
@@ -606,6 +613,11 @@ export function ReviewReader({
                         : undefined
                     }
                     key={`${snapshot.id}/${change.id}`}
+                    searchTarget={
+                      searchTarget?.path === change.path
+                        ? searchTarget
+                        : undefined
+                    }
                     snapshot={snapshot}
                     change={change}
                     passage={passage}

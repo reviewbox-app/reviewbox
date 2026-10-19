@@ -2,7 +2,10 @@
 import { useMemo, useRef, useImperativeHandle } from "react"
 import type { Ref } from "react"
 import type { BlockDiffHandle } from "@/features/code-editor/contracts/blockDiff.types"
-import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
+import type {
+  SourceSearchTarget,
+  SourceSelection,
+} from "@/features/code-editor/contracts/sourceSelection.types"
 import { BlockDiff } from "@/features/code-editor/components/BlockDiff"
 import type { SourceReadingPoint } from "@/features/markdown/contracts/documentDiff.types"
 import type {
@@ -40,6 +43,8 @@ export function ReviewSourceCode({
   onCursor,
   handle,
   onCommentSelection,
+  searchTarget,
+  inspectionRepositoryId,
 }: {
   snapshot: Pick<Snapshot, "id">
   change: Change
@@ -59,6 +64,8 @@ export function ReviewSourceCode({
   onCounts: (value: { added: number; removed: number }) => void
   onCursor: (value: { line: number; column: number }) => void
   handle: Ref<SourceViewHandle>
+  inspectionRepositoryId?: string
+  searchTarget?: SourceSearchTarget
   onCommentSelection?: (selection: SourceSelection | null) => void
 }) {
   const view = useRef<BlockDiffHandle>(null)
@@ -80,6 +87,15 @@ export function ReviewSourceCode({
     oldStart = 0,
   } = passage ?? {}
   const target = useMemo(() => {
+    if (searchTarget)
+      return {
+        side: searchTarget.side,
+        start: searchTarget.line,
+        end: searchTarget.line,
+        column: searchTarget.column,
+        endColumn: searchTarget.column + searchTarget.length,
+        identity: searchTarget.token,
+      }
     if (!selection || (!newLines && !oldLines)) return undefined
     const side = newLines ? ("after" as const) : ("before" as const)
     const start = newLines ? newStart : oldStart
@@ -89,7 +105,7 @@ export function ReviewSourceCode({
       end: start + Math.max(newLines || oldLines, 1) - 1,
       identity: selection,
     }
-  }, [newLines, newStart, oldLines, oldStart, selection])
+  }, [newLines, newStart, oldLines, oldStart, selection, searchTarget])
   const resume =
     point ??
     saved?.point ??
@@ -102,6 +118,8 @@ export function ReviewSourceCode({
       key={`${snapshot.id}/${change.id}/${modelScope}`}
       before={content.before ?? ""}
       after={content.after ?? ""}
+      inspectionRepositoryId={inspectionRepositoryId}
+      sourcePath={change.path}
       language={languageFor(change.path)}
       modelPath={`reviewbox://${snapshot.id}/${change.id}/${modelScope}/${change.path}`}
       beforeDocument={

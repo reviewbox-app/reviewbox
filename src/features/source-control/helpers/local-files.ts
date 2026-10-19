@@ -53,3 +53,19 @@ export function localFileGroups(files: LocalFile[]) {
     staged: files.filter((file) => file.stagedStatus && !file.conflicted),
   }
 }
+
+/** Choose a neighbour in the displayed order, excluding the entire staged batch. */
+export function nextLocalFile(
+  order: string[],
+  eligible: ReadonlySet<string>,
+  current: string
+) {
+  const index = order.indexOf(current)
+  return (
+    order.slice(index + 1).find((path) => eligible.has(path)) ??
+    order
+      .slice(0, Math.max(0, index))
+      .reverse()
+      .find((path) => eligible.has(path))
+  )
+}

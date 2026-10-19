@@ -1,7 +1,12 @@
 import { FileMenu } from "@/features/file-tree/components/FileMenu"
 import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import { useScrollEdgeMask } from "@/hooks/use-scroll-edge-mask"
-import { FileTreeSearch } from "@/features/file-tree/components/FileTreeSearch"
+import { FileTreeToolbar } from "@/features/file-tree/components/FileTreeToolbar"
+import { FileTreeSearchResults } from "@/features/file-tree/components/FileTreeSearchResults"
+import {
+  useReviewContentSearch,
+  type ReviewSearchMatch,
+} from "../hooks/useReviewContentSearch"
 import { useFileTreeNavigation } from "@/features/file-tree/hooks/useFileTreeNavigation"
 import {
   FileTree,
@@ -17,6 +22,7 @@ export function ReviewFiles({
   selectedId,
   visible,
   onSelect,
+  onMatch,
   onError,
 }: {
   workspace: Workspace
@@ -24,8 +30,15 @@ export function ReviewFiles({
   visible: boolean
   onError: (message: string) => void
   onSelect: (fileId: string) => void
+  onMatch: (fileId: string, match: ReviewSearchMatch) => void
 }) {
   const [filter, setFilter] = useState("")
+  const [mode, setMode] = useState<"file" | "content">("file")
+  const content = useReviewContentSearch(
+    workspace,
+    filter,
+    !!filter.trim() && mode === "content"
+  )
   const scrollMask = useScrollEdgeMask<HTMLElement>()
   const navigation = useFileTreeNavigation(
     workspace.snapshot.repositoryId,
@@ -77,10 +90,17 @@ export function ReviewFiles({
   }
   return (
     <div className="flex h-full flex-col gap-2 p-2">
-      <FileTreeSearch
+      <FileTreeToolbar
         value={filter}
         onChange={setFilter}
-        placeholder={`Filter ${review.files.length} files`}
+        mode={mode}
+        onModeChange={setMode}
+        paths={review.files.map((file) => file.path)}
+        expandedPaths={navigation.value.expandedPaths}
+        disabled={!!filter.trim() || !navigation.ready}
+        onExpand={(expandedPaths) =>
+          navigation.update((tree) => ({ ...tree, expandedPaths }))
+        }
       />
       <nav
         ref={attachViewport}
@@ -88,31 +108,44 @@ export function ReviewFiles({
         aria-label="Review files"
         className="min-h-0 flex-1 overflow-auto"
       >
-        <FileTree
-          paths={paths}
-          selected={
-            review.files.find((file) => file.id === selectedId)?.path ?? ""
-          }
-          marks={marks}
-          reviewedPaths={reviewedTreePaths(workspace)}
-          statuses={capturedFileStatuses(snapshot.changes)}
-          renderRow={(row, target) => (
-            <FileMenu
-              row={row}
-              repositoryId={snapshot.repositoryId}
-              path={target.path}
-              onError={onError}
-            />
-          )}
-          alwaysExpanded={!!filter.trim()}
-          toggledFolders={new Set(navigation.value.expandedPaths)}
-          onToggleFolder={navigation.toggle}
-          onSelect={(path) => {
-            navigation.update((tree) => ({ ...tree, selectedPath: path }))
-            const file = review.files.find((item) => item.path === path)
-            if (file) onSelect(file.id)
-          }}
-        />
+        {filter.trim() && mode === "content" ? (
+          <FileTreeSearchResults
+            {...content}
+            scopeLabel="Captured review files · before and after"
+            onSelect={(match) => {
+              const file = review.files.find((file) =>
+                file.changeIds.includes(match.changeId)
+              )
+              if (file) onMatch(file.id, match)
+            }}
+          />
+        ) : (
+          <FileTree
+            paths={paths}
+            selected={
+              review.files.find((file) => file.id === selectedId)?.path ?? ""
+            }
+            marks={marks}
+            reviewedPaths={reviewedTreePaths(workspace)}
+            statuses={capturedFileStatuses(snapshot.changes)}
+            renderRow={(row, target) => (
+              <FileMenu
+                row={row}
+                repositoryId={snapshot.repositoryId}
+                path={target.path}
+                onError={onError}
+              />
+            )}
+            alwaysExpanded={!!filter.trim()}
+            toggledFolders={new Set(navigation.value.expandedPaths)}
+            onToggleFolder={navigation.toggle}
+            onSelect={(path) => {
+              navigation.update((tree) => ({ ...tree, selectedPath: path }))
+              const file = review.files.find((item) => item.path === path)
+              if (file) onSelect(file.id)
+            }}
+          />
+        )}
       </nav>
     </div>
   )

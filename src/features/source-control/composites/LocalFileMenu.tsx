@@ -33,6 +33,7 @@ export function LocalFileMenu({
   targets,
   select,
   git,
+  onStage,
 }: {
   row: ReactElement
   path: string
@@ -41,6 +42,7 @@ export function LocalFileMenu({
   targets: () => LocalFile[]
   select: (files: LocalFile[]) => void
   git: SourceControlSession
+  onStage?: (files: LocalFile[], staged: boolean) => Promise<void>
 }) {
   const [snapshot, setSnapshot] = useState<LocalFile[]>([])
   const [confirm, setConfirm] = useState(false)
@@ -74,9 +76,11 @@ export function LocalFileMenu({
             <ContextMenuItem
               disabled={disabled}
               onClick={() =>
-                void git.mutate(() =>
-                  commands.stageFiles(repositoryId, selections, !staged)
-                )
+                void (onStage
+                  ? onStage(snapshot, staged)
+                  : git.mutate(() =>
+                      commands.stageFiles(repositoryId, selections, !staged)
+                    ))
               }
             >
               <HugeiconsIcon icon={staged ? MinusSignIcon : Add01Icon} />

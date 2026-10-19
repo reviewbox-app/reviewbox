@@ -15,24 +15,47 @@ import { languageFor } from "@/features/review/helpers/review.helpers"
 import { reviewReaderLayout } from "@/features/review/reader.config"
 
 import { observeSourceSelection } from "@/features/code-editor/services/sourceSelection"
-import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
+import type {
+  SourceSearchTarget,
+  SourceSelection,
+} from "@/features/code-editor/contracts/sourceSelection.types"
 
 /** Live unchanged files are inspected without creating a review or an editable buffer. */
 export function LocalSourceFile({
   repositoryId,
   path,
   onSelection,
+  searchTarget,
 }: {
+  searchTarget?: SourceSearchTarget
   repositoryId: string
   path: string
   onSelection: (file: EditorFile, selection: SourceSelection | null) => void
 }) {
+  const instance = useRef<
+    import("monaco-editor").editor.IStandaloneCodeEditor | null
+  >(null)
+  const reveal = () => {
+    const editor = instance.current
+    if (!editor || !searchTarget) return
+    const range = editor.getModel()?.validateRange({
+      startLineNumber: searchTarget.line,
+      endLineNumber: searchTarget.line,
+      startColumn: searchTarget.column,
+      endColumn: searchTarget.column + searchTarget.length,
+    })
+    if (range) {
+      editor.setSelection(range)
+      editor.revealRangeInCenter(range)
+    }
+  }
   const current = useRef({ file: null as EditorFile | null, onSelection })
   const observer = useRef<{ dispose: () => void } | null>(null)
   useEffect(() => () => observer.current?.dispose(), [])
   const { resolvedTheme } = useTheme()
   const [file, setFile] = useState<EditorFile | null>(null)
   const [error, setError] = useState("")
+  useEffect(reveal, [searchTarget, file?.text])
   useLayoutEffect(() => {
     current.current = { file, onSelection }
   }, [file, onSelection])
@@ -91,7 +114,10 @@ export function LocalSourceFile({
         </p>
       ) : (
         <CodeEditor
+          inspectionDocument={{ repositoryId, path }}
           onMount={(editor) => {
+            instance.current = editor
+            reveal()
             observer.current?.dispose()
             observer.current = observeSourceSelection(
               editor,
@@ -105,6 +131,7 @@ export function LocalSourceFile({
           height="100%"
           path={`reviewbox-local://${repositoryId}/${path}`}
           value={file?.text ?? ""}
+          sourcePath={path}
           language={languageFor(path)}
           theme={reviewboxTheme(resolvedTheme !== "light")}
           options={{

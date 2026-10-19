@@ -1,4 +1,5 @@
 "use client"
+import type { SourceSearchTarget } from "@/features/code-editor/contracts/sourceSelection.types"
 import { reviewReaderLayout } from "../reader.config"
 
 import { Badge } from "@/components/ui/badge"
@@ -65,9 +66,13 @@ export function ReviewCodePane({
   modelScope = "reader",
   source,
   onCommentSelection,
+  searchTarget,
+  inspectionRepositoryId,
 }: {
   /** Each simultaneous diff owns distinct Monaco models and their lifecycle. */
   modelScope?: "reader" | "reference" | "local"
+  inspectionRepositoryId?: string
+  searchTarget?: SourceSearchTarget
   source?: FileContent
   onCommentSelection?: (selection: SourceSelection | null) => void
   snapshot: Pick<Snapshot, "id">
@@ -115,6 +120,7 @@ export function ReviewCodePane({
     selection,
   }))
   const markdown =
+    !searchTarget &&
     compatible &&
     choice.mode === "markdown" &&
     (modelScope !== "reference" || choice.selection === selection)
@@ -318,6 +324,8 @@ export function ReviewCodePane({
             />
           ) : (
             <SourceCode
+              inspectionRepositoryId={inspectionRepositoryId}
+              searchTarget={searchTarget}
               onCommentSelection={onCommentSelection}
               snapshot={snapshot}
               change={change}

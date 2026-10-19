@@ -1,4 +1,5 @@
 "use client"
+import type { SourceSearchTarget } from "@/features/code-editor/contracts/sourceSelection.types"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
@@ -14,7 +15,9 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select"
-import { FileTreeSearch } from "@/features/file-tree/components/FileTreeSearch"
+import { FileTreeToolbar } from "@/features/file-tree/components/FileTreeToolbar"
+import { FileTreeSearchResults } from "@/features/file-tree/components/FileTreeSearchResults"
+import { useEditorContentSearch } from "@/features/code-editor/hooks/useEditorContentSearch"
 import { FileMenu } from "@/features/file-tree/components/FileMenu"
 import {
   treeNavigation,
@@ -30,14 +33,19 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { FileTreeExpansion } from "@/features/file-tree/components/FileTreeExpansion"
-import { folderPaths } from "@/features/file-tree/helpers/tree.helpers"
+import {
+  folderPaths,
+  orderedTreeFiles,
+} from "@/features/file-tree/helpers/tree.helpers"
+import { groupFiles } from "@/features/file-tree/helpers/groupFiles.helpers"
+import { GroupedFileTree } from "@/features/file-tree/components/GroupedFileTree"
 import { FileTree } from "@/features/file-tree/components/FileTree"
 import { ReviewCodePane } from "@/features/review/composites/ReviewCodePane"
 import { reviewReaderLayout } from "@/features/review/reader.config"
 import { useScrollEdgeMask } from "@/hooks/use-scroll-edge-mask"
 import type {
   LocalFileDiff,
+  LocalFile,
   ReadingPosition,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
@@ -53,6 +61,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   availableLayer,
+  nextLocalFile,
   fullyStagedPaths,
   localFileStatuses,
   localFileGroups,
@@ -99,8 +108,23 @@ export function LocalChanges({
     paths: new Set<string>(),
     anchor: "",
   })
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const changedGroups = useMemo(
+    () => groupFiles(state?.files.map((file) => file.path) ?? []),
+    [state?.files]
+  )
+  const [fileLayout, setFileLayout] = useState("grouped")
+  const ChangesTree = fileLayout === "grouped" ? GroupedFileTree : FileTree
   const [preferredLayer, setPreferredLayer] = useState("unstaged")
+  const [searchTarget, setSearchTarget] = useState<SourceSearchTarget>()
   const [filter, setFilter] = useState("")
+  const [searchMode, setSearchMode] = useState<"file" | "content">("file")
+  const contentSearch = useEditorContentSearch(
+    state?.repositoryId ?? "",
+    filter.trim(),
+    !!state && !!filter.trim() && searchMode === "content",
+    false
+  )
   const [searchExpansion, setSearchExpansion] = useState({
     key: "",
     paths: [] as string[],
@@ -114,6 +138,16 @@ export function LocalChanges({
   const navigation = useFileTreeNavigation(
     state?.repositoryId ?? "",
     "local",
+    !!filter.trim()
+  )
+  const stagedTree = useFileTreeNavigation(
+    state?.repositoryId ?? "",
+    "local:staged:tree",
+    !!filter.trim()
+  )
+  const stagedGroups = useFileTreeNavigation(
+    state?.repositoryId ?? "",
+    "local:staged:groups",
     !!filter.trim()
   )
   const noChanges = !!state && state.files.length === 0
@@ -133,11 +167,13 @@ export function LocalChanges({
   const inventory = useEditorInventory(
     state?.repositoryId,
     navigation.value.expandedPaths,
-    allFiles && navigation.ready
+    (allFiles || !!filter.trim()) && navigation.ready
   )
   const chosen = navigation.value.selectedPath ?? ""
-  const setChosen = (path: string) =>
+  const setChosen = (path: string) => {
+    setSearchTarget(undefined)
     navigation.update((tree) => ({ ...tree, selectedPath: path }))
+  }
   const existing = inventory.entries.some(
     (entry) => !entry.directory && entry.path === chosen
   )
@@ -165,6 +201,7 @@ export function LocalChanges({
           !filter.trim() ||
           (!entry.directory &&
             !entry.excluded &&
+            !entry.ignored &&
             entry.path.toLowerCase().includes(filter.trim().toLowerCase()))
       )
       .map((entry) => entry.path + (entry.directory ? "/" : ""))
@@ -172,11 +209,12 @@ export function LocalChanges({
     for (const file of state?.files ?? [])
       if (
         !filter.trim() ||
-        file.path.toLowerCase().includes(filter.trim().toLowerCase())
+        (!ignoredPaths.has(file.path) &&
+          file.path.toLowerCase().includes(filter.trim().toLowerCase()))
       )
         paths.push(file.path)
     return [...new Set(paths)]
-  }, [inventory.entries, state?.files, filter])
+  }, [inventory.entries, state?.files, filter, ignoredPaths])
   const searchKey = `${state?.repositoryId}/${filter}`
   const expandedPaths = filter.trim()
     ? searchExpansion.key === searchKey
@@ -239,7 +277,14 @@ export function LocalChanges({
       })
       .catch((cause) => {
         if (alive) {
-          setError(errorMessage(cause))
+          // A commit can invalidate a passive diff read before Git's refresh
+          // arrives. Refresh that read; mutation errors still remain visible.
+          const stale =
+            cause &&
+            typeof cause === "object" &&
+            "code" in cause &&
+            cause.code === "git_changed"
+          if (!stale) setError(errorMessage(cause))
           void reload().catch(() => {})
         }
       })
@@ -247,6 +292,94 @@ export function LocalChanges({
       alive = false
     }
   }, [path, version, repositoryId, layer, reload, setError])
+  const stageSelection = async (files: LocalFile[], staged: boolean) => {
+    if (
+      !state ||
+      busy ||
+      !files.length ||
+      files.some((file) => file.conflicted)
+    )
+      return
+    const removed = new Set(files.map((file) => file.path))
+    const stagingLayer = staged ? "staged" : "unstaged"
+    const order =
+      !allFiles && fileLayout === "grouped"
+        ? changedGroups.flatMap((group) => group.paths)
+        : orderedTreeFiles(state.files.map((entry) => entry.path))
+    const eligible = order.filter((candidate) => {
+      const entry = state.files.find((entry) => entry.path === candidate)
+      return (
+        !removed.has(candidate) &&
+        (staged ? entry?.stagedStatus : entry?.unstagedStatus) &&
+        (!filter.trim() ||
+          (searchMode === "content"
+            ? contentSearch.result?.matches.some(
+                (match) => match.path === candidate
+              )
+            : candidate.toLowerCase().includes(filter.trim().toLowerCase())))
+      )
+    })
+    const next = nextLocalFile(order, new Set(eligible), path ?? "")
+    const selectedBefore = chosen
+    const ok = await mutate(() =>
+      commands.stageFiles(
+        state.repositoryId,
+        files.map(({ path, version }) => ({ path, version })),
+        !staged
+      )
+    )
+    // Do not steal navigation if the user selected another file during the write.
+    if (
+      ok &&
+      removed.has(path ?? "") &&
+      layer === stagingLayer &&
+      next &&
+      (treeNavigation(state.repositoryId, "local")?.selectedPath ?? "") ===
+        selectedBefore
+    ) {
+      setChosen(next)
+      setPreferredLayer(stagingLayer)
+      setSelection({
+        layer: stagingLayer,
+        paths: new Set([next]),
+        anchor: next,
+      })
+      setPosition(initialPosition)
+    }
+  }
+  const stageCurrent = async () => {
+    if (
+      !file ||
+      !loaded ||
+      loaded.change.path !== file.path ||
+      loaded.change.layer !== layer ||
+      loaded.version !== file.version
+    )
+      return
+    await stageSelection([file], layer === "staged")
+  }
+  const stageAction = useRef(stageCurrent)
+  useEffect(() => {
+    stageAction.current = stageCurrent
+  })
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (
+        event.repeat ||
+        !(event.metaKey || event.ctrlKey) ||
+        !event.shiftKey ||
+        event.altKey ||
+        event.code !== "KeyS" ||
+        document.querySelector('[role="dialog"]')
+      )
+        return
+      event.preventDefault()
+      event.stopPropagation()
+      void stageAction.current()
+    }
+    window.addEventListener("keydown", key, true)
+    return () => window.removeEventListener("keydown", key, true)
+  }, [])
   if (!state)
     return (
       <p role="status" className="m-auto text-sm text-muted-foreground">
@@ -276,16 +409,67 @@ export function LocalChanges({
             : "w-0 opacity-0"
         )}
       >
-        <FileTreeSearch
+        <FileTreeToolbar
           value={filter}
           onChange={(value) => {
             setFilter(value)
             setSearchExpansion({ key: "", paths: [] })
           }}
-          label="Filter local files"
-          placeholder={
-            allFiles ? "Search files…" : `Filter ${state.files.length} files`
+          mode={searchMode}
+          onModeChange={setSearchMode}
+          paths={allFiles ? paths : state.files.map((file) => file.path)}
+          expandedPaths={
+            !allFiles && fileLayout === "grouped"
+              ? changedGroups
+                  .filter(
+                    (group) =>
+                      !collapsedGroups.has(group.path) ||
+                      stagedGroups.value.expandedPaths.includes(group.path)
+                  )
+                  .flatMap((group) =>
+                    group.path
+                      .split("/")
+                      .map((_, i, parts) => parts.slice(0, i + 1).join("/"))
+                  )
+              : !allFiles && !filter.trim()
+                ? [
+                    ...new Set([
+                      ...expandedPaths,
+                      ...stagedTree.value.expandedPaths,
+                    ]),
+                  ]
+                : expandedPaths
           }
+          onExpand={(paths) => {
+            if (!allFiles && !filter.trim()) {
+              const target =
+                fileLayout === "grouped" ? stagedGroups : stagedTree
+              target.update((value) => ({
+                ...value,
+                expandedPaths: paths.length
+                  ? fileLayout === "grouped"
+                    ? changedGroups.map((group) => group.path)
+                    : paths
+                  : [],
+              }))
+            }
+            if (!allFiles && fileLayout === "grouped")
+              setCollapsedGroups(
+                new Set(
+                  changedGroups
+                    .filter(
+                      (group) =>
+                        !(
+                          paths.includes(group.path) ||
+                          (!group.path && paths.length > 0)
+                        )
+                    )
+                    .map((group) => group.path)
+                )
+              )
+            else updateExpanded(() => paths)
+          }}
+          disabled={!navigation.ready}
         />
         <div className="flex items-center gap-2">
           <Select
@@ -312,22 +496,46 @@ export function LocalChanges({
               <SelectItem value="changes">Local changes</SelectItem>
             </SelectContent>
           </Select>
-          {allFiles && (
-            <FileTreeExpansion
-              paths={paths}
-              expandedPaths={expandedPaths}
-              onChange={updateExpanded}
-              disabled={!navigation.ready}
-            />
-          )}
         </div>
+        {!allFiles && (
+          <Tabs value={fileLayout} onValueChange={setFileLayout}>
+            <TabsList className="w-full" aria-label="File layout">
+              <TabsTrigger value="grouped">Grouped</TabsTrigger>
+              <TabsTrigger value="tree">Tree</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
         <nav
           aria-label="Changed files"
           ref={attachTree}
           onScroll={navigation.onScroll}
           className="min-h-0 flex-1 overflow-auto"
         >
-          {allFiles ? (
+          {filter.trim() && searchMode === "content" ? (
+            <FileTreeSearchResults
+              {...contentSearch}
+              result={
+                contentSearch.result && {
+                  ...contentSearch.result,
+                  matches: contentSearch.result.matches.filter(
+                    (match) =>
+                      allFiles ||
+                      state.files.some((file) => file.path === match.path)
+                  ),
+                }
+              }
+              scopeLabel="Saved files · ignored files excluded"
+              onSelect={(match) => {
+                setChosen(match.path)
+                setPreferredLayer("unstaged")
+                setSearchTarget({
+                  ...match,
+                  side: "after",
+                  token: crypto.randomUUID(),
+                })
+              }}
+            />
+          ) : allFiles ? (
             <>
               {inventory.error && (
                 <p role="alert" className="px-2 text-xs text-destructive">
@@ -360,8 +568,10 @@ export function LocalChanges({
             <div className="space-y-6 pb-3">
               {(["unstaged", "staged"] as const).map((group) => {
                 const files = groups[group]
-                const visible = files.filter((file) =>
-                  file.path.toLowerCase().includes(filter.toLowerCase())
+                const visible = files.filter(
+                  (file) =>
+                    (!filter.trim() || !ignoredPaths.has(file.path)) &&
+                    file.path.toLowerCase().includes(filter.toLowerCase())
                 )
                 return (
                   <section
@@ -376,12 +586,6 @@ export function LocalChanges({
                         {visible.length}
                       </h2>
                       <div className="flex items-center gap-2">
-                        <FileTreeExpansion
-                          paths={visible.map((file) => file.path)}
-                          expandedPaths={expandedPaths}
-                          onChange={updateExpanded}
-                          disabled={!navigation.ready}
-                        />
                         <Tooltip>
                           <TooltipTrigger
                             render={
@@ -429,7 +633,34 @@ export function LocalChanges({
                         </Tooltip>
                       </div>
                     </div>
-                    <FileTree
+                    <ChangesTree
+                      staged={group === "staged"}
+                      collapsedGroups={
+                        group === "staged"
+                          ? new Set(
+                              changedGroups
+                                .filter(
+                                  (item) =>
+                                    !stagedGroups.value.expandedPaths.includes(
+                                      item.path
+                                    )
+                                )
+                                .map((item) => item.path)
+                            )
+                          : collapsedGroups
+                      }
+                      onToggleGroup={(path: string) =>
+                        group === "staged"
+                          ? stagedGroups.toggle(path)
+                          : setCollapsedGroups((old) => {
+                              const next = new Set(old)
+                              if (next.has(path)) next.delete(path)
+                              else next.add(path)
+                              return next
+                            })
+                      }
+                      alwaysExpanded={!!filter.trim()}
+                      allPaths={state.files.map((file) => file.path)}
                       paths={visible.map((file) => file.path)}
                       selected={layer === group ? (path ?? "") : ""}
                       selectedPaths={
@@ -442,6 +673,7 @@ export function LocalChanges({
                           folder={target.folder}
                           staged={group === "staged"}
                           git={git}
+                          onStage={stageSelection}
                           targets={() =>
                             files.filter((file) =>
                               target.folder
@@ -474,8 +706,16 @@ export function LocalChanges({
                           : undefined
                       }
                       dimmedLabel="Staged."
-                      toggledFolders={new Set(expandedPaths)}
-                      onToggleFolder={toggleFolder}
+                      toggledFolders={
+                        new Set(
+                          group === "staged"
+                            ? stagedTree.value.expandedPaths
+                            : expandedPaths
+                        )
+                      }
+                      onToggleFolder={
+                        group === "staged" ? stagedTree.toggle : toggleFolder
+                      }
                       onSelect={(value, event, visiblePaths) => {
                         const sameLayer = selection.layer === group
                         setSelection({
@@ -566,6 +806,9 @@ export function LocalChanges({
               key={activePath}
               repositoryId={state.repositoryId}
               path={activePath}
+              searchTarget={
+                searchTarget?.path === activePath ? searchTarget : undefined
+              }
               onSelection={(source, value) =>
                 setCommentSelection(
                   value
@@ -593,6 +836,12 @@ export function LocalChanges({
             />
           ) : content ? (
             <ReviewCodePane
+              inspectionRepositoryId={state.repositoryId}
+              searchTarget={
+                searchTarget?.path === content.change.path
+                  ? searchTarget
+                  : undefined
+              }
               key={content.change.id}
               onCommentSelection={(value) => {
                 const anchor = value && commentAnchor("", content.change, value)
@@ -659,18 +908,12 @@ export function LocalChanges({
                 variant="secondary"
                 size="sm"
                 disabled={busy || !content || content.version !== file.version}
-                onClick={() =>
-                  void mutate(() =>
-                    commands.stage(
-                      state.repositoryId,
-                      file.path,
-                      file.version,
-                      layer !== "staged"
-                    )
-                  )
-                }
+                title="Stage / unstage and open next file (⌘⇧S / Ctrl+Shift+S)"
+                aria-keyshortcuts="Meta+Shift+S Control+Shift+S"
+                onClick={() => void stageCurrent()}
               >
                 {layer === "staged" ? "Unstage file" : "Stage file"}
+                <kbd className="ml-2 text-xs opacity-60">⌘⇧S / Ctrl⇧S</kbd>
               </Button>
             )
           )}
@@ -680,6 +923,7 @@ export function LocalChanges({
         open={committing}
         onOpenChange={setCommitting}
         state={state}
+        onCommitted={onBack}
         onFinished={async () => {
           await reload()
         }}

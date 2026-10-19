@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   availableLayer,
+  nextLocalFile,
   fullyStagedPaths,
   localFileStatuses,
   localFileGroups,
@@ -77,4 +78,12 @@ test("a partially staged file appears in both groups with each layer's status", 
   ])
   expect(localFileStatuses(groups.unstaged, "unstaged")[partial.path]).toBe("D")
   expect(localFileStatuses(groups.staged, "staged")[partial.path]).toBe("A")
+})
+
+test("staging advances in displayed order, skipping the batch and opposite layer", () => {
+  expect(nextLocalFile(["c", "a", "b", "d"], new Set(["c", "d"]), "a")).toBe(
+    "d"
+  )
+  expect(nextLocalFile(["c", "a", "b", "d"], new Set(["c"]), "d")).toBe("c")
+  expect(nextLocalFile(["only"], new Set(), "only")).toBeUndefined()
 })
