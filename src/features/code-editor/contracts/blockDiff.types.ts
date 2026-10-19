@@ -23,6 +23,8 @@ export type BlockDiffProps = {
   onCommentSelection?: (selection: SourceSelection | null) => void
   before: string
   after: string
+  inspectionRepositoryId?: string
+  sourcePath?: string
   language: string
   modelPath: string
   beforeDocument?: LanguageDocument
@@ -34,7 +36,14 @@ export type BlockDiffProps = {
   bottom: number
   inset: number
   point?: CodePoint
-  target?: { side: CodeSide; start: number; end: number; identity: unknown }
+  target?: {
+    side: CodeSide
+    start: number
+    end: number
+    column?: number
+    endColumn?: number
+    identity: unknown
+  }
   onCapture: (point: CodePoint) => void
   onCounts: (counts: { added: number; removed: number }) => void
   onCursor: (position: { line: number; column: number }) => void

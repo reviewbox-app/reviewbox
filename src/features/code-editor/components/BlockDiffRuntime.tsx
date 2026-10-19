@@ -1,4 +1,5 @@
 "use client"
+import { useSourceInspection } from "@/features/language-servers/hooks/useSourceInspection"
 import {
   useCallback,
   useEffect,
@@ -25,9 +26,13 @@ import {
   currentLine,
 } from "../helpers/blockDiff.helpers"
 import { BlockDiffZones } from "../services/BlockDiffZones"
+import { useSourceLanguage } from "@/features/language-servers/hooks/useSourceLanguage"
 import { BlockDiffSearch } from "./BlockDiffSearch"
 import surface from "./editor-surface.module.css"
 import "./block-diff.css"
+import "./change-decorations.css"
+import { bindReadOnlyFeatures } from "@/features/editor-extensions/services/readOnlyFeatures"
+import { bindChangeDecorations } from "../services/changeDecorations"
 
 type Runtime = {
   main: editor.IStandaloneCodeEditor
@@ -47,6 +52,11 @@ type Runtime = {
 type Match = { side: CodeSide; range: monaco.Range }
 
 export function BlockDiffRuntime(props: BlockDiffProps) {
+  const language = useSourceLanguage(
+    props.sourcePath ?? props.afterDocument?.path ?? props.beforeDocument?.path,
+    props.after || props.before,
+    props.language
+  )
   const host = useRef<HTMLDivElement>(null)
   const engineHost = useRef<HTMLDivElement>(null)
   const runtime = useRef<Runtime | null>(null)
@@ -56,6 +66,16 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
   })
   const { resolvedTheme } = useTheme()
   const theme = useCodeTheme(resolvedTheme !== "light")
+  const beforeInspection = useSourceInspection(
+    props.inspectionRepositoryId && props.sourcePath
+      ? { repositoryId: props.inspectionRepositoryId, path: props.sourcePath }
+      : undefined
+  )
+  const afterInspection = useSourceInspection(
+    props.inspectionRepositoryId && props.sourcePath
+      ? { repositoryId: props.inspectionRepositoryId, path: props.sourcePath }
+      : undefined
+  )
   const beforeServices = useEditorLanguageServices(props.beforeDocument)
   const afterServices = useEditorLanguageServices(props.afterDocument)
   const [search, setSearch] = useState(false)
@@ -101,8 +121,8 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
     [reveal]
   )
   useEffect(() => {
-    void ensureCodeLanguage(props.language).catch(() => {})
-  }, [props.language])
+    void ensureCodeLanguage(language).catch(() => {})
+  }, [language])
 
   useLayoutEffect(() => {
     if (!host.current || !engineHost.current) return
@@ -154,7 +174,10 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
       compare: () => latest.current.onCompare(true),
       changed: () => persist(),
       cursor: (line, column) => latest.current.onCursor({ line, column }),
-      find: () => setSearch(true),
+      find: (text) => {
+        if (text) setQuery(text)
+        setSearch(true)
+      },
       selection: (selection) => latest.current.onCommentSelection?.(selection),
     })
     const state: Runtime = {
@@ -204,11 +227,13 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
           const pending = state.pending
           state.pending = undefined
           reveal(pending.point, pending.end, pending.column, pending.endColumn)
-        } else if (restore && target) {
+        } else if (target && (restore || target.column !== undefined)) {
           zones.highlight(target)
           reveal(
             { side: target.side, line: target.start, fraction: 0 },
-            target.end
+            target.end,
+            target.column,
+            target.endColumn
           )
         } else if (point) reveal(point)
         restore = false
@@ -216,6 +241,10 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
         setError(cause instanceof Error ? cause.message : String(cause))
       }
     }
+    const beforeFeatures = bindReadOnlyFeatures(monaco, before)
+    const afterFeatures = bindReadOnlyFeatures(monaco, after)
+    const gutter = bindChangeDecorations(main, () => latest.current.before)
+    const originalChanges = before.onDidChangeContent(gutter.refresh)
     const listeners = [
       diff.onDidUpdateDiff(compute),
       main.onDidScrollChange(persist),
@@ -233,6 +262,8 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
         run: () => setSearch(true),
       }),
     ]
+    beforeInspection.bind(before, monaco)
+    afterInspection.bind(after, monaco)
     beforeServices.onMount(diff.getOriginalEditor(), monaco)
     afterServices.onMount(main, monaco)
     return () => {
@@ -240,6 +271,10 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
       if (state.ready) latest.current.onCapture(zones.capture())
       clearTimeout(timer)
       listeners.forEach((item) => item.dispose())
+      beforeFeatures.dispose()
+      afterFeatures.dispose()
+      gutter.dispose()
+      originalChanges.dispose()
       zones.dispose()
       main.setModel(null)
       diff.setModel(null)
@@ -257,12 +292,18 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
   useLayoutEffect(() => {
     const state = runtime.current
     if (!state) return
+    if (language) {
+      if (state.before.getLanguageId() !== language)
+        monaco.editor.setModelLanguage(state.before, language)
+      if (state.after.getLanguageId() !== language)
+        monaco.editor.setModelLanguage(state.after, language)
+    }
     if (state.before.getValue() !== props.before)
       state.before.setValue(props.before)
     if (state.after.getValue() !== props.after)
       state.after.setValue(props.after)
     state.diff.updateOptions({ ignoreTrimWhitespace: props.trimWhitespace })
-  }, [props.before, props.after, props.trimWhitespace])
+  }, [props.before, props.after, props.trimWhitespace, language])
   useLayoutEffect(() => {
     const state = runtime.current
     if (!state?.ready) return
@@ -289,7 +330,9 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
     state.zones.highlight(props.target)
     reveal(
       { side: props.target.side, line: props.target.start, fraction: 0 },
-      props.target.end
+      props.target.end,
+      props.target.column,
+      props.target.endColumn
     )
   }, [props.target, reveal])
   useEffect(() => {
@@ -360,6 +403,8 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
       onKeyDownCapture={(event) => {
         if (
           (event.metaKey || event.ctrlKey) &&
+          !event.shiftKey &&
+          !event.altKey &&
           event.key.toLowerCase() === "f"
         ) {
           event.preventDefault()
@@ -401,6 +446,8 @@ export function BlockDiffRuntime(props: BlockDiffProps) {
           {error}
         </div>
       )}
+      {beforeInspection.exploration}
+      {afterInspection.exploration}
       {beforeServices.exploration}
       {afterServices.exploration}
     </div>

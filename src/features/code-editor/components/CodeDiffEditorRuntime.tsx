@@ -10,6 +10,8 @@ import { useCodeTheme, codeEditorOptions } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
 
+import { bindReadOnlyFeatures } from "@/features/editor-extensions/services/readOnlyFeatures"
+
 import type { CodeDiffEditorProps } from "../contracts/codeEditor.types"
 
 export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
@@ -19,6 +21,11 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
     overlayTop = 0,
     ...editorProps
   } = props
+  const features = useRef<ReturnType<typeof bindReadOnlyFeatures>[]>([])
+  useEffect(
+    () => () => features.current.forEach((feature) => feature.dispose()),
+    []
+  )
   const services = useEditorLanguageServices(
     originalLanguageDocument,
     modifiedLanguageDocument
@@ -94,6 +101,14 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
           }}
           onMount={(mountedEditor, monaco) => {
             instance.current = mountedEditor
+            features.current.forEach((feature) => feature.dispose())
+            const models = mountedEditor.getModel()
+            features.current = models
+              ? [
+                  bindReadOnlyFeatures(monaco, models.original),
+                  bindReadOnlyFeatures(monaco, models.modified),
+                ]
+              : []
             mountedEditor
               .getOriginalEditor()
               .updateOptions({ "semanticHighlighting.enabled": true })

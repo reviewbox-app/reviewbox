@@ -8,6 +8,7 @@ import type {
   CodeSide,
 } from "../contracts/blockDiff.types"
 import { hideRanges, lineRange } from "./monacoHiddenRanges"
+import { bindSelectionSearch } from "./selectionSearch"
 import { observeSourceSelection } from "./sourceSelection"
 import type { SourceSelection } from "../contracts/sourceSelection.types"
 
@@ -50,7 +51,7 @@ export class BlockDiffZones {
       compare: () => void
       changed: () => void
       cursor: (line: number, column: number) => void
-      find: () => void
+      find: (text?: string) => void
       selection?: (selection: SourceSelection | null) => void
     }
   ) {
@@ -69,6 +70,7 @@ export class BlockDiffZones {
     )
     this.marks = main.createDecorationsCollection()
     this.listeners = [
+      bindSelectionSearch(monaco, main, (text) => this.callbacks.find(text)),
       observeSourceSelection(main, "after", (selection) =>
         this.callbacks.selection?.(selection)
       ),
@@ -352,6 +354,9 @@ export class BlockDiffZones {
           )
           this.callbacks.changed()
         }),
+        bindSelectionSearch(monaco, instance, (text) =>
+          this.callbacks.find(text)
+        ),
         instance.onDidFocusEditorText(() => {
           this.activeSide = side
           this.activeCell = cell
@@ -459,6 +464,9 @@ export class BlockDiffZones {
           : this.main.getTopForLineNumber(zone.block.anchor + 1) - zone.height
       this.main.setScrollTop(Math.max(0, absolute - 14))
       this.layout()
+      // Monaco may not have reported the zone geometry yet. Materialize the
+      // requested cell now so navigation cannot lose its exact selection.
+      if (!zone.cells.length) this.mount(zone)
       const cell = zone.cells.find((cell) => cell.side === point.side)
       if (cell) {
         const top = cell.editor.getTopForLineNumber(point.line)
@@ -470,6 +478,7 @@ export class BlockDiffZones {
               : (top + bottom) / 2 - viewport / 2
             : top + point.fraction * Math.max(1, bottom - top) - 14
         this.main.setScrollTop(Math.max(0, absolute + 28 + offset))
+        if (endColumn > column) cell.editor.focus()
         cell.editor.setSelection({
           startLineNumber: point.line,
           startColumn: column,
@@ -490,6 +499,7 @@ export class BlockDiffZones {
           ? 0
           : top - 14 + point.fraction * (bottom - top)
     this.main.setScrollTop(Math.max(0, offset))
+    if (endColumn > column) this.main.focus()
     this.main.setSelection({
       startLineNumber: point.line,
       startColumn: column,
