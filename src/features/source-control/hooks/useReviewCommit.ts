@@ -90,6 +90,7 @@ export function useReviewCommit(repositoryId: string, reviewId: string) {
   }
   return {
     state:
+      state?.operation.status !== "dismissed" &&
       state?.reviewId === reviewId &&
       state.operation.repositoryId === repositoryId
         ? state
@@ -98,5 +99,6 @@ export function useReviewCommit(repositoryId: string, reviewId: string) {
     start,
     stop,
     starting,
+    clearError: () => setError(""),
   }
 }

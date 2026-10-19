@@ -1,5 +1,5 @@
 "use client"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { AiMagicIcon, Tick02Icon } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
@@ -11,11 +11,9 @@ import {
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { useReviewCommit } from "../hooks/useReviewCommit"
 
-const phases = [
-  ["stage", "Stage changes"],
-  ["plan", "Prepare commits with Rev"],
-  ["commit", "Create commits"],
-] as const
+import { GitRecoveryActions } from "../components/GitRecoveryActions"
+
+const phases = [["commit", "Create commits with Rev"]] as const
 export function ReviewCommit({
   repositoryId,
   reviewId,
@@ -30,13 +28,27 @@ export function ReviewCommit({
   hasChanges?: boolean
 }) {
   const job = useReviewCommit(repositoryId, reviewId)
+  const activeCommit = useRef<string | null>(null)
+  const identity = `${repositoryId}:${reviewId}`
   const [copyMessage, setCopyMessage] = useState("")
   const unsaved = useEditorStore(
     (s) => s.sessions[repositoryId]?.buffers.some(dirty) ?? false
   )
   const operation = job.state?.operation
   const running = job.starting || operation?.status === "running"
-  const success = operation?.status === "completed"
+  const success =
+    operation?.status === "completed" && operation.commits.length > 0
+  useEffect(() => {
+    if (operation?.status === "running") activeCommit.current = identity
+    if (
+      operation?.status !== "completed" ||
+      !operation.commits.length ||
+      activeCommit.current !== identity
+    )
+      return
+    activeCommit.current = null
+    onFinish?.()
+  }, [identity, operation?.status, operation?.commits.length, onFinish])
   const error = job.error || operation?.error
   const phase = job.state?.phase
   const phaseIndex =
@@ -52,7 +64,10 @@ export function ReviewCommit({
         {!success && hasChanges !== false && (
           <Button
             disabled={running || hasChanges !== true}
-            onClick={() => void job.start()}
+            onClick={() => {
+              activeCommit.current = identity
+              void job.start()
+            }}
           >
             {running ? <Spinner /> : <HugeiconsIcon icon={AiMagicIcon} />}
             Stage &amp; commit with Rev
@@ -145,6 +160,13 @@ export function ReviewCommit({
           >
             Copy error details
           </Button>
+          <GitRecoveryActions
+            repositoryId={repositoryId}
+            error={error}
+            disabled={running}
+            onRecovered={job.clearError}
+            onRetry={job.start}
+          />
           {copyMessage && <p role="status">{copyMessage}</p>}
           {onConfigure && (
             <Button size="sm" variant="secondary" onClick={onConfigure}>

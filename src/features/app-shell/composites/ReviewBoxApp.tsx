@@ -1,4 +1,5 @@
 "use client"
+import { GitRecoveryActions } from "@/features/source-control/components/GitRecoveryActions"
 import { useEditorExtensions } from "@/features/editor-extensions/services/extensions.store"
 import { useEditorEngineStatus } from "@/features/editor-extensions/services/engines"
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -464,7 +465,21 @@ export function ReviewBoxApp() {
         space === "review" &&
         (local || overview || !workspace) && (
           <Alert className="mx-2 mb-2 w-auto" variant="destructive" size="sm">
-            <AlertDescription>{git.error}</AlertDescription>
+            <AlertDescription>
+              {git.error}
+              <GitRecoveryActions
+                repositoryId={repository.id}
+                error={git.error}
+                disabled={git.busy}
+                onRecovered={async () => {
+                  git.setError("")
+                  await git.reload()
+                }}
+                onRetry={async () => {
+                  await git.reload()
+                }}
+              />
+            </AlertDescription>
             <Button
               variant="ghost"
               size="icon-xs"

@@ -11,6 +11,10 @@ import type {
 } from "@/lib/desktop/contracts.generated"
 
 export const sourceControlCommands = {
+  recoverLock: (repositoryId: string) =>
+    call<void>("recover_git_lock", { repositoryId }),
+  clearPlans: (repositoryId: string) =>
+    call<void>("clear_git_plans", { repositoryId }),
   branches: (repositoryId: string) =>
     call<string[]>("list_git_branches", { repositoryId }),
   switchBranch: (repositoryId: string, branch: string) =>

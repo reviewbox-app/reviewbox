@@ -19,12 +19,6 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { PreparationProgress } from "@/features/agents/components/PreparationProgress"
-import {
-  beginProgress,
-  finishProgress,
-  receiveProgress,
-} from "@/features/agents/helpers/preparationProgress.helpers"
 import type {
   GitOperation,
   LocalGitState,
@@ -32,31 +26,31 @@ import type {
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { sourceControlCommands as commands } from "../services/source-control.commands"
 
+import { GitRecoveryActions } from "../components/GitRecoveryActions"
+
 export function CommitDialog({
   open,
   onOpenChange,
   state,
   onFinished,
+  onCommitted,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   state: LocalGitState
   onFinished: () => Promise<void>
+  onCommitted?: () => void
 }) {
   const [manual, setManual] = useState(false)
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [operation, setOperation] = useState<GitOperation | null>(null)
-  const [progress, setProgress] = useState<ReturnType<
-    typeof beginProgress
-  > | null>(null)
   const running = useRef<string | null>(null)
   const active = operation?.status === "running"
   const close = () => {
     setManual(false)
     setMessage("")
     setOperation(null)
-    setProgress(null)
     setError("")
     onOpenChange(false)
   }
@@ -65,19 +59,15 @@ export function CommitDialog({
     const id = crypto.randomUUID()
     running.current = id
     setError("")
-    setProgress(message === null ? beginProgress(id) : null)
     setOperation({
       id,
       repositoryId: state.repositoryId,
       status: "running",
       message:
-        message === null
-          ? "Rev is organizing your staged changes…"
-          : "Creating commit…",
+        message === null ? "Rev is creating commits…" : "Creating commit…",
       commits: [],
       error: null,
     })
-    let planPrepared = false
     try {
       const result = await commands.commit(
         {
@@ -87,39 +77,11 @@ export function CommitDialog({
           message,
         },
         (value) => {
-          if (running.current === id) {
-            setOperation(value)
-            if (
-              value.message.startsWith("Creating commit") ||
-              value.commits.length
-            ) {
-              planPrepared = true
-              setProgress((progress) =>
-                progress ? finishProgress(progress, "completed") : progress
-              )
-            }
-          }
+          if (running.current === id) setOperation(value)
         },
-        (event) => {
-          if (running.current === id && event.kind !== "delta")
-            setProgress((value) =>
-              value ? receiveProgress(value, event) : value
-            )
-        }
+        () => {}
       )
       setOperation(result)
-      setProgress((value) =>
-        value
-          ? finishProgress(
-              value,
-              planPrepared || result.status === "completed"
-                ? "completed"
-                : result.status === "cancelled"
-                  ? "cancelled"
-                  : "failed"
-            )
-          : value
-      )
       if (result.error) setError(result.error)
       let refreshed = true
       try {
@@ -130,8 +92,13 @@ export function CommitDialog({
           `The Git operation finished, but the view could not refresh: ${errorMessage(cause)}`
         )
       }
-      if (result.status === "completed" && refreshed) {
+      if (
+        result.status === "completed" &&
+        result.commits.length > 0 &&
+        refreshed
+      ) {
         close()
+        onCommitted?.()
       }
     } catch (cause) {
       const cancelled =
@@ -148,11 +115,6 @@ export function CommitDialog({
               status,
               message: cancelled ? "Commit cancelled" : "Commit failed",
             }
-          : value
-      )
-      setProgress((value) =>
-        value
-          ? finishProgress(value, planPrepared ? "completed" : status)
           : value
       )
       await onFinished().catch(() => {})
@@ -242,19 +204,20 @@ export function CommitDialog({
               {commit.subject}
             </p>
           ))}
-          {progress && (
-            <PreparationProgress
-              progress={progress}
-              complete={Boolean(progress.endedAt)}
-              checking={false}
-              status="Rev is preparing commits…"
-              showDraft={false}
-              completedLabel="Commit plan prepared."
-            />
-          )}
           {error && (
             <Alert variant="destructive" size="sm">
-              <AlertDescription>{error}</AlertDescription>
+              <AlertDescription>
+                {error}
+                <GitRecoveryActions
+                  repositoryId={state.repositoryId}
+                  error={error}
+                  disabled={active}
+                  onRecovered={() => {
+                    setError("")
+                    setOperation(null)
+                  }}
+                />
+              </AlertDescription>
             </Alert>
           )}
         </div>
@@ -291,7 +254,6 @@ export function CommitDialog({
                   onClick={() => {
                     setManual(false)
                     setOperation(null)
-                    setProgress(null)
                     setError("")
                   }}
                 >

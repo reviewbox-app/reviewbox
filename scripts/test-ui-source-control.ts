@@ -1,5 +1,12 @@
 import assert from "node:assert/strict"
-import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
+import {
+  chmod,
+  mkdir,
+  readFile,
+  readdir,
+  utimes,
+  writeFile,
+} from "node:fs/promises"
 import { join } from "node:path"
 import { NativeUI, fixture } from "../tests/native/ui-driver"
 import { createPreparationHarness } from "../tests/native/preparation-fixture"
@@ -15,47 +22,67 @@ async function action(name: string) {
   await ui.named(name)
 }
 const f = await fixture()
-const harness = await createPreparationHarness(f.root)
+const live = process.argv.includes("--live")
+const harness = await createPreparationHarness(f.root, live)
+const recovery = process.argv.includes("--recovery")
+const large = process.argv.includes("--large")
+const noReasoning = process.argv.includes("--none")
 const models = join(f.root, "used-models.jsonl")
-await writeFile(
-  harness.executable,
-  (await readFile(harness.executable, "utf8"))
-    .replace(
-      "const m=JSON.parse(line);",
-      `const m=JSON.parse(line); if(m.method==='config/read'){send({id:m.id,result:{config:{}}});continue;} if(m.method==='thread/start')appendFileSync(${JSON.stringify(models)},JSON.stringify(m.params)+'\\n');`
-    )
-    .replace(
-      "const prompt=m.params.input[0].text;",
-      `const prompt=m.params.input[0].text;
+if (!live)
+  await writeFile(
+    harness.executable,
+    (await readFile(harness.executable, "utf8"))
+      .replace(
+        "reasoningEffort:'high'",
+        noReasoning ? "reasoningEffort:'none'" : "reasoningEffort:'high'"
+      )
+      .replace(
+        "const m=JSON.parse(line);",
+        `const m=JSON.parse(line); if(m.method==='thread/unload'){send({id:m.id,result:{}});continue;} if(m.method==='config/read'){send({id:m.id,result:{config:{}}});continue;} if(m.method==='thread/start')appendFileSync(${JSON.stringify(models)},JSON.stringify(m.params)+'\\n');`
+      )
+      .replace(
+        "const prompt=m.params.input[0].text;",
+        `const prompt=m.params.input[0].text;
 appendFileSync(${JSON.stringify(models)},JSON.stringify(m.params)+'\\n');
-if(prompt.includes('# Plan the user') || prompt.includes('## Exploration entry points (data)')){
-  let output;
-  if(prompt.includes('# Plan the user')) {
-    const start=prompt.indexOf('\\n{');
-    const end=prompt.indexOf('\\n\\nReturn only this JSON',start);
-    const entry=JSON.parse(prompt.slice(start,end));
-    if(prompt.length>8192||prompt.includes('stagedDiff'))throw Error('Commit prompt is not minimal');
-    const context=JSON.parse(readFileSync(entry.manifest,'utf8'));
-    const diff=Bun.spawnSync(['git','diff','--no-ext-diff','--no-textconv',context.baseTree,context.stagedTree],{cwd:process.cwd()});
-    if(diff.exitCode!==0||!diff.stdout.toString().includes('diff --git'))throw Error('Cannot inspect frozen trees through terminal');
-    output={commits:context.files.map((file,index)=>({message:'test: staged group '+(index+1),paths:[file.path]}))};
-  } else { throw Error('Unexpected non-commit generation'); }
-  const finalText=JSON.stringify(output);
-  event('item/completed',{type:'agentMessage',id:'note',phase:'commentary',text:'The staged groups are ready.'});
-  event('item/started',{type:'agentMessage',id:'final',phase:'final_answer'});
-  send({method:'item/agentMessage/delta',params:{itemId:'final',delta:finalText}});
-  event('item/completed',{type:'agentMessage',id:'final',phase:'final_answer',text:finalText});
-  send({method:'turn/completed',params:{turn:{status:'completed'}}});
+if(prompt.includes('Perform this user-requested Git operation')){
+  if(m.params.outputSchema)throw Error('Commit execution must not require a plan schema');
+  const git=(...args)=>{const result=Bun.spawnSync(['git',...args],{cwd:process.cwd()});if(result.exitCode!==0)throw Error(result.stderr.toString());return result.stdout.toString();};
+  try {
+    event('item/started',{type:'commandExecution',id:'git-commit',commandActions:[{type:'unknown'}]});
+    if(prompt.includes('Stage and commit all saved'))git('add','-A');
+    const files=git('diff','--cached','--name-only','-z').split('\\0').filter(Boolean);
+    for(const [index,file] of files.entries()){
+      git('commit','--only','-qm','test: staged group '+(index+1),'--',file);
+      await Bun.sleep(2500);
+    }
+    if(Bun.file('generated-by-hook.txt').size){git('add','generated-by-hook.txt');git('commit','-qm','chore: apply git hook changes');}
+    event('item/completed',{type:'commandExecution',id:'git-commit',status:'completed',exitCode:0});
+    event('item/completed',{type:'agentMessage',id:'final',phase:'final_answer',text:'Commits created with Git.'});
+    send({method:'turn/completed',params:{turn:{status:'completed'}}});
+  } catch(error) {
+    send({method:'turn/completed',params:{turn:{status:'failed',error:{message:String(error)}}}});
+  }
   continue;
 }`
-    )
-)
+      )
+  )
 const remote = join(f.root, "remote.git")
 await mkdir(remote)
 assert.equal(Bun.spawnSync(["git", "init", "--bare", "-q", remote]).exitCode, 0)
 f.git("remote", "add", "origin", remote)
 // Keep ReviewBox's own setup files out of this code-focused fixture only.
 await writeFile(join(f.repo, ".git/info/exclude"), ".reviewbox/\n")
+if (recovery) {
+  // An already tracked source beneath a newly ignored directory must still stage.
+  await writeFile(join(f.repo, ".git/info/exclude"), ".reviewbox/\nsrc/\n")
+  await f.write("src/private.txt", "must remain ignored\n")
+}
+if (large)
+  await f.write(
+    "src/answer.ts",
+    "export const amount = 42;\n" +
+      "// changed value and dependent behavior\n".repeat(1800)
+  )
 try {
   await ui.start(join(f.root, "appdata"))
   await ui.execute(`window.BASE_UI_ANIMATIONS_DISABLED=true;return true`)
@@ -124,7 +151,7 @@ try {
     await ui.named("Home", '[role="tab"]')
     await ui.named("Review", '[role="tab"]')
     await ui.wait(
-      async () => (await ui.text()).includes("Commits created"),
+      async () => (await ui.text()).includes("Read your changes"),
       "review commits completed",
       120000
     )
@@ -161,7 +188,27 @@ try {
     await ui.until(`!!document.querySelector('[title="src/answer.ts"]')`)
     if (process.argv.includes("--commit-only")) {
       await ui.click('[title="src/answer.ts"]')
+      if (recovery) {
+        const lock = join(f.repo, ".git/index.lock")
+        await writeFile(lock, "")
+        const old = new Date(Date.now() - 60000)
+        await utimes(lock, old, old)
+        await action("Stage file")
+        await ui.has("Recover Git lock")
+        // Background Git reads may transiently make conservative recovery refuse.
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await action("Recover Git lock")
+          await Bun.sleep(500)
+          if (!(await ui.text()).includes("Recover Git lock")) break
+        }
+        await ui.until(`!document.body.innerText.includes('Recover Git lock')`)
+        assert(
+          (await readdir(join(f.repo, ".git/reviewbox-lock-backups")))
+            .length === 1
+        )
+      }
       await action("Stage file")
+      assert.equal(f.git("ls-files", "--", "src/private.txt").trim(), "")
       await action("Commit · 1")
       const testHooks = process.argv.includes("--hooks")
       const testFailure = process.argv.includes("--hook-failure")
@@ -181,10 +228,22 @@ try {
         )
         await chmod(hook, 0o755)
       }
+      const started = performance.now()
       await ui.named("Commit with Rev")
+      if (!testFailure && !live) {
+        await ui.has("1 commits observed in Git. Rev is working…")
+        await ui.screenshot("rev-commit-observed-live")
+      }
       if (testFailure) {
-        await ui.has("Commit sequence stopped")
-        await ui.has("Commit plan prepared.")
+        await ui.has("Hook rejected the commit")
+        if (recovery) {
+          const before = f.git("rev-parse", "HEAD")
+          await action("Clear previous plans")
+          await ui.until(
+            `!document.body.innerText.includes('Hook rejected the commit')`
+          )
+          assert.equal(f.git("rev-parse", "HEAD"), before)
+        }
         assert.equal(
           await ui.execute(
             `return document.body.innerText.includes("Preparation could not finish.")`
@@ -196,11 +255,21 @@ try {
           "src/answer.ts"
         )
       } else {
-        await ui.until(`!document.querySelector('[role="dialog"]')`)
-        assert.equal(
-          f.git("log", "-1", "--format=%s").trim(),
-          testHooks ? "chore: apply git hook changes" : "test: staged group 1"
+        await ui.wait(
+          async () =>
+            await ui.execute<boolean>(
+              `return !document.querySelector('[role="dialog"]')`
+            ),
+          "commit finished",
+          live ? 120000 : 12000
         )
+        if (!live)
+          assert.equal(
+            f.git("log", "-1", "--format=%s").trim(),
+            testHooks ? "chore: apply git hook changes" : "test: staged group 1"
+          )
+        assert.equal(f.git("diff", "--cached", "--name-only").trim(), "")
+        assert.equal(f.git("ls-remote", "--heads", "origin").trim(), "")
       }
       if (testHooks) {
         assert.equal(
@@ -213,25 +282,37 @@ try {
         )
         assert.equal(f.git("diff", "--cached", "--name-only").trim(), "")
       }
-      const records = (await readFile(models, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-      assert(
-        records.some(
-          (record) =>
-            record.sandbox === "read-only" &&
-            record.config["features.apps"] === false
+      if (!live) {
+        const records = (await readFile(models, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+        assert(
+          records
+            .filter((record) => record.input)
+            .every((record) => record.effort === (noReasoning ? "none" : "low"))
         )
-      )
+        assert.equal(
+          records.filter((record) => record.input).length,
+          1,
+          "One autonomous turn, no per-file host planning passes"
+        )
+        assert(
+          records.some((record) => record.sandbox === "danger-full-access")
+        )
+        assert(
+          records
+            .filter((record) => record.input)
+            .every((record) => !record.outputSchema)
+        )
+      }
       if (testHooks || testFailure)
         await ui.screenshot(
           testFailure ? "hook-failure-plan-prepared" : "hook-changes-committed"
         )
+      console.log("Commit duration ms", Math.round(performance.now() - started))
       console.log(
-        testFailure
-          ? "Native Rev commit: Git failure preserves the completed plan and staged changes."
-          : "Native Rev commit: minimal prompt, terminal inspection of frozen trees, connectors disabled, planned commit created."
+        "Native Rev commit: provider executes Git directly; real commits, effort and failures observed."
       )
     } else {
       await ui.click('[title="src/answer.ts"]')
@@ -380,7 +461,14 @@ try {
         "Passive updates keep the open dialog and its draft"
       )
       await ui.named("Create commit")
-      await ui.until(`!document.querySelector('[role="dialog"]')`)
+      await ui.wait(
+        async () =>
+          await ui.execute<boolean>(
+            `return !document.querySelector('[role="dialog"]')`
+          ),
+        "commit finished",
+        live ? 120000 : 12000
+      )
       assert.equal(
         f.git("show", "HEAD:src/answer.ts"),
         "export const answer = 43;\n"
@@ -396,7 +484,14 @@ try {
       }
       await ui.named("Commit · 2")
       await ui.named("Commit with Rev")
-      await ui.until(`!document.querySelector('[role="dialog"]')`)
+      await ui.wait(
+        async () =>
+          await ui.execute<boolean>(
+            `return !document.querySelector('[role="dialog"]')`
+          ),
+        "commit finished",
+        live ? 120000 : 12000
+      )
       assert.equal(
         f.git("log", "-2", "--format=%s").trim(),
         "test: staged group 2\ntest: staged group 1"
