@@ -47,7 +47,7 @@ tar = "0.4.46"
 tauri = { version = "2", features = [] }
 tauri-plugin-wdio-webdriver = { version = "1.4.0", optional = true }
 tempfile = "3.27.0"
-tokio = { version = "1.53.1", features = ["process", "io-util", "time", "sync", "macros"] }
+tokio = { version = "1.53.1", features = ["process", "io-util", "time", "sync", "macros", "net"] }
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.26.1", features = ["v4"] }

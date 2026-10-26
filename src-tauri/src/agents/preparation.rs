@@ -1,10 +1,11 @@
-//! Shared frozen context, role-specific models, and reusable Codex processes.
+//! One read-only harness session over a materialized frozen capture.
 use super::*;
 
 // Leave headroom below provider limits, including JSON escaping and context.
 const INLINE_PROMPT_BYTES: usize = 256 * 1024;
 const MAX_PROMPT_BYTES: usize = 512 * 1024;
 
+#[cfg(test)]
 pub(crate) fn capture_summary(snapshot: &Snapshot) -> Value {
     let paths: std::collections::BTreeSet<_> = snapshot
         .files
@@ -80,15 +81,12 @@ pub(crate) struct PreparationRuntime {
     _baseline: Option<exploration::Exploration>,
     exploration: exploration::Exploration,
     config: ProviderConfig,
-    prepared: Option<codex::Prepared>,
-    idle: tokio::sync::Mutex<Vec<(bool, codex::Session)>>,
 }
 impl PreparationRuntime {
     pub(crate) async fn new(
         storage: Storage,
         workspace: Workspace,
         config: ProviderConfig,
-        helper: String,
         cancel: Arc<AtomicBool>,
         baseline: Option<Workspace>,
     ) -> AppResult<Self> {
@@ -125,37 +123,24 @@ impl PreparationRuntime {
         })
         .await
         .map_err(|e| AppError::new("task", e.to_string()))??;
-        let prepared = if config.provider == "codex" {
-            Some(codex::prepare(&config, cancel.clone(), Some(helper)).await?)
-        } else {
-            None
-        };
         Ok(Self {
             context,
             _baseline: baseline,
             exploration,
             config,
-            prepared,
-            idle: Default::default(),
         })
     }
-    pub(crate) async fn run(
+    pub(crate) async fn run_session(
         &self,
         template: &str,
-        mut variables: BTreeMap<String, String>,
-        schema: Value,
+        variables: BTreeMap<String, String>,
+        configuration: Value,
         progress: Arc<dyn Fn(AgentEvent) + Send + Sync>,
-        allow_delegation: bool,
         cancel: Arc<AtomicBool>,
-    ) -> AppResult<String> {
+    ) -> AppResult<()> {
+        let mut variables = variables;
         variables.insert("context".into(), self.context.clone());
-        let directory = self.exploration.directory.clone();
-        let template = template.to_owned();
-        let prompt =
-            tokio::task::spawn_blocking(move || bounded_prompt(&directory, &template, variables))
-                .await
-                .map_err(|e| AppError::new("task", e.to_string()))??;
-        let config = self.config.clone();
+        let prompt = bounded_prompt(&self.exploration.directory, template, variables)?;
         let channel = Channel::new(move |body| {
             if let tauri::ipc::InvokeResponseBody::Json(text) = body
                 && let Ok(event) = serde_json::from_str::<AgentEvent>(&text)
@@ -173,54 +158,27 @@ impl PreparationRuntime {
             text: String::new(),
             preview: None,
         };
-        if let Some(mut prepared) = self.prepared.clone() {
-            if !allow_delegation {
-                prepared.helper = None;
-            }
-            let idle = {
-                let mut sessions = self.idle.lock().await;
-                sessions
-                    .iter()
-                    .position(|(delegation, _)| *delegation == allow_delegation)
-                    .map(|index| sessions.swap_remove(index).1)
-            };
-            let mut session = match idle {
-                Some(session) => session,
-                None => {
-                    codex::Session::start_with_delegation(
-                        &self.exploration.project,
-                        &config,
-                        prepared,
-                        cancel.clone(),
-                        allow_delegation,
-                    )
-                    .await?
-                }
-            };
-            session.set_cancel(cancel.clone());
-            let result = session.run(&prompt, Some(schema), &mut stream).await;
-            if result.is_ok() && session.reusable && !cancel.load(Ordering::Relaxed) {
-                self.idle.lock().await.push((allow_delegation, session));
-            } else {
-                session.finish().await;
-            }
-            result?;
-        } else {
-            claude::run_preparation(
-                &self.exploration.project,
-                &prompt,
-                &config,
-                cancel.clone(),
-                &mut stream,
-                allow_delegation,
-            )
-            .await?;
-        }
-        Ok(stream.text)
-    }
-    pub(crate) async fn finish(&self) {
-        for (_, mut session) in std::mem::take(&mut *self.idle.lock().await) {
+        if self.config.provider == "codex" {
+            let mut prepared = codex::prepare(&self.config, cancel.clone(), None).await?;
+            prepared.helper = None;
+            prepared.effort = self.config.reasoning_effort.clone();
+            let mut session =
+                codex::Session::start(&self.exploration.directory, &self.config, prepared, cancel)
+                    .await?;
+            session.preparation_tools(configuration);
+            let result = session.run(&prompt, None, &mut stream).await;
             session.finish().await;
+            result
+        } else {
+            claude::run_review_session(
+                &self.exploration.directory,
+                &prompt,
+                &self.config,
+                cancel,
+                &mut stream,
+                configuration,
+            )
+            .await
         }
     }
 }

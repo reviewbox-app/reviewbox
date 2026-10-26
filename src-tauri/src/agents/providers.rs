@@ -305,6 +305,7 @@ mod tests {
             );
         }
         let config = ProviderConfig {
+            reasoning_effort: None,
             provider: "codex".into(),
             executable: executable.to_string_lossy().into_owned(),
             model: None,
@@ -396,6 +397,7 @@ mod tests {
         let binary = dir.path().join("codex");
         let calls = dir.path().join("calls");
         let config = ProviderConfig {
+            reasoning_effort: None,
             provider: "codex".into(),
             executable: binary.to_string_lossy().into(),
             model: None,
@@ -528,6 +530,7 @@ mod tests {
             std::fs::write(&path, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo '{version}'; exit 0; fi\n{output}\n")).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
             let config = ProviderConfig {
+                reasoning_effort: None,
                 provider: provider.into(),
                 executable: path.to_string_lossy().into_owned(),
                 model: None,

@@ -260,6 +260,7 @@ mod tests {
         let source = temp.path().join("sample.txt");
         std::fs::write(&source, "frozen-value-42").unwrap();
         let config = ProviderConfig {
+            reasoning_effort: None,
             provider: "codex".into(),
             executable: "codex".into(),
             model: None,

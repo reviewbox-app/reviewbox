@@ -12,34 +12,14 @@ fn identity(term: &DocumentTerm) -> String {
     format!("{}\n{}", normalized(&term.term), normalized(&term.context))
 }
 
-pub(crate) fn inherit(documents: &mut LevelDocuments, known: &[DocumentTerm]) {
-    for term in known {
-        if !documents.glossary.iter().any(|entry| entry.id == term.id)
-            && [
-                &documents.essential,
-                &documents.explained,
-                &documents.technical,
-            ]
-            .iter()
-            .any(|doc| doc.body.contains(&format!("reviewbox:term/{}", term.id)))
-        {
-            documents.glossary.push(term.clone());
-        }
-    }
-}
-
 /// Traverse in reading order, canonicalize equivalent definitions and rewrite only
 /// explicit glossary destinations. Different contextual meanings keep different IDs.
 pub(crate) fn assemble(topics: &mut [Topic], existing: &[DocumentTerm]) -> Vec<DocumentTerm> {
     let mut catalogue = BTreeMap::<String, DocumentTerm>::new();
     for topic in topics {
         for step in &mut topic.steps {
-            let shared = &step.documents.glossary;
-            for document in [
-                &mut step.documents.essential,
-                &mut step.documents.explained,
-                &mut step.documents.technical,
-            ] {
+            let shared = step.documents.glossary.clone();
+            for document in step.documents.documents_mut() {
                 let mut definitions = existing.to_vec();
                 for term in shared.iter().chain(&document.terms) {
                     definitions.retain(|entry| entry.id != term.id);
@@ -126,6 +106,7 @@ mod tests {
             ..Default::default()
         };
         let first = canonicalize(LevelDocuments {
+            single: None,
             dependencies: None,
             context_sources: vec![],
             glossary: vec![term("local", "Component")],
@@ -137,6 +118,7 @@ mod tests {
         assert!(first.essential.terms.is_empty());
         assert!(first.essential.body.contains(&first.glossary[0].id));
         let equivalent = canonicalize(LevelDocuments {
+            single: None,
             dependencies: None,
             context_sources: vec![],
             glossary: vec![term("another", "component")],
@@ -146,6 +128,7 @@ mod tests {
         });
         assert_eq!(first.glossary[0].id, equivalent.glossary[0].id);
         let other = canonicalize(LevelDocuments {
+            single: None,
             dependencies: None,
             context_sources: vec![],
             glossary: vec![term("another", "Workflow")],

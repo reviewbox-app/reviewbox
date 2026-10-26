@@ -292,6 +292,8 @@ pub fn run() {
             commands::list_reviews,
             commands::create_review,
             commands::preview_review,
+            commands::review_writing_profile,
+            commands::save_review_writing_profile,
             commands::cancel_repository_read,
             commands::review_references,
             commands::create_review_operation,

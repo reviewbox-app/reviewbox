@@ -42,9 +42,49 @@ pub struct ReviewDocument {
     pub terms: Vec<DocumentTerm>,
     pub reading_seconds: u32,
 }
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, TS,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewWritingStyle {
+    #[default]
+    Essential,
+    Explained,
+    Technical,
+    Custom,
+}
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, TS,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewWritingProfile {
+    pub style: ReviewWritingStyle,
+    #[serde(default)]
+    pub instructions: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SingleReviewDocument {
+    pub version: u32,
+    pub profile: ReviewWritingProfile,
+    pub content: ReviewDocument,
+}
+impl ReviewDocument {
+    fn is_empty(&self) -> bool {
+        self.body.is_empty()
+            && self.references.is_empty()
+            && self.terms.is_empty()
+            && self.term_aliases.is_empty()
+            && self.reading_seconds == 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LevelDocuments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub single: Option<SingleReviewDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dependencies: Option<DocumentDependencies>,
@@ -52,11 +92,23 @@ pub struct LevelDocuments {
     pub context_sources: Vec<String>,
     #[serde(default)]
     pub glossary: Vec<DocumentTerm>,
-    #[serde(alias = "beginner")]
+    #[serde(
+        default,
+        alias = "beginner",
+        skip_serializing_if = "ReviewDocument::is_empty"
+    )]
     pub essential: ReviewDocument,
-    #[serde(alias = "intermediate")]
+    #[serde(
+        default,
+        alias = "intermediate",
+        skip_serializing_if = "ReviewDocument::is_empty"
+    )]
     pub explained: ReviewDocument,
-    #[serde(alias = "developer")]
+    #[serde(
+        default,
+        alias = "developer",
+        skip_serializing_if = "ReviewDocument::is_empty"
+    )]
     pub technical: ReviewDocument,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
@@ -66,7 +118,29 @@ pub struct DocumentDependencies {
     pub sources: Vec<SourceDescriptor>,
 }
 impl LevelDocuments {
+    pub fn documents(&self) -> Vec<&ReviewDocument> {
+        if let Some(single) = &self.single {
+            vec![&single.content]
+        } else {
+            vec![&self.essential, &self.explained, &self.technical]
+        }
+    }
+    pub fn documents_mut(&mut self) -> Vec<&mut ReviewDocument> {
+        if let Some(single) = &mut self.single {
+            vec![&mut single.content]
+        } else {
+            vec![
+                &mut self.essential,
+                &mut self.explained,
+                &mut self.technical,
+            ]
+        }
+    }
+
     pub fn get(&self, level: ReadingLevel) -> &ReviewDocument {
+        if let Some(single) = &self.single {
+            return &single.content;
+        }
         match level {
             ReadingLevel::Essential => &self.essential,
             ReadingLevel::Explained => &self.explained,

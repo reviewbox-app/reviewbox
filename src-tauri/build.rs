@@ -9,6 +9,8 @@ fn main() {
         "terminal_open_url",
         "terminal_resolve_file",
         "get_app_info",
+        "review_writing_profile",
+        "save_review_writing_profile",
         "project_skill_preferences",
         "configure_project_skills",
         "import_project_skills",

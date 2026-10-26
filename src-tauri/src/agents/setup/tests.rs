@@ -11,6 +11,7 @@ fn executable(path: &Path, body: &str) {
 }
 fn config(path: &Path) -> ProviderConfig {
     ProviderConfig {
+        reasoning_effort: None,
         provider: "codex".into(),
         executable: path.to_string_lossy().into(),
         model: None,
@@ -207,6 +208,7 @@ impl NpmFixture {
                 providers: vec![
                     config(&initial_path),
                     ProviderConfig {
+                        reasoning_effort: None,
                         provider: "claude".into(),
                         executable: directory
                             .path()

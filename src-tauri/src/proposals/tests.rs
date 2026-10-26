@@ -58,6 +58,7 @@ fn draft_anchor_diagnostics_allow_repair_but_never_allow_invalid_application() {
                     reading_seconds: 10,
                 };
                 LevelDocuments {
+                    single: None,
                     dependencies: None,
                     context_sources: vec![],
                     glossary: vec![],

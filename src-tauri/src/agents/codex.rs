@@ -343,7 +343,20 @@ pub(super) async fn prepare(
         ));
     }
     let catalog = catalog.as_deref().unwrap_or(&[]);
-    let effort = Some(models::catalog_effort(catalog, config.model.as_deref()).into());
+    let effort = if let Some(effort) = &config.reasoning_effort {
+        if !catalog
+            .iter()
+            .any(|m| Some(&m.id) == config.model.as_ref() && m.supported_efforts.contains(effort))
+        {
+            return Err(AppError::new(
+                "reasoning_effort",
+                "The selected reasoning effort is unavailable for this model.",
+            ));
+        }
+        Some(effort.clone())
+    } else {
+        Some(models::catalog_effort(catalog, config.model.as_deref()).into())
+    };
     let helper_effort = models::catalog_effort(catalog, helper.as_deref()).into();
     Ok(Prepared {
         effort,

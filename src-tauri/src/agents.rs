@@ -7,7 +7,9 @@ mod exploration;
 pub(crate) mod language_setup;
 mod outline_preview;
 mod preparation;
-pub(crate) use preparation::{PreparationRuntime, capture_summary};
+pub(crate) use preparation::PreparationRuntime;
+#[cfg(test)]
+use preparation::capture_summary;
 pub(crate) mod models;
 pub(crate) mod providers;
 pub(crate) mod setup;
@@ -305,6 +307,7 @@ pub fn settings(storage: &Storage) -> AppResult<ProviderSettings> {
                         candidates.push(PathBuf::from(directory).join(provider));
                     }
                     ProviderConfig {
+                        reasoning_effort: None,
                         provider: (*provider).into(),
                         executable: candidates
                             .into_iter()

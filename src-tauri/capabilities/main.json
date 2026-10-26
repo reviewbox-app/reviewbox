@@ -4,6 +4,8 @@
   "description": "Local review operations in the main application window.",
   "windows": ["main", "settings"],
   "permissions": [
+    "allow-review-writing-profile",
+    "allow-save-review-writing-profile",
     "allow-review-working-context",
     "allow-retry-working-context-cleanup",
     "allow-editor-navigation",

@@ -370,13 +370,26 @@ pub fn run_cli() -> bool {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = args.first().filter(|c| {
         [
-            "init", "create", "context", "propose", "enrich", "annotate", "tour", "mcp",
+            "init",
+            "create",
+            "context",
+            "propose",
+            "enrich",
+            "annotate",
+            "tour",
+            "mcp",
+            "preparation-mcp",
         ]
         .contains(&c.as_str())
     }) else {
         return false;
     };
     let result = (|| -> AppResult<()> {
+        if command == "preparation-mcp" {
+            return crate::preparation::bridge::proxy(
+                args.get(1).map(String::as_str).unwrap_or_default(),
+            );
+        }
         if command == "mcp" {
             return mcp();
         }

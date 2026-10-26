@@ -219,11 +219,28 @@ async fn discover_with_timeout(
 pub(super) async fn effort(
     config: &ProviderConfig,
     cancel: Arc<AtomicBool>,
-) -> AppResult<Option<&'static str>> {
+) -> AppResult<Option<String>> {
     match discover(config, cancel).await {
-        Ok(catalog) => Ok(Some(catalog_effort(&catalog, config.model.as_deref()))),
+        Ok(catalog) => {
+            if let Some(effort) = &config.reasoning_effort {
+                let model = catalog
+                    .iter()
+                    .find(|m| Some(&m.id) == config.model.as_ref());
+                if !model.is_some_and(|m| m.supported_efforts.contains(effort)) {
+                    return Err(AppError::new(
+                        "reasoning_effort",
+                        "The selected reasoning effort is unavailable for this model.",
+                    ));
+                }
+                return Ok(Some(effort.clone()));
+            }
+            Ok(Some(
+                catalog_effort(&catalog, config.model.as_deref()).into(),
+            ))
+        }
         Err(error) if error.code == "cancelled" => Err(error),
-        Err(_) => Ok(Some("low")),
+        Err(error) if config.reasoning_effort.is_some() => Err(error),
+        Err(_) => Ok(Some("low".into())),
     }
 }
 

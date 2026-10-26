@@ -639,12 +639,19 @@ export type PreparationState = {
   canResume: boolean
 }
 export type PreparationStep = {
+  decision?: string
   id: string
   title: string
   status: PreparationStepStatus
 }
 export type PreparationStepStatus =
-  "queued" | "writing" | "checking" | "ready" | "failed" | "interrupted"
+  | "removed"
+  | "queued"
+  | "writing"
+  | "checking"
+  | "ready"
+  | "failed"
+  | "interrupted"
 export type ReviewAdaptation = {
   operationId: string
   provider: string
@@ -745,13 +752,25 @@ export type ReviewDocument = {
   terms: Array<DocumentTerm>
   readingSeconds: number
 }
+export type ReviewWritingStyle =
+  "essential" | "explained" | "technical" | "custom"
+export type ReviewWritingProfile = {
+  style: ReviewWritingStyle
+  instructions: string
+}
+export type SingleReviewDocument = {
+  version: number
+  profile: ReviewWritingProfile
+  content: ReviewDocument
+}
 export type LevelDocuments = {
+  single?: SingleReviewDocument
   dependencies?: DocumentDependencies
   contextSources: Array<string>
   glossary: Array<DocumentTerm>
-  essential: ReviewDocument
-  explained: ReviewDocument
-  technical: ReviewDocument
+  essential?: ReviewDocument
+  explained?: ReviewDocument
+  technical?: ReviewDocument
 }
 export type DocumentDependencies = {
   signature: string
@@ -1216,6 +1235,7 @@ export type CurrentTourStep = {
 }
 export type TourImportReport = { tour: OnboardingTour; warnings: Array<string> }
 export type ProviderConfig = {
+  reasoningEffort?: string
   provider: string
   executable: string
   model: string | null

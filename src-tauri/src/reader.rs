@@ -188,11 +188,25 @@ pub(crate) fn validate_documents_with_glossary(
             ));
         }
     }
-    for (level, doc) in [
-        (ReadingLevel::Essential, &docs.essential),
-        (ReadingLevel::Explained, &docs.explained),
-        (ReadingLevel::Technical, &docs.technical),
-    ] {
+    if let Some(single) = &docs.single
+        && (!docs.essential.body.is_empty()
+            || !docs.explained.body.is_empty()
+            || !docs.technical.body.is_empty()
+            || single.version != 1
+            || (single.profile.style == ReviewWritingStyle::Custom
+                && single.profile.instructions.trim().is_empty()))
+    {
+        return Err(AppError::new(
+            "invalid_document",
+            "Unsupported document version or missing Custom instructions.",
+        ));
+    }
+    for (index, doc) in docs.documents().into_iter().enumerate() {
+        let level = if index == 2 {
+            ReadingLevel::Technical
+        } else {
+            ReadingLevel::Essential
+        };
         if doc.body.trim().is_empty() || doc.reading_seconds == 0 {
             return Err(AppError::new(
                 "invalid_document",
@@ -313,10 +327,12 @@ pub(crate) fn validate_documents_with_glossary(
                     }
                 } else {
                     let language = trimmed[count..].trim();
-                    let allowed = matches!(
-                        language,
-                        "summary" | "before-after" | "mermaid" | "pseudocode" | "html"
-                    ) || (level == ReadingLevel::Technical && language == "source");
+                    let allowed = docs.single.is_some()
+                        || matches!(
+                            language,
+                            "summary" | "before-after" | "mermaid" | "pseudocode" | "html"
+                        )
+                        || (level == ReadingLevel::Technical && language == "source");
                     if !allowed {
                         return Err(AppError::new(
                             "invalid_document",
@@ -340,11 +356,7 @@ pub(crate) fn validate_documents_with_glossary(
     Ok(())
 }
 pub(crate) fn estimate_reading_time(documents: &mut LevelDocuments) {
-    for document in [
-        &mut documents.essential,
-        &mut documents.explained,
-        &mut documents.technical,
-    ] {
+    for document in documents.documents_mut() {
         // A consistent local estimate, independent of the provider's suggestion.
         document.reading_seconds = (document.body.split_whitespace().count() as u32)
             .div_ceil(3)

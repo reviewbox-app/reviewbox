@@ -847,3 +847,24 @@ pub async fn cancel_review_preparation(
     let manager = manager.inner().clone();
     blocking(move || manager.cancel(&storage, &review_id)).await
 }
+
+#[tauri::command]
+pub async fn review_writing_profile(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+) -> AppResult<Option<ReviewWritingProfile>> {
+    let storage = storage.inner().clone();
+    blocking(move || crate::preparation::writing::load(&storage, repository_id.as_deref())).await
+}
+#[tauri::command]
+pub async fn save_review_writing_profile(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    profile: Option<ReviewWritingProfile>,
+) -> AppResult<()> {
+    let storage = storage.inner().clone();
+    blocking(move || {
+        crate::preparation::writing::store(&storage, repository_id.as_deref(), profile)
+    })
+    .await
+}

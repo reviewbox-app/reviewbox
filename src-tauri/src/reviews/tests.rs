@@ -50,6 +50,7 @@ fn docs() -> LevelDocuments {
         reading_seconds: 15,
     };
     LevelDocuments {
+        single: None,
         dependencies: None,
         context_sources: vec![],
         glossary: vec![],

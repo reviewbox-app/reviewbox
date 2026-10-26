@@ -214,6 +214,7 @@ for line in sys.stdin:
         fs::write(&executable, script).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let config = ProviderConfig {
+            reasoning_effort: None,
             provider: "codex".into(),
             executable: executable.to_string_lossy().into_owned(),
             model: None,
@@ -261,6 +262,7 @@ print(json.dumps({'type':'result','is_error':False,'result':'Complete answer'}),
     .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let config = ProviderConfig {
+        reasoning_effort: None,
         provider: "claude".into(),
         executable: executable.to_string_lossy().into(),
         model: None,

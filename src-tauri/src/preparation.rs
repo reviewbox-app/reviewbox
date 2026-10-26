@@ -1,22 +1,17 @@
 //! Native, checkpointed ownership of review preparation. UI polling is optional.
 mod adaptation;
-#[cfg(all(test, unix))]
-mod adaptation_tests;
-mod batches;
-mod metrics;
-mod parallel;
-#[cfg(all(test, unix))]
-mod replay_tests;
+pub(crate) mod bridge;
+mod session;
 #[cfg(test)]
 mod tests;
+pub(crate) mod writing;
 
 use crate::{agents, contracts::*, knowledge, reader, reviews, storage::Storage};
-use batches::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -25,7 +20,6 @@ use std::{
 
 const KIND: &str = "review_preparation";
 const MAX_EVENTS: usize = 200;
-const MAX_COORDINATORS: usize = 8;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,40 +37,11 @@ struct Checkpoint {
     helper_model: Option<String>,
     results: BTreeMap<String, Value>,
     #[serde(default)]
-    definitions: BTreeMap<String, parallel::Definition>,
+    definitions: BTreeMap<String, Value>,
     #[serde(default)]
     measurements: Vec<Value>,
 }
 impl Checkpoint {
-    fn reconcile_contextless_checkpoint(
-        &mut self,
-        was_contextless: bool,
-        legacy_source_hash: &str,
-        source_hash: &str,
-    ) -> bool {
-        if !was_contextless || self.source_hash.is_empty() || self.source_hash != legacy_source_hash
-        {
-            return false;
-        }
-        // The legacy hash proves that this is the same immutable capture. Recompute
-        // its preparation with the newly frozen brief instead of reusing old output.
-        self.source_hash = source_hash.into();
-        self.results.clear();
-        self.definitions.clear();
-        self.state.steps.clear();
-        self.state.completed_batches = 0;
-        self.state.total_batches = 1;
-        true
-    }
-    fn reconcile_editorial_contract(&mut self, prompt_hash: &str) {
-        if !self.prompt_hash.is_empty() && self.prompt_hash != prompt_hash {
-            // Never mix documents or definitions authored under different instructions.
-            self.results.clear();
-            self.definitions.clear();
-            self.state.steps.clear();
-            self.prompt_hash.clear();
-        }
-    }
     fn key(&self) -> String {
         format!("{}:{}", self.repository_id, self.state.review_id)
     }
@@ -109,30 +74,13 @@ impl Drop for PreparationFinished {
     }
 }
 type ReadyNotifier = Arc<dyn Fn(ReviewNotificationTarget) + Send + Sync>;
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct PreparationManager {
     diagnostics: Option<Arc<crate::diagnostics::Diagnostics>>,
     ready_notifier: Option<ReadyNotifier>,
     active: Arc<Mutex<HashMap<String, Active>>>,
     paused: Arc<Mutex<HashSet<String>>>,
     stopping: Arc<AtomicBool>,
-    slots: Arc<tokio::sync::Semaphore>,
-    throttled: Arc<AtomicBool>,
-    retry_slot: Arc<tokio::sync::Semaphore>,
-}
-impl Default for PreparationManager {
-    fn default() -> Self {
-        Self {
-            ready_notifier: None,
-            diagnostics: None,
-            active: Default::default(),
-            paused: Default::default(),
-            stopping: Default::default(),
-            slots: Arc::new(tokio::sync::Semaphore::new(MAX_COORDINATORS)),
-            throttled: Default::default(),
-            retry_slot: Arc::new(tokio::sync::Semaphore::new(1)),
-        }
-    }
 }
 impl PreparationManager {
     pub(crate) fn with_diagnostics(
@@ -253,12 +201,6 @@ impl PreparationManager {
                 "Wait for an active preparation to finish.",
             ));
         }
-        if !active
-            .values()
-            .any(|operation| operation.state.status == PreparationStatus::Running)
-        {
-            self.throttled.store(false, Ordering::Relaxed);
-        }
         active.retain(|_, operation| operation.state.status == PreparationStatus::Running);
         let previous = optional_checkpoint(&storage, &key)?;
         let state = PreparationState {
@@ -299,11 +241,20 @@ impl PreparationManager {
             provider_hash: String::new(),
             helper_model: None,
             definitions: BTreeMap::new(),
-            results: BTreeMap::new(),
+            results: BTreeMap::from([("_engine".into(), json!(1))]),
             measurements: vec![],
         };
         match previous {
-            Some(old) => storage.replace(KIND, &key, old.revision, &checkpoint)?,
+            Some(old) => {
+                if old.results.get("_engine") != Some(&json!(1)) {
+                    storage.insert(
+                        "review_preparation_history",
+                        &format!("{key}:{}", id()),
+                        &old,
+                    )?;
+                }
+                storage.replace(KIND, &key, old.revision, &checkpoint)?;
+            }
             None => storage.insert(KIND, &key, &checkpoint)?,
         }
         let cancel = Arc::new(AtomicBool::new(false));
@@ -364,10 +315,26 @@ impl PreparationManager {
             state.status = PreparationStatus::Interrupted;
             state.can_resume = true;
         }
+        if !live
+            && state.status != PreparationStatus::Ready
+            && optional_checkpoint(storage, &key)?
+                .is_some_and(|c| c.results.get("_engine") != Some(&json!(1)))
+        {
+            state.can_resume = false;
+            state.error = Some(AppError::new(
+                "legacy_preparation",
+                "This preparation uses the previous engine. Start a new preparation; its saved data is preserved.",
+            ));
+        }
         if let Some(after) = after_sequence {
             state.events.retain(|event| event.sequence > after);
         }
-        if state.status == PreparationStatus::Interrupted {
+        if state.status == PreparationStatus::Interrupted
+            && state
+                .error
+                .as_ref()
+                .is_none_or(|e| e.code != "legacy_preparation")
+        {
             state.can_resume = true;
         }
         if state.status != PreparationStatus::Running
@@ -427,6 +394,12 @@ impl PreparationManager {
             .or(optional_checkpoint(&storage, &key)?)
             .ok_or_else(|| AppError::new("not_found", "No preparation is available to resume."))?;
 
+        if checkpoint.results.get("_engine") != Some(&json!(1)) {
+            return Err(AppError::new(
+                "legacy_preparation",
+                "This preparation uses the previous engine. Start a new preparation; its saved data is preserved.",
+            ));
+        }
         if adaptation::committed(&storage, &checkpoint.state)? {
             checkpoint.state.status = PreparationStatus::Ready;
             checkpoint.state.can_resume = false;
@@ -570,9 +543,6 @@ impl PreparationManager {
                 resources,
                 checkpoint,
                 cancel,
-                templates: BTreeMap::new(),
-                config: None,
-                language: String::new(),
             };
             let result = run.execute().await;
             let status = match &result {
@@ -593,7 +563,10 @@ impl PreparationManager {
             }
             run.checkpoint.state.active_batches.clear();
             for step in &mut run.checkpoint.state.steps {
-                if step.status != PreparationStepStatus::Ready {
+                if !matches!(
+                    step.status,
+                    PreparationStepStatus::Ready | PreparationStepStatus::Removed
+                ) {
                     step.status = if status == PreparationStatus::Failed {
                         PreparationStepStatus::Failed
                     } else {
@@ -765,9 +738,6 @@ struct Run {
     resources: PathBuf,
     checkpoint: Checkpoint,
     cancel: Arc<AtomicBool>,
-    templates: BTreeMap<String, String>,
-    config: Option<ProviderConfig>,
-    language: String,
 }
 impl Run {
     fn update(&self, update: impl FnOnce(&mut PreparationState)) {
@@ -846,41 +816,37 @@ impl Run {
         self.check_cancel()?;
         self.notice("Preparing the frozen source catalogue…");
         let storage = self.storage.clone();
-        let resources = self.resources.clone();
         let state = self.checkpoint.state.clone();
-        let (workspace, sources, config, language, templates) =
-            tokio::task::spawn_blocking(move || {
-                let workspace = reviews::load(
-                    &storage,
-                    state
-                        .adaptation
-                        .as_ref()
-                        .map_or(state.review_id.as_str(), |u| u.candidate_review_id.as_str()),
-                )?;
-                if workspace.snapshot.id != state.snapshot_id {
-                    return Err(AppError::new(
-                        "preparation_changed",
-                        "The capture changed. Start a new preparation.",
-                    ));
-                }
-                let sources = reader::sources(&workspace.snapshot);
-                let config = agents::settings(&storage)?
-                    .providers
-                    .into_iter()
-                    .find(|config| config.provider == state.provider)
-                    .ok_or_else(|| {
-                        AppError::new("provider", "The preparation provider is not configured.")
-                    })?;
-                let config = agents::models::for_project(
-                    config,
-                    storage.project_settings(&workspace.review.repository_id)?,
-                );
-                let language = knowledge::load(&storage, &workspace.review.repository_id)?.language;
-                let templates = templates(&resources)?;
-                Ok::<_, AppError>((workspace, sources, config, language, templates))
-            })
-            .await
-            .map_err(|error| AppError::new("task", error.to_string()))??;
+        let (workspace, config, language) = tokio::task::spawn_blocking(move || {
+            let workspace = reviews::load(
+                &storage,
+                state
+                    .adaptation
+                    .as_ref()
+                    .map_or(state.review_id.as_str(), |u| u.candidate_review_id.as_str()),
+            )?;
+            if workspace.snapshot.id != state.snapshot_id {
+                return Err(AppError::new(
+                    "preparation_changed",
+                    "The capture changed. Start a new preparation.",
+                ));
+            }
+            let config = agents::settings(&storage)?
+                .providers
+                .into_iter()
+                .find(|config| config.provider == state.provider)
+                .ok_or_else(|| {
+                    AppError::new("provider", "The preparation provider is not configured.")
+                })?;
+            let config = agents::models::for_project(
+                config,
+                storage.project_settings(&workspace.review.repository_id)?,
+            );
+            let language = knowledge::load(&storage, &workspace.review.repository_id)?.language;
+            Ok::<_, AppError>((workspace, config, language))
+        })
+        .await
+        .map_err(|error| AppError::new("task", error.to_string()))??;
         let was_contextless = self.checkpoint.working_context.is_none();
         if was_contextless {
             let storage = self.storage.clone();
@@ -900,65 +866,10 @@ impl Run {
                 .map_err(|error| AppError::new("task", error.to_string()))??,
             );
         }
-        let context_hash = self
-            .checkpoint
-            .working_context
-            .as_ref()
-            .map(|context| context.identity())
-            .transpose()?;
-        let source_hash = fingerprint(&serde_json::to_vec(&(&workspace.snapshot, context_hash))?);
-        let legacy_source_hash = fingerprint(&serde_json::to_vec(&workspace.snapshot)?);
-        if self.checkpoint.reconcile_contextless_checkpoint(
-            was_contextless,
-            &legacy_source_hash,
-            &source_hash,
-        ) {
-            self.update(|state| {
-                state.steps.clear();
-                state.completed_batches = 0;
-                state.total_batches = 1;
-            });
-            self.notice("The saved preparation predates work-brief support. Recalculating its analysis on the same captured source.");
-        }
-        let coordination =
-            std::fs::read_to_string(self.resources.join("preparation/coordination.md"))?;
-        let prompt_hash = fingerprint(&serde_json::to_vec(&(
-            &templates,
-            &language,
-            "single-writer-evidence-v1",
-            coordination,
-        ))?);
-        let provider_hash = fingerprint(&serde_json::to_vec(&config)?);
-        self.checkpoint.reconcile_editorial_contract(&prompt_hash);
-        compatible(&self.checkpoint, &source_hash, &prompt_hash, &provider_hash)?;
-        self.checkpoint.source_hash = source_hash;
-        self.checkpoint.prompt_hash = prompt_hash;
-        self.checkpoint.provider_hash = provider_hash;
-        self.templates = templates;
-        self.config = Some(config);
-        self.language = language;
-        self.persist().await?;
-        self.execute_parallel(workspace, sources).await
+        self.execute_session(workspace, config, language).await
     }
 }
 
-fn templates(root: &Path) -> AppResult<BTreeMap<String, String>> {
-    let common = std::fs::read_to_string(root.join("preparation/common.md"))?;
-    let reading_skill = std::fs::read_to_string(root.join("skills/review/SKILL.md"))?;
-    let working_context = std::fs::read_to_string(root.join("preparation/working-context.md"))?;
-    ["outline", "documents", "adaptation"]
-        .into_iter()
-        .map(|name| {
-            Ok((
-                name.to_owned(),
-                format!(
-                    "{common}\n\n{reading_skill}\n\n{working_context}\n\n{}",
-                    std::fs::read_to_string(root.join(format!("preparation/{name}.md")))?
-                ),
-            ))
-        })
-        .collect()
-}
 fn compatible(
     checkpoint: &Checkpoint,
     source: &str,
@@ -975,4 +886,8 @@ fn compatible(
         ));
     }
     Ok(())
+}
+
+fn invalid(message: &str) -> AppError {
+    AppError::new("invalid_preparation", message)
 }

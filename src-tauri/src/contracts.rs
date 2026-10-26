@@ -642,6 +642,9 @@ pub fn typescript() -> String {
         ReviewMode::decl(&cfg),
         ReadingContext::decl(&cfg),
         ReviewDocument::decl(&cfg),
+        ReviewWritingStyle::decl(&cfg),
+        ReviewWritingProfile::decl(&cfg),
+        SingleReviewDocument::decl(&cfg),
         LevelDocuments::decl(&cfg),
         DocumentDependencies::decl(&cfg),
         DocumentReference::decl(&cfg),
@@ -927,6 +930,9 @@ pub struct TourImportReport {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reasoning_effort: Option<String>,
     pub provider: String,
     pub executable: String,
     pub model: Option<String>,

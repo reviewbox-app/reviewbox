@@ -29,31 +29,7 @@ pub(super) async fn run_policy(
     stream: &mut Stream,
     read_only: bool,
 ) -> AppResult<()> {
-    run_configured(root, prompt, config, cancel, stream, read_only, false).await
-}
-pub(super) async fn run_terminal(
-    root: &std::path::Path,
-    prompt: &str,
-    config: &ProviderConfig,
-    cancel: Arc<AtomicBool>,
-    stream: &mut Stream,
-) -> AppResult<()> {
-    run_configured(root, prompt, config, cancel, stream, false, true).await
-}
-pub(super) async fn run_preparation(
-    root: &std::path::Path,
-    prompt: &str,
-    config: &ProviderConfig,
-    cancel: Arc<AtomicBool>,
-    stream: &mut Stream,
-    allow_delegation: bool,
-) -> AppResult<()> {
-    // Writers expose only the native terminal, excluding Agent/Task and connectors.
-    if allow_delegation {
-        run(root, prompt, config, cancel, stream).await
-    } else {
-        run_terminal(root, prompt, config, cancel, stream).await
-    }
+    run_configured(root, prompt, config, cancel, stream, read_only, false, None).await
 }
 pub(super) async fn run_consultation(
     root: &std::path::Path,
@@ -62,8 +38,29 @@ pub(super) async fn run_consultation(
     cancel: Arc<AtomicBool>,
     stream: &mut Stream,
 ) -> AppResult<()> {
-    run_configured(root, prompt, config, cancel, stream, true, true).await
+    run_configured(root, prompt, config, cancel, stream, true, true, None).await
 }
+pub(super) async fn run_review_session(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+    tools: Value,
+) -> AppResult<()> {
+    run_configured(
+        root,
+        prompt,
+        config,
+        cancel,
+        stream,
+        true,
+        false,
+        Some(tools),
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
 async fn run_configured(
     root: &std::path::Path,
     prompt: &str,
@@ -72,8 +69,13 @@ async fn run_configured(
     stream: &mut Stream,
     read_only: bool,
     terminal_only: bool,
+    preparation: Option<Value>,
 ) -> AppResult<()> {
-    let effort = models::effort(config, cancel.clone()).await?;
+    let effort = if preparation.is_some() && config.reasoning_effort.is_none() {
+        None
+    } else {
+        models::effort(config, cancel.clone()).await?
+    };
     let executable = providers::resolve_executable(&config.executable);
     let sandbox = if read_only && terminal_only {
         Some(consultation::Sandbox::new()?)
@@ -103,7 +105,7 @@ async fn run_configured(
             },
         ])
         .current_dir(root);
-    if read_only && !terminal_only {
+    if read_only && !terminal_only && preparation.is_none() {
         command.args([
             "--safe-mode",
             "--restricted",
@@ -111,6 +113,23 @@ async fn run_configured(
             "--tools",
             "Read,Glob,Grep,WebSearch,WebFetch",
         ]);
+    }
+    if let Some(mut tools) = preparation {
+        tools.as_object_mut().map(|object| object.remove("enabled"));
+        command
+            .args(["--restricted", "--strict-mcp-config", "--mcp-config"])
+            .arg(serde_json::json!({"mcpServers":{"reviewbox_preparation":tools}}).to_string())
+            .args([
+                "--tools",
+                "Read,Glob,Grep,Agent,Task",
+                "--disallowedTools",
+                "Bash,Edit,Write,NotebookEdit",
+                "--allowedTools",
+                "Read,Glob,Grep,Agent,Task,mcp__reviewbox_preparation__*",
+                "--settings",
+                r#"{"disableAllHooks":true}"#,
+                "--disable-slash-commands",
+            ]);
     }
     if terminal_only {
         command.args([
@@ -135,7 +154,7 @@ async fn run_configured(
         command.args(["--model", model]);
     }
     if let Some(effort) = effort {
-        command.args(["--effort", effort]);
+        command.args(["--effort", &effort]);
     }
     let mut transport = Transport::new(command, cancel)?;
     let mut previews = TextPreviews::default();

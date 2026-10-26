@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub(in crate::agents) struct Session {
     transport: Transport,
     next_id: u32,
+    preparation_tools: Option<Value>,
     root: PathBuf,
     config: ProviderConfig,
     prepared: Prepared,
@@ -33,11 +34,12 @@ fn failure(value: &Value) -> AppError {
     .with_details(super::error_details(error))
 }
 impl Session {
+    pub(in crate::agents) fn preparation_tools(&mut self, configuration: Value) {
+        self.transport.read_only = true;
+        self.preparation_tools = Some(configuration);
+    }
     pub(in crate::agents) fn read_only(&mut self) {
         self.transport.read_only = true;
-    }
-    pub(in crate::agents) fn set_cancel(&mut self, cancel: Arc<AtomicBool>) {
-        self.transport.cancel = cancel;
     }
     pub(in crate::agents) async fn start(
         root: &std::path::Path,
@@ -89,6 +91,7 @@ impl Session {
         Ok(Self {
             transport,
             next_id: 2,
+            preparation_tools: None,
             root: root.into(),
             config: config.clone(),
             prepared,
@@ -118,6 +121,27 @@ impl Session {
                 )
                 .await?;
             start["config"] = planning_configuration(&effective["config"]);
+            if let Some(configuration) = &self.preparation_tools {
+                start["config"]["features.shell_tool"] = json!(false);
+                start["config"]["agents.enabled"] = json!(true);
+                start["config"]["features.multi_agent"] = json!(true);
+                start["config"]["mcp_servers"]["reviewbox_preparation"] = configuration.clone();
+                for name in [
+                    "review_state",
+                    "review_source",
+                    "review_read_document",
+                    "review_search",
+                    "review_context_assess",
+                    "review_activity",
+                    "review_plan",
+                    "review_document",
+                    "review_decide",
+                    "review_finish",
+                ] {
+                    start["config"]["mcp_servers"]["reviewbox_preparation"]["tools"][name] =
+                        json!({"approval_mode":"approve"});
+                }
+            }
         }
         let started = self.request("thread/start", start).await?;
         if started["thread"]["ephemeral"] != true {
@@ -323,6 +347,10 @@ impl Session {
                         "Codex returned no final answer for this batch.",
                     )
                 })?;
+                #[cfg(test)]
+                if std::env::var_os("REVIEWBOX_REAL_PROVIDER").is_some() {
+                    eprintln!("Real harness final: {text}");
+                }
                 stream.emit("delta", &text)?;
                 if self.prepared.helper.is_some() {
                     for (child, status) in children {
