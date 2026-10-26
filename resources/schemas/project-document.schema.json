@@ -234,9 +234,14 @@
           "items": { "$ref": "#/$defs/DocumentTerm" },
           "type": "array"
         },
+        "single": {
+          "anyOf": [
+            { "$ref": "#/$defs/SingleReviewDocument" },
+            { "type": "null" }
+          ]
+        },
         "technical": { "$ref": "#/$defs/ReviewDocument" }
       },
-      "required": ["essential", "explained", "technical"],
       "type": "object"
     },
     "OnboardingStep": {
@@ -491,6 +496,19 @@
       "required": ["status", "keepLocal", "matchingCommitIds"],
       "type": "object"
     },
+    "ReviewWritingProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "instructions": { "default": "", "type": "string" },
+        "style": { "$ref": "#/$defs/ReviewWritingStyle" }
+      },
+      "required": ["style"],
+      "type": "object"
+    },
+    "ReviewWritingStyle": {
+      "enum": ["essential", "explained", "technical", "custom"],
+      "type": "string"
+    },
     "Scope": {
       "enum": ["local", "staged", "unstaged", "commit", "range"],
       "type": "string"
@@ -501,6 +519,16 @@
         "id": { "type": "string" }
       },
       "required": ["id", "description"],
+      "type": "object"
+    },
+    "SingleReviewDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "content": { "$ref": "#/$defs/ReviewDocument" },
+        "profile": { "$ref": "#/$defs/ReviewWritingProfile" },
+        "version": { "format": "uint32", "minimum": 0, "type": "integer" }
+      },
+      "required": ["version", "profile", "content"],
       "type": "object"
     },
     "SnapshotFile": {
