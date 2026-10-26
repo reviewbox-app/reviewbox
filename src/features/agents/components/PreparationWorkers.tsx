@@ -1,6 +1,5 @@
 "use client"
 
-import type { PreparationBatch } from "@/lib/desktop/contracts.generated"
 import { Spinner } from "@/components/ui/spinner"
 import { Alert02Icon, Tick02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -22,40 +21,9 @@ const statusLabels = {
   pending: "Upcoming",
 }
 
-export function PreparationWorkers({
-  progress,
-  batches = [],
-}: {
-  progress: Progress
-  batches?: PreparationBatch[]
-}) {
+export function PreparationWorkers({ progress }: { progress: Progress }) {
   return (
-    <div className="space-y-4" aria-label="Preparation workers">
-      {batches.length > 0 && (
-        <section aria-label="Active preparation batches" className="space-y-2">
-          <h4 className="text-xs font-medium text-muted-foreground">
-            {batches.length}{" "}
-            {batches.length === 1
-              ? "coordinator assigned"
-              : "coordinators assigned"}
-          </h4>
-          <ul className="space-y-2 text-sm">
-            {batches.map((batch) => (
-              <li key={batch.id} className="flex items-start gap-2">
-                <Spinner className="mt-1 size-3 shrink-0" />
-                <span className="min-w-0 wrap-anywhere">
-                  {batch.label}
-                  <span className="block text-xs text-muted-foreground">
-                    {batch.model ?? "Harness default"}
-                    {batch.status === "waitingForProvider" &&
-                      " · Waiting for provider capacity"}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+    <div className="space-y-4" aria-label="Delegated preparation work">
       {Object.values(progress.helpers).length > 0 && (
         <section aria-label="Delegated preparation work" className="space-y-2">
           <h4 className="text-xs font-medium text-muted-foreground">

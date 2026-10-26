@@ -19,6 +19,14 @@ import type {
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { harnessNames } from "../hooks/useRevStatus"
 import { setupCommands } from "../services/setup.commands"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useProviderModels } from "../hooks/useProviderModels"
 import { ModelSelector } from "../components/ModelSelector"
 
 export function HarnessConfigurationDialog({
@@ -33,12 +41,19 @@ export function HarnessConfigurationDialog({
   config: ProviderConfig
   onClose: () => void
   onSave: (
-    patch: Partial<Pick<ProviderConfig, "executable" | "model">>
+    patch: Partial<
+      Pick<ProviderConfig, "executable" | "model" | "reasoningEffort">
+    >
   ) => Promise<void>
 }) {
   const [value, setValue] = useState(
     mode === "details" ? (config.model ?? "") : config.executable
   )
+  const [effort, setEffort] = useState(config.reasoningEffort ?? "")
+  const catalogue = useProviderModels(status.provider, config.executable)
+  const efforts =
+    catalogue.models?.find((model) => model.id === value)?.supportedEfforts ??
+    []
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const name = harnessNames[status.provider] ?? status.provider
@@ -121,7 +136,10 @@ export function HarnessConfigurationDialog({
             try {
               await onSave(
                 mode === "details"
-                  ? { model: value.trim() || null }
+                  ? {
+                      model: value.trim() || null,
+                      reasoningEffort: effort || undefined,
+                    }
                   : { executable: value.trim() }
               )
               onClose()
@@ -132,6 +150,35 @@ export function HarnessConfigurationDialog({
             }
           }}
         >
+          {mode === "details" && (
+            <div className="space-y-2">
+              <Label>Reasoning effort</Label>
+              <Select
+                value={effort || "default"}
+                onOpenChange={catalogue.onOpenChange}
+                onValueChange={(value) =>
+                  setEffort(value === "default" ? "" : (value ?? ""))
+                }
+              >
+                <SelectTrigger aria-label="Reasoning effort">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Automatic</SelectItem>
+                  {efforts.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {catalogue.error && (
+                <p role="alert" className="text-xs text-destructive">
+                  {catalogue.error}
+                </p>
+              )}
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor={id}>
               {mode === "details" ? "Model override" : "Executable"}
@@ -144,7 +191,10 @@ export function HarnessConfigurationDialog({
                 value={value || null}
                 defaultLabel="Harness default"
                 disabled={busy}
-                onChange={(model) => setValue(model ?? "")}
+                onChange={(model) => {
+                  setValue(model ?? "")
+                  setEffort("")
+                }}
               />
             ) : (
               <div className="flex gap-2">

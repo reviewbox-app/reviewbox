@@ -52,7 +52,12 @@ export function StepDocument({
   onOpenReference: (reference: DocumentReference) => void
 }) {
   const { step } = unit.step
-  const document = step.documents[level]
+  const document = step.documents.single?.content ?? step.documents.essential
+  const contentLevel =
+    step.documents.single?.profile.style === "custom"
+      ? "technical"
+      : (step.documents.single?.profile.style ?? "essential")
+  if (!document) return <p role="alert">This review document is unavailable.</p>
   return (
     <article
       className={cn(
@@ -101,7 +106,7 @@ export function StepDocument({
           ...(workspace.review.glossary ?? []),
           ...(step.documents.glossary ?? []),
         ]}
-        level={level}
+        level={contentLevel}
         reviewId={workspace.review.id}
         snapshotId={workspace.snapshot.id}
         files={workspace.review.files}

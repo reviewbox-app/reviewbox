@@ -13,7 +13,6 @@ import { Spinner } from "@/components/ui/spinner"
 import { SettingRow } from "@/features/settings/components/SettingRow"
 import type { ProviderSettings } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
-import { ModelSelector } from "../components/ModelSelector"
 import { HarnessCard } from "../components/HarnessCard"
 import { HarnessUpdateDialog } from "../components/HarnessUpdateDialog"
 import { useHarnessUpdate } from "../hooks/useHarnessUpdate"
@@ -188,34 +187,6 @@ export function ProviderSettingsPanel() {
               ))}
             </SelectContent>
           </Select>
-        </SettingRow>
-      )}
-      {settings && (
-        <SettingRow
-          title="Helper model"
-          description="Codex delegates preparation tasks to this model. All models use no reasoning when supported, otherwise low reasoning."
-          className="flex-wrap gap-3 border-0 py-3 [&>div:first-child]:basis-48"
-        >
-          <div className="w-60">
-            <ModelSelector
-              id="helper-model"
-              label="Helper model"
-              provider="codex"
-              executable={
-                settings.providers.find((p) => p.provider === "codex")
-                  ?.executable
-              }
-              value={settings.helperModel}
-              defaultLabel="Default · GPT-6 Luna"
-              disabled={settingsBusy}
-              onChange={(model) =>
-                void mutate((latest) => ({
-                  ...latest,
-                  helperModel: model ?? "gpt-6-luna",
-                })).catch((e) => setError(errorMessage(e)))
-              }
-            />
-          </div>
         </SettingRow>
       )}
       <p className="text-xs text-muted-foreground">

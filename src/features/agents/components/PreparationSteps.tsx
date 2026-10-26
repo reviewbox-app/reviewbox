@@ -11,7 +11,8 @@ import { Alert02Icon, PauseIcon, Tick02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
 const labels = {
-  queued: "Waiting for writing",
+  removed: "Removed",
+  queued: "Planned",
   writing: "Writing",
   checking: "Verifying",
   ready: "Ready",
@@ -36,18 +37,20 @@ export function PreparationSteps({
         aria-atomic="true"
         className="text-xs text-muted-foreground"
       >
-        {ready} of {steps.length} steps ready
+        {ready} of {steps.filter((step) => step.status !== "removed").length}{" "}
+        steps ready
       </p>
       <ol aria-label="Prepared outline" className="space-y-2 text-sm">
         {steps.map((step) => {
           const state =
-            step.status === "ready" || status === "running"
+            step.status === "ready" ||
+            step.status === "removed" ||
+            status === "running"
               ? step.status
               : status === "failed"
                 ? "failed"
                 : "interrupted"
-          const loading =
-            state === "queued" || state === "writing" || state === "checking"
+          const loading = state === "writing" || state === "checking"
           return (
             <li
               key={step.id}
@@ -86,6 +89,18 @@ export function PreparationSteps({
                 )}
               >
                 <InlineMarkdown>{step.title}</InlineMarkdown>
+                {step.decision && (
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {(
+                      {
+                        keep: "Kept",
+                        modify: "Modified",
+                        add: "Added",
+                        remove: "Removed",
+                      } as Record<string, string>
+                    )[step.decision] ?? step.decision}
+                  </span>
+                )}
               </span>
             </li>
           )

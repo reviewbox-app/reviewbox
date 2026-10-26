@@ -83,11 +83,6 @@ import { initializeReviewTree } from "@/features/file-tree/services/navigation.s
 
 const EXPLANATION_WIDTH =
   "clamp(280px,var(--review-explanation-width,440px),50%)"
-const levelNames: Record<ReadingLevel, string> = {
-  essential: "Essential",
-  explained: "Explained",
-  technical: "Technical",
-}
 
 export function ReviewReader({
   workspace,
@@ -135,14 +130,13 @@ export function ReviewReader({
   const {
     view,
     setSplit,
-    readerLevel: level,
-    setReaderLevel,
     stepsOpen,
     setStepsOpen,
     explanationRequested,
     setExplanationRequested,
     setSpace,
   } = useReviewWorkspaceStore()
+  const level: ReadingLevel = "essential"
   const { review, snapshot } = workspace
   const filesNavigation = useFileTreeNavigation(
     review.repositoryId,
@@ -463,34 +457,7 @@ export function ReviewReader({
     }
   }, [cursorKey, isDocument, summary, onAction])
 
-  const readingModeSwitch = hasReviewDocuments && (
-    <div
-      className="sticky z-30 mx-auto flex w-fit justify-center"
-      style={{ top: 8 }}
-    >
-      <Tabs
-        value={level}
-        onValueChange={(value) => {
-          if (
-            value === "essential" ||
-            value === "explained" ||
-            value === "technical"
-          ) {
-            setReaderLevel(value)
-          }
-        }}
-        className="rounded-full glass-bar"
-      >
-        <TabsList aria-label="Reading mode">
-          {(Object.keys(levelNames) as ReadingLevel[]).map((value) => (
-            <TabsTrigger key={value} value={value}>
-              {levelNames[value]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-    </div>
-  )
+  const readingModeSwitch = null
 
   const showFiles = !isDocument && !summary && filesOpen
   const showSteps = isDocument && !summary && hasReviewDocuments && stepsOpen

@@ -4,7 +4,7 @@ import { beginProgress } from "../helpers/preparationProgress.helpers"
 import { PreparationWorkers } from "./PreparationWorkers"
 import { PreparationSteps } from "./PreparationSteps"
 
-test("all active helpers and coordinators remain outside bounded activity history", () => {
+test("all active delegated agents remain outside bounded activity history", () => {
   const progress = beginProgress("run")
   for (let i = 0; i < 24; i++) {
     progress.helpers[`helper-${i}`] = {
@@ -16,21 +16,9 @@ test("all active helpers and coordinators remain outside bounded activity histor
       status: "inProgress",
     }
   }
-  const html = renderToStaticMarkup(
-    <PreparationWorkers
-      progress={progress}
-      batches={Array.from({ length: 8 }, (_, i) => ({
-        id: String(i),
-        label: `Batch ${i}`,
-        phase: "documents",
-        model: "Sol",
-        startedAt: "0",
-        status: "running",
-      }))}
-    />
-  )
+  const html = renderToStaticMarkup(<PreparationWorkers progress={progress} />)
   for (let i = 0; i < 24; i++) expect(html).toContain(`Task ${i}`)
-  expect(html).toContain("8 coordinators assigned")
+  expect(html).not.toContain("coordinator")
   expect(html).not.toContain("overflow-y")
   expect(html).not.toContain("max-h-")
   const steps = renderToStaticMarkup(

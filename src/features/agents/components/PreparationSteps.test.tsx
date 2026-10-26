@@ -24,7 +24,7 @@ test("completed documents are opaque while queued, writing and checking rows rem
   expect(html).toContain("opacity-60")
   expect(html).toContain("1 of 4 steps ready")
   expect(html).toContain("<strong>new</strong>")
-  expect(html).toContain("Waiting for writing")
+  expect(html).toContain("Planned")
 })
 test("cancellation stops pending indicators and never downgrades a ready document", () => {
   for (const status of ["cancelled", "interrupted", "failed"] as const) {
