@@ -74,34 +74,41 @@ export function GroupedFileTree({
                       })
                 }
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring",
-                  treeRowOpacity(staged, selected === group.path)
+                  "block w-full rounded-lg px-2 py-1.5 text-left hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring",
+                  treeRowOpacity(
+                    staged,
+                    selected === group.path,
+                    ignoredPaths?.has(group.path)
+                  )
                 )}
               >
-                <HugeiconsIcon
-                  icon={open ? ArrowDown01Icon : ArrowRight01Icon}
-                  size={14}
-                  className="shrink-0 text-muted-foreground"
-                />
-                <FolderIcon path={group.path} open={open} size={16} />
-                <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <HugeiconsIcon
+                    icon={open ? ArrowDown01Icon : ArrowRight01Icon}
+                    size={14}
+                    className="shrink-0 text-muted-foreground"
+                  />
+                  <FolderIcon path={group.path} open={open} size={16} />
                   <span
                     className={cn(
-                      "block truncate text-[13px] font-medium",
+                      "min-w-0 flex-1 truncate text-[13px] font-medium",
                       gitStatusColor(folderStatuses[group.path])
                     )}
                   >
                     {group.path.split("/").at(-1) || "Repository"}
                   </span>
                   <span
-                    className="block truncate text-[11px] text-muted-foreground"
-                    title={group.path}
+                    data-row-meta
+                    className="text-xs text-muted-foreground tabular-nums"
                   >
-                    {group.path || "Root files and isolated changes"}
+                    {files.length}
                   </span>
                 </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {files.length}
+                <span
+                  className="block truncate pl-[46px] text-[11px] text-muted-foreground"
+                  title={group.path}
+                >
+                  {group.path || "Root files and isolated changes"}
                 </span>
               </button>,
               group.path,

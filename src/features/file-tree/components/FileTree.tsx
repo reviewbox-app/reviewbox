@@ -134,7 +134,11 @@ export function FileTree({
                     tabIndex={renderRow ? 0 : undefined}
                     className={cn(
                       row,
-                      treeRowOpacity(staged, selected === child.path)
+                      treeRowOpacity(
+                        staged,
+                        selected === child.path,
+                        ignoredPaths?.has(child.path)
+                      )
                     )}
                   >
                     {content}
@@ -145,7 +149,11 @@ export function FileTree({
                     aria-expanded={open}
                     className={cn(
                       row,
-                      treeRowOpacity(staged, selected === child.path)
+                      treeRowOpacity(
+                        staged,
+                        selected === child.path,
+                        ignoredPaths?.has(child.path)
+                      )
                     )}
                     onClick={() => toggle(child.path)}
                   >

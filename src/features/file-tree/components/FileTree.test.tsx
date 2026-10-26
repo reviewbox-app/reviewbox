@@ -191,7 +191,7 @@ test("folder color uses filtered-out descendants and folder rows support shared 
   expect(html.match(/data-git-status=/g)).toHaveLength(1)
 })
 
-test("all folders fade uniformly without cascading opacity", () => {
+test("native ignored folders fade without cascading opacity", () => {
   const html = renderToStaticMarkup(
     <FileTree
       paths={[
@@ -208,7 +208,13 @@ test("all folders fade uniformly without cascading opacity", () => {
         "empty/",
       ]}
       ignoredPaths={
-        new Set(["cache/deep/a.txt", "cache/top.txt", "mixed/ignored.txt"])
+        new Set([
+          "cache",
+          "cache/deep",
+          "cache/deep/a.txt",
+          "cache/top.txt",
+          "mixed/ignored.txt",
+        ])
       }
       selected=""
       marks={{}}
@@ -216,8 +222,8 @@ test("all folders fade uniformly without cascading opacity", () => {
       onSelect={() => {}}
     />
   )
-  expect(html).toMatch(/data-folder="cache"[^>]*opacity-80/)
-  expect(html).toMatch(/data-folder="cache\/deep"[^>]*opacity-80/)
+  expect(html).toMatch(/data-folder="cache"[^>]*opacity-50/)
+  expect(html).toMatch(/data-folder="cache\/deep"[^>]*opacity-50/)
   expect(html).toMatch(/data-folder="mixed"[^>]*opacity-80/)
   expect(html).toMatch(/data-folder="empty"[^>]*opacity-80/)
   expect(html).not.toMatch(/<(?:li|ul)[^>]*opacity-/)
@@ -227,14 +233,14 @@ test("separate ignored-only nested folders also fade", () => {
   const html = renderToStaticMarkup(
     <FileTree
       paths={["cache/nested/only.txt"]}
-      ignoredPaths={new Set(["cache/nested/only.txt"])}
+      ignoredPaths={new Set(["cache", "cache/nested", "cache/nested/only.txt"])}
       selected=""
       marks={{}}
       alwaysExpanded
       onSelect={() => {}}
     />
   )
-  expect(html).toMatch(/data-folder="cache\/nested"[^>]*opacity-80/)
+  expect(html).toMatch(/data-folder="cache\/nested"[^>]*opacity-50/)
 })
 
 test("nested single-child folders remain individually expandable", () => {
@@ -273,4 +279,37 @@ test("staged trees and groups dim whole rows and start closed", () => {
     expect(opened).toMatch(/title="src\/b.ts"[^>]*opacity-50/)
     expect(opened).not.toMatch(/<(?:li|ul|section)[^>]*opacity-/)
   }
+})
+
+test("ignored lazy folders and grouped headers use native ignore status", () => {
+  for (const Component of [FileTree, GroupedFileTree]) {
+    for (const selected of ["", "cache"]) {
+      const html = renderToStaticMarkup(
+        <Component
+          paths={["cache/a.ts", "cache/b.ts"]}
+          allPaths={["cache/a.ts", "cache/b.ts"]}
+          selected={selected}
+          marks={{}}
+          ignoredPaths={new Set(["cache", "cache/a.ts", "cache/b.ts"])}
+          onSelect={() => {}}
+        />
+      )
+      expect(html).toMatch(
+        selected
+          ? /data-folder="cache"[^>]*opacity-100/
+          : /data-folder="cache"[^>]*opacity-50/
+      )
+      expect(html).not.toMatch(/<(?:li|ul|section)[^>]*opacity-/)
+    }
+  }
+  const lazy = renderToStaticMarkup(
+    <FileTree
+      paths={["vendor/"]}
+      selected=""
+      marks={{}}
+      ignoredPaths={new Set(["vendor"])}
+      onSelect={() => {}}
+    />
+  )
+  expect(lazy).toMatch(/data-folder="vendor"[^>]*opacity-50/)
 })
