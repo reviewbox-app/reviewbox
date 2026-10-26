@@ -3,7 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { ReviewCommitOperation } from "@/lib/desktop/contracts.generated"
 import { desktopAvailable, errorMessage } from "@/lib/desktop/review.commands"
 import { reviewCommitCommands } from "../services/reviewCommit.commands"
-import { sourceControlCommands } from "../services/source-control.commands"
+import {
+  sourceControlCommands,
+  waitForGitRefresh,
+} from "../services/source-control.commands"
 
 export function useReviewCommit(repositoryId: string, reviewId: string) {
   const [state, setState] = useState<ReviewCommitOperation | null>(null)
@@ -66,6 +69,8 @@ export function useReviewCommit(repositoryId: string, reviewId: string) {
     setStarting(true)
     setError("")
     try {
+      await waitForGitRefresh(repositoryId)
+      if (current.current !== identity) return
       const next = await reviewCommitCommands.start(repositoryId, reviewId)
       if (current.current === identity)
         setState((old) =>

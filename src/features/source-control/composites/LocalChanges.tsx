@@ -299,14 +299,20 @@ export function LocalChanges({
       alive = false
     }
   }, [path, version, repositoryId, layer, reload, setError])
+  const stagingPaths = useRef(new Set<string>())
+  const [pendingStagePaths, setPendingStagePaths] = useState<
+    ReadonlySet<string>
+  >(new Set())
   const stageSelection = async (files: LocalFile[], staged: boolean) => {
     if (
       !state ||
-      busy ||
       !files.length ||
+      files.some((file) => stagingPaths.current.has(file.path)) ||
       files.some((file) => file.conflicted)
     )
       return
+    for (const file of files) stagingPaths.current.add(file.path)
+    setPendingStagePaths(new Set(stagingPaths.current))
     const removed = new Set(files.map((file) => file.path))
     const stagingLayer = staged ? "staged" : "unstaged"
     const order =
@@ -333,6 +339,8 @@ export function LocalChanges({
       )
       return updated
     })
+    for (const file of files) stagingPaths.current.delete(file.path)
+    setPendingStagePaths(new Set(stagingPaths.current))
     const next =
       updated &&
       nextLocalFileInLayer(
@@ -615,21 +623,15 @@ export function LocalChanges({
                                     : "Unstage all changes"
                                 }
                                 disabled={
-                                  busy ||
                                   !files.length ||
-                                  files.some((file) => file.conflicted)
+                                  files.some(
+                                    (file) =>
+                                      file.conflicted ||
+                                      pendingStagePaths.has(file.path)
+                                  )
                                 }
                                 onClick={() =>
-                                  void mutate(() =>
-                                    commands.stageFiles(
-                                      state.repositoryId,
-                                      files.map(({ path, version }) => ({
-                                        path,
-                                        version,
-                                      })),
-                                      group === "unstaged"
-                                    )
-                                  )
+                                  void stageSelection(files, group === "staged")
                                 }
                               />
                             }
@@ -690,6 +692,7 @@ export function LocalChanges({
                           staged={group === "staged"}
                           git={git}
                           onStage={stageSelection}
+                          pendingPaths={pendingStagePaths}
                           targets={() =>
                             files.filter((file) =>
                               target.folder
@@ -929,7 +932,11 @@ export function LocalChanges({
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={busy || !content || content.version !== file.version}
+                disabled={
+                  pendingStagePaths.has(file.path) ||
+                  !content ||
+                  content.version !== file.version
+                }
                 title="Stage / unstage and open next file (⌘⇧S / Ctrl+Shift+S)"
                 aria-keyshortcuts="Meta+Shift+S Control+Shift+S"
                 onClick={() => void stageCurrent()}

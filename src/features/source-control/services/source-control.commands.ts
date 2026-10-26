@@ -10,6 +10,12 @@ import type {
   LocalFileSelection,
 } from "@/lib/desktop/contracts.generated"
 
+/** Shared with commit entry points, which outlive the overview's controls. */
+export const pendingGitRefreshes = new Map<string, Promise<void>>()
+export async function waitForGitRefresh(repositoryId: string) {
+  await pendingGitRefreshes.get(repositoryId)
+}
+
 export const sourceControlCommands = {
   recoverLock: (repositoryId: string) =>
     call<void>("recover_git_lock", { repositoryId }),

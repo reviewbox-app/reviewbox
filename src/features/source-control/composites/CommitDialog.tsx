@@ -24,7 +24,10 @@ import type {
   LocalGitState,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
-import { sourceControlCommands as commands } from "../services/source-control.commands"
+import {
+  sourceControlCommands as commands,
+  waitForGitRefresh,
+} from "../services/source-control.commands"
 
 import { GitRecoveryActions } from "../components/GitRecoveryActions"
 
@@ -69,6 +72,7 @@ export function CommitDialog({
       error: null,
     })
     try {
+      await waitForGitRefresh(state.repositoryId)
       const result = await commands.commit(
         {
           operationId: id,

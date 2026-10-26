@@ -34,6 +34,7 @@ export function LocalFileMenu({
   select,
   git,
   onStage,
+  pendingPaths,
 }: {
   row: ReactElement
   path: string
@@ -43,13 +44,16 @@ export function LocalFileMenu({
   select: (files: LocalFile[]) => void
   git: SourceControlSession
   onStage?: (files: LocalFile[], staged: boolean) => Promise<void>
+  pendingPaths?: ReadonlySet<string>
 }) {
   const [snapshot, setSnapshot] = useState<LocalFile[]>([])
   const [confirm, setConfirm] = useState(false)
   const repositoryId = git.state!.repositoryId
   const selections = snapshot.map(({ path, version }) => ({ path, version }))
   const disabled =
-    git.busy || !snapshot.length || snapshot.some((file) => file.conflicted)
+    !snapshot.length ||
+    snapshot.some((file) => file.conflicted || pendingPaths?.has(file.path))
+  const quickTargets = targets().filter((file) => folder || file.path === path)
   const noun = folder
     ? "folder"
     : snapshot.length > 1
@@ -57,52 +61,82 @@ export function LocalFileMenu({
       : "file"
   return (
     <>
-      <FileMenu
-        row={row}
-        repositoryId={repositoryId}
-        path={path}
-        paths={folder ? [path] : snapshot.map((file) => file.path)}
-        revealDisabled={!folder && snapshot.length !== 1}
-        onError={git.setError}
-        onOpenChange={(open) => {
-          if (open) {
-            const files = targets()
-            setSnapshot(files)
-            select(files)
+      <div className="group/stage relative [&:focus-within_[data-git-status]]:invisible [&:focus-within_[data-row-meta]]:invisible [&:hover_[data-git-status]]:invisible [&:hover_[data-row-meta]]:invisible">
+        <FileMenu
+          row={row}
+          repositoryId={repositoryId}
+          path={path}
+          paths={folder ? [path] : snapshot.map((file) => file.path)}
+          revealDisabled={!folder && snapshot.length !== 1}
+          onError={git.setError}
+          onOpenChange={(open) => {
+            if (open) {
+              const files = targets()
+              setSnapshot(files)
+              select(files)
+            }
+          }}
+          before={
+            <>
+              <ContextMenuItem
+                disabled={disabled}
+                onClick={() =>
+                  void (onStage
+                    ? onStage(snapshot, staged)
+                    : git.mutate(() =>
+                        commands.stageFiles(repositoryId, selections, !staged)
+                      ))
+                }
+              >
+                <HugeiconsIcon icon={staged ? MinusSignIcon : Add01Icon} />
+                {staged ? "Unstage" : "Stage"} {noun}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
           }
-        }}
-        before={
-          <>
-            <ContextMenuItem
-              disabled={disabled}
-              onClick={() =>
-                void (onStage
-                  ? onStage(snapshot, staged)
-                  : git.mutate(() =>
-                      commands.stageFiles(repositoryId, selections, !staged)
-                    ))
-              }
-            >
-              <HugeiconsIcon icon={staged ? MinusSignIcon : Add01Icon} />
-              {staged ? "Unstage" : "Stage"} {noun}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        }
-        after={
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              variant="destructive"
-              disabled={disabled || staged}
-              onClick={() => setConfirm(true)}
-            >
-              <HugeiconsIcon icon={ArrowReloadHorizontalIcon} />
-              Revert changes
-            </ContextMenuItem>
-          </>
-        }
-      />
+          after={
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                variant="destructive"
+                disabled={git.busy || disabled || staged}
+                onClick={() => setConfirm(true)}
+              >
+                <HugeiconsIcon icon={ArrowReloadHorizontalIcon} />
+                Revert changes
+              </ContextMenuItem>
+            </>
+          }
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`${staged ? "Unstage" : "Stage"} ${folder ? "folder" : "file"} ${path}`}
+          title={staged ? "Unstage" : "Stage"}
+          disabled={
+            !quickTargets.length ||
+            quickTargets.some(
+              (file) => file.conflicted || pendingPaths?.has(file.path)
+            )
+          }
+          className="absolute top-0.5 right-1 z-10 opacity-0 group-focus-within/stage:opacity-100 group-hover/stage:opacity-100 focus-visible:opacity-100"
+          onClick={() => {
+            const files = quickTargets
+            void (onStage
+              ? onStage(files, staged)
+              : git.mutate(() =>
+                  commands.stageFiles(
+                    repositoryId,
+                    files.map(({ path, version }) => ({ path, version })),
+                    !staged
+                  )
+                ))
+          }}
+        >
+          <HugeiconsIcon icon={staged ? MinusSignIcon : Add01Icon} size={14} />
+        </Button>
+      </div>
       <AlertDialog open={confirm} onOpenChange={setConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>

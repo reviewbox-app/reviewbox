@@ -6,7 +6,10 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { LocalGitState } from "@/lib/desktop/contracts.generated"
 import { desktopAvailable, errorMessage } from "@/lib/desktop/review.commands"
-import { sourceControlCommands as commands } from "../services/source-control.commands"
+import {
+  sourceControlCommands as commands,
+  pendingGitRefreshes,
+} from "../services/source-control.commands"
 
 /** One repository owner. Passive updates preserve component and overlay identities. */
 export function useSourceControl(repositoryId: string | undefined) {
@@ -17,9 +20,18 @@ export function useSourceControl(repositoryId: string | undefined) {
   } | null>(null)
   const [busyRepository, setBusyRepository] = useState<string | null>(null)
   const gate = useRef(new Set<string>())
+  const fetching = useRef(pendingGitRefreshes)
+  const generation = useRef(0)
+  const mutations = useRef(new Map<string, Promise<boolean>>())
   const owner = useRef(repositoryId)
+  const ownership = useRef(0)
   useEffect(() => {
     owner.current = repositoryId
+    const session = ++ownership.current
+    return () => {
+      ownership.current = session + 1
+      owner.current = undefined
+    }
   }, [repositoryId])
   const setError = useCallback(
     (message: string) => {
@@ -35,8 +47,10 @@ export function useSourceControl(repositoryId: string | undefined) {
   }, [])
   const reload = useCallback(async () => {
     if (!repositoryId || !desktopAvailable()) return null
+    const started = generation.current
     const value = await commands.state(repositoryId)
-    install(value)
+    if (started === generation.current && !gate.current.has(repositoryId))
+      install(value)
     return value
   }, [repositoryId, install])
   const fetch = useCallback(
@@ -47,23 +61,42 @@ export function useSourceControl(repositoryId: string | undefined) {
         !desktopAvailable()
       )
         return
-      gate.current.add(repositoryId)
-      setBusyRepository(repositoryId)
-      try {
-        install(await commands.fetch(repositoryId, force))
-      } catch (cause) {
-        const busyElsewhere =
-          cause &&
-          typeof cause === "object" &&
-          "code" in cause &&
-          cause.code === "git_busy"
-        if (force || !busyElsewhere) setError(errorMessage(cause))
-      } finally {
-        gate.current.delete(repositoryId)
-        setBusyRepository((previous) =>
-          previous === repositoryId ? null : previous
-        )
+      const pending = fetching.current.get(repositoryId)
+      if (pending) {
+        if (force) setBusyRepository(repositoryId)
+        try {
+          await pending
+        } finally {
+          if (force && !gate.current.has(repositoryId))
+            setBusyRepository((previous) =>
+              previous === repositoryId ? null : previous
+            )
+        }
+        return
       }
+      if (force) setBusyRepository(repositoryId)
+      const operation = (async () => {
+        try {
+          const value = await commands.fetch(repositoryId, force)
+          generation.current++
+          install(value)
+        } catch (cause) {
+          const busyElsewhere =
+            cause &&
+            typeof cause === "object" &&
+            "code" in cause &&
+            cause.code === "git_busy"
+          if (force || !busyElsewhere) setError(errorMessage(cause))
+        } finally {
+          fetching.current.delete(repositoryId)
+          if (force && !gate.current.has(repositoryId))
+            setBusyRepository((previous) =>
+              previous === repositoryId ? null : previous
+            )
+        }
+      })()
+      fetching.current.set(repositoryId, operation)
+      return operation
     },
     [repositoryId, install, setError]
   )
@@ -97,7 +130,9 @@ export function useSourceControl(repositoryId: string | undefined) {
       }
     }
     void refresh()
-    void fetch()
+    queueMicrotask(() => {
+      if (alive) void fetch()
+    })
     const unsubscribe = subscribeRepositoryReads(
       repositoryId,
       (change) => {
@@ -116,26 +151,44 @@ export function useSourceControl(repositoryId: string | undefined) {
     }
   }, [repositoryId, reload, fetch, setError])
   const mutate = useCallback(
-    async (work: () => Promise<LocalGitState>) => {
-      if (!repositoryId || gate.current.has(repositoryId)) return false
+    (work: () => Promise<LocalGitState>) => {
+      if (!repositoryId) return Promise.resolve(false)
+      const previous = mutations.current.get(repositoryId)
+      const requestedOwner = ownership.current
+      if (!previous) setError("")
       gate.current.add(repositoryId)
       setBusyRepository(repositoryId)
-      setError("")
-      try {
-        install(await work())
-        return true
-      } catch (cause) {
-        setError(errorMessage(cause))
-        await reload().catch(() => {})
-        return false
-      } finally {
+      generation.current++
+      const operation = (async () => {
+        await previous
+        await fetching.current.get(repositoryId)
+        if (
+          owner.current !== repositoryId ||
+          ownership.current !== requestedOwner
+        )
+          return false
+        try {
+          install(await work())
+          return true
+        } catch (cause) {
+          setError(errorMessage(cause))
+          const current = await commands.state(repositoryId).catch(() => null)
+          if (current) install(current)
+          return false
+        }
+      })()
+      mutations.current.set(repositoryId, operation)
+      void operation.finally(() => {
+        if (mutations.current.get(repositoryId) !== operation) return
+        mutations.current.delete(repositoryId)
         gate.current.delete(repositoryId)
         setBusyRepository((previous) =>
           previous === repositoryId ? null : previous
         )
-      }
+      })
+      return operation
     },
-    [repositoryId, install, reload, setError]
+    [repositoryId, install, setError]
   )
   return {
     state: state?.repositoryId === repositoryId ? state : null,
