@@ -42,3 +42,9 @@ next-env.d.ts
 /public/file-icons/
 /artifacts/
 /.reviewbox-build-lock/
+
+# Private project documentation and local agent conventions
+/docs/
+/.agents/
+/AGENTS.md
+/src-tauri/icons/README.md
