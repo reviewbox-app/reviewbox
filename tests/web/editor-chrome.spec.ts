@@ -14,9 +14,15 @@ test("editor actions are compact and creation leads both context menus", async (
   await expect(
     page.getByRole("button", { name: "Save all", exact: true })
   ).toHaveCount(0)
-  await expect(
-    page.locator('button[title="ignored.txt"] > span').first()
-  ).toHaveCSS("opacity", "0.6")
+  const ignoredFile = page.getByRole("button", {
+    name: "ignored.txt",
+    exact: true,
+  })
+  await expect(ignoredFile).toHaveCSS("opacity", "0.5")
+  await ignoredFile.hover()
+  await expect(ignoredFile).toHaveCSS("opacity", "1")
+  await page.getByRole("button", { name: "Explorer actions" }).hover()
+  await expect(ignoredFile).toHaveCSS("opacity", "0.5")
   await page.getByRole("button", { name: "Explorer actions" }).click()
   await expect(page.getByRole("menuitem")).toHaveText([
     "New file",
