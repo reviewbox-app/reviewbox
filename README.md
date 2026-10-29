@@ -99,10 +99,10 @@ prompts and imported project skills remain in `resources/agents/`.
 
 ## License
 
-ReviewBox's original code is released under [The Unlicense](LICENSE): use, modify,
-and distribute it for commercial or non-commercial purposes without attribution
-requirements. It comes without warranty.
+ReviewBox's original code is released under the [MIT License](LICENSE). You may
+use, modify, and distribute it for commercial or non-commercial purposes, provided
+you retain the copyright and license notice. It comes without warranty.
 
 Third-party dependencies and assets retain their own licenses. Bundled notices
 are preserved in [`public/licenses/`](public/licenses/) and alongside relevant
-source assets; The Unlicense does not replace those terms.
+source assets; The MIT License does not replace those terms.
