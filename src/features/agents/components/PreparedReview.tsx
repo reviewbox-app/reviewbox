@@ -15,10 +15,10 @@ import type {
   ReviewPreparationView,
   ReviewUpdateView,
 } from "../contracts/preparation.types"
-import { PreparationPhases } from "./PreparationPhases"
 import { PreparationWorkers } from "./PreparationWorkers"
 import { PreparationProgress } from "./PreparationProgress"
 import { ReviewPreparationError } from "./ReviewPreparationError"
+import { WorkingContextStatus } from "./WorkingContextStatus"
 
 function duration(from: number, to: number) {
   const seconds = Math.max(0, Math.round((to - from) / 1000))
@@ -142,19 +142,13 @@ export function PreparedReview({
                   {state.adaptation.removedSteps} removed
                 </p>
               )}
-              <PreparationPhases preparation={preparation} complete />
               {state && (
                 <p className="text-xs text-muted-foreground">
-                  {state.completedBatches} of {state.totalBatches} batches
+                  {state.completedBatches} of {state.totalBatches} documents
                   complete
                 </p>
               )}
-              {progress && (
-                <PreparationWorkers
-                  progress={progress}
-                  batches={state?.activeBatches}
-                />
-              )}
+              {progress && <PreparationWorkers progress={progress} />}
               {progress && (
                 <PreparationProgress
                   key={progress.runId}
@@ -232,6 +226,11 @@ export function PreparedReview({
         </p>
       )}
       <ReviewPreparationError workspace={workspace} preparation={preparation} />
+      <WorkingContextStatus
+        repositoryId={workspace.review.repositoryId}
+        reviewId={workspace.review.id}
+        revision={workspace.review.revision}
+      />
       {reviewStatus ? (
         <div
           className="flex items-center justify-end gap-2 pt-2"

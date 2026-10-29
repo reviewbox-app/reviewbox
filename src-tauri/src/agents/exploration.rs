@@ -12,7 +12,7 @@ pub(super) struct ExplorationRequest {
 /// content-addressed cache; the harness runs in the real repository.
 pub(super) struct Exploration {
     pub project: PathBuf,
-    directory: PathBuf,
+    pub(super) directory: PathBuf,
 }
 impl Drop for Exploration {
     fn drop(&mut self) {

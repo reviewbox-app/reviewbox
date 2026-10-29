@@ -187,13 +187,11 @@ pub(crate) fn read(
             ));
         }
         let content = fs::read(path)?;
-        if fingerprint(&content) != location.hash {
-            return Err(AppError::new(
-                "corrupt_asset",
-                "Generated document hash does not match.",
-            ));
-        }
-        let pack: Pack = serde_json::from_slice(&content)?;
+        let pack: Pack = verified_json_asset(
+            &content,
+            &location.hash,
+            "Generated document hash does not match.",
+        )?;
         if pack.format != "reviewbox"
             || pack.version != VERSION
             || pack.review_id != review_id
@@ -263,6 +261,34 @@ pub(crate) fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reformatted_reader_packs_keep_their_original_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::open(dir.path(), "repo").unwrap();
+        let (index, files) = prepare(
+            &project,
+            "review",
+            "prep",
+            vec![ReviewFileContent {
+                file_id: "file".into(),
+                documents: None,
+            }],
+        )
+        .unwrap();
+        for (path, data) in files {
+            let path = checked(&project.root, &path).unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let value: Value = serde_json::from_slice(&data).unwrap();
+            fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+        }
+        assert!(
+            read(&project.root, "review", "prep", "file", &index)
+                .unwrap()
+                .documents
+                .is_none()
+        );
+    }
 
     #[test]
     fn legacy_translation_packs_are_read_without_rewriting_or_reemitting_them() {

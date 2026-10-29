@@ -1,5 +1,6 @@
 import * as monaco from "monaco-editor/editor/editor.api"
 import type { editor, IDisposable } from "monaco-editor"
+import { codeEditorOptions } from "@/lib/code/codeAppearance"
 import type {
   BlockDiffModels,
   CodeBlock,
@@ -7,6 +8,9 @@ import type {
   CodeSide,
 } from "../contracts/blockDiff.types"
 import { hideRanges, lineRange } from "./monacoHiddenRanges"
+import { bindSelectionSearch } from "./selectionSearch"
+import { observeSourceSelection } from "./sourceSelection"
+import type { SourceSelection } from "../contracts/sourceSelection.types"
 
 type Cell = {
   side: CodeSide
@@ -48,6 +52,8 @@ export class BlockDiffZones {
       changed: () => void
       cursor: (line: number, column: number) => void
       find: () => void
+      searchSelection?: (text: string) => void
+      selection?: (selection: SourceSelection | null) => void
     }
   ) {
     this.theme = theme
@@ -65,6 +71,10 @@ export class BlockDiffZones {
     )
     this.marks = main.createDecorationsCollection()
     this.listeners = [
+      bindSelectionSearch(monaco, main, this.callbacks.searchSelection),
+      observeSourceSelection(main, "after", (selection) =>
+        this.callbacks.selection?.(selection)
+      ),
       main.onDidScrollChange(() => this.schedule()),
       main.onDidLayoutChange(() => this.schedule()),
       main.onDidFocusEditorText(() => {
@@ -284,7 +294,7 @@ export class BlockDiffZones {
         model: this.models[side],
         theme: this.theme,
         readOnly: true,
-        fontFamily: "var(--font-mono)",
+        ...codeEditorOptions(),
         fontSize: 12,
         lineHeight: 20,
         fontLigatures: false,
@@ -334,6 +344,9 @@ export class BlockDiffZones {
       }
       host.addEventListener("wheel", wheel, { passive: false })
       const subscriptions = [
+        observeSourceSelection(instance, side, (selection) =>
+          this.callbacks.selection?.(selection)
+        ),
         instance.onDidContentSizeChange(() => this.schedule()),
         instance.onDidChangeCursorPosition((event) => {
           this.callbacks.cursor(
@@ -342,6 +355,7 @@ export class BlockDiffZones {
           )
           this.callbacks.changed()
         }),
+        bindSelectionSearch(monaco, instance, this.callbacks.searchSelection),
         instance.onDidFocusEditorText(() => {
           this.activeSide = side
           this.activeCell = cell
@@ -449,6 +463,9 @@ export class BlockDiffZones {
           : this.main.getTopForLineNumber(zone.block.anchor + 1) - zone.height
       this.main.setScrollTop(Math.max(0, absolute - 14))
       this.layout()
+      // Monaco may not have reported the zone geometry yet. Materialize the
+      // requested cell now so navigation cannot lose its exact selection.
+      if (!zone.cells.length) this.mount(zone)
       const cell = zone.cells.find((cell) => cell.side === point.side)
       if (cell) {
         const top = cell.editor.getTopForLineNumber(point.line)
@@ -460,6 +477,7 @@ export class BlockDiffZones {
               : (top + bottom) / 2 - viewport / 2
             : top + point.fraction * Math.max(1, bottom - top) - 14
         this.main.setScrollTop(Math.max(0, absolute + 28 + offset))
+        if (endColumn > column) cell.editor.focus()
         cell.editor.setSelection({
           startLineNumber: point.line,
           startColumn: column,
@@ -480,6 +498,7 @@ export class BlockDiffZones {
           ? 0
           : top - 14 + point.fraction * (bottom - top)
     this.main.setScrollTop(Math.max(0, offset))
+    if (endColumn > column) this.main.focus()
     this.main.setSelection({
       startLineNumber: point.line,
       startColumn: column,

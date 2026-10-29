@@ -29,8 +29,64 @@ pub(super) async fn run_policy(
     stream: &mut Stream,
     read_only: bool,
 ) -> AppResult<()> {
-    let effort = models::effort(config, cancel.clone()).await?;
-    let mut command = providers::command(&providers::resolve_executable(&config.executable));
+    run_configured(root, prompt, config, cancel, stream, read_only, false, None).await
+}
+pub(super) async fn run_consultation(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+) -> AppResult<()> {
+    run_configured(root, prompt, config, cancel, stream, true, true, None).await
+}
+pub(super) async fn run_review_session(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+    tools: Value,
+) -> AppResult<()> {
+    run_configured(
+        root,
+        prompt,
+        config,
+        cancel,
+        stream,
+        true,
+        false,
+        Some(tools),
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+async fn run_configured(
+    root: &std::path::Path,
+    prompt: &str,
+    config: &ProviderConfig,
+    cancel: Arc<AtomicBool>,
+    stream: &mut Stream,
+    read_only: bool,
+    terminal_only: bool,
+    preparation: Option<Value>,
+) -> AppResult<()> {
+    let effort = if preparation.is_some() && config.reasoning_effort.is_none() {
+        None
+    } else {
+        models::effort(config, cancel.clone()).await?
+    };
+    let executable = providers::resolve_executable(&config.executable);
+    let sandbox = if read_only && terminal_only {
+        Some(consultation::Sandbox::new()?)
+    } else {
+        None
+    };
+    let mut command = if let Some(sandbox) = &sandbox {
+        sandbox.command(&executable)?
+    } else {
+        providers::command(&executable)
+    };
     // The harness owns discovery, context compaction and its configured tools.
     // Full tool execution is the locally chosen ReviewBox runtime policy.
     command
@@ -49,7 +105,7 @@ pub(super) async fn run_policy(
             },
         ])
         .current_dir(root);
-    if read_only {
+    if read_only && !terminal_only && preparation.is_none() {
         command.args([
             "--safe-mode",
             "--restricted",
@@ -58,11 +114,47 @@ pub(super) async fn run_policy(
             "Read,Glob,Grep,WebSearch,WebFetch",
         ]);
     }
+    if let Some(mut tools) = preparation {
+        tools.as_object_mut().map(|object| object.remove("enabled"));
+        command
+            .args(["--restricted", "--strict-mcp-config", "--mcp-config"])
+            .arg(serde_json::json!({"mcpServers":{"reviewbox_preparation":tools}}).to_string())
+            .args([
+                "--tools",
+                "Read,Glob,Grep,Agent,Task",
+                "--disallowedTools",
+                "Bash,Edit,Write,NotebookEdit",
+                "--allowedTools",
+                "Read,Glob,Grep,Agent,Task,mcp__reviewbox_preparation__*",
+                "--settings",
+                r#"{"disableAllHooks":true}"#,
+                "--disable-slash-commands",
+            ]);
+    }
+    if terminal_only {
+        command.args([
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "{\"mcpServers\":{}}",
+            "--tools",
+            "Bash",
+            "--disable-slash-commands",
+        ]);
+    }
+    if read_only && terminal_only {
+        command.args([
+            "--allowedTools",
+            "Bash",
+            "--settings",
+            r#"{"disableAllHooks":true}"#,
+        ]);
+    }
     if let Some(model) = config.model.as_ref().filter(|m| !m.is_empty()) {
         command.args(["--model", model]);
     }
     if let Some(effort) = effort {
-        command.args(["--effort", effort]);
+        command.args(["--effort", &effort]);
     }
     let mut transport = Transport::new(command, cancel)?;
     let mut previews = TextPreviews::default();
@@ -73,6 +165,20 @@ pub(super) async fn run_policy(
             let value = transport.next().await?;
             activity(&value, stream)?;
             previews.receive(&value, stream)?;
+            if stream.live_text
+                && value["parent_tool_use_id"].is_null()
+                && value["type"] == "stream_event"
+            {
+                let event = &value["event"];
+                if event["type"] == "message_start" {
+                    stream.emit("textStart", "")?;
+                }
+                if event["delta"]["type"] == "text_delta"
+                    && let Some(delta) = event["delta"]["text"].as_str()
+                {
+                    stream.emit("textDelta", delta)?;
+                }
+            }
             if value["type"] == "result" {
                 if value["is_error"] == true {
                     return Err(failure(&value));
@@ -178,6 +284,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let output = seen.clone();
         let mut stream = Stream {
+            live_text: false,
             id: "test".into(),
             sequence: 0,
             text: String::new(),

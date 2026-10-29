@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-test("shared tree appearance, opaque folders, filtered statuses and read-only menus", async ({
+test("shared tree appearance, uniformly dimmed folders, filtered statuses and read-only menus", async ({
   page,
   context,
 }) => {
@@ -21,7 +21,7 @@ test("shared tree appearance, opaque folders, filtered statuses and read-only me
     const values = []
     for (const name of ["Review", "Code Editor", "Local changes"]) {
       const tree = page.getByRole("navigation", { name, exact: true })
-      await expect(tree.locator("[data-folder]")).toHaveCSS("opacity", "1")
+      await expect(tree.locator("[data-folder]")).toHaveCSS("opacity", "0.8")
       await expect(tree.locator("[data-folder] [data-git-status]")).toHaveCount(
         0
       )
@@ -86,4 +86,25 @@ test("shared tree appearance, opaque folders, filtered statuses and read-only me
       .locator("[data-folder] > span")
       .evaluate((node) => getComputedStyle(node).color)
   ).toBe(folderColor)
+})
+
+test("all rows fade to 80 percent except hovered or selected", async ({
+  page,
+}) => {
+  await page.goto("/dev/file-tree/")
+  const review = page.getByRole("navigation", { name: "Review", exact: true })
+  const selected = review.locator('[title="src/added.ts"]')
+  const file = review.locator('[title="src/modified.ts"]')
+  await expect(selected).toHaveCSS("opacity", "1")
+  await expect(file).toHaveCSS("opacity", "0.8")
+  await file.hover()
+  await expect(file).toHaveCSS("opacity", "1")
+  await file.click()
+  await page.getByRole("button", { name: "Dark", exact: true }).hover()
+  await expect(file).toHaveCSS("opacity", "1")
+  await expect(selected).toHaveCSS("opacity", "0.8")
+  await expect(review.locator('[data-folder="src"]')).toHaveCSS(
+    "opacity",
+    "0.8"
+  )
 })

@@ -148,9 +148,36 @@ pub async fn list_repositories(storage: State<'_, Storage>) -> AppResult<Vec<Rep
     blocking(move || s.list("repository")).await
 }
 #[tauri::command]
-pub async fn open_repository(storage: State<'_, Storage>, path: String) -> AppResult<Repository> {
+pub async fn open_repository(
+    app: tauri::AppHandle,
+    storage: State<'_, Storage>,
+    path: String,
+) -> AppResult<Repository> {
     let s = storage.inner().clone();
-    blocking(move || repositories::open(&s, &path)).await
+    let resources = resource_root(&app)?;
+    blocking(move || {
+        let repository = repositories::open(&s, &path)?;
+        let result = crate::project_skills::bootstrap(&s, &repository, &resources);
+        let error = match result {
+            Ok(report) => report.error,
+            Err(error) => Some(error),
+        };
+        if let Some(error) = error {
+            let _ = app
+                .state::<std::sync::Arc<crate::diagnostics::Diagnostics>>()
+                .record(DiagnosticInput {
+                    source: "native".into(),
+                    operation: "project_skills_import".into(),
+                    code: error.code,
+                    message: error.message,
+                    details: error.details,
+                    stack: None,
+                    context: Default::default(),
+                });
+        }
+        Ok(repository)
+    })
+    .await
 }
 #[tauri::command]
 pub async fn choose_repository() -> AppResult<Option<String>> {
@@ -388,6 +415,7 @@ pub async fn configure_language_servers(
     app: tauri::AppHandle,
     storage: State<'_, Storage>,
     manager: State<'_, crate::language_servers::LanguageServers>,
+    live: State<'_, crate::language_servers::live::LiveLanguages>,
     settings: LanguageServerSettings,
 ) -> AppResult<LanguageServerSettings> {
     let s = storage.inner().clone();
@@ -396,8 +424,19 @@ pub async fn configure_language_servers(
         Ok((previous, crate::language_servers::configure(&s, settings)?))
     })
     .await?;
-    for server in previous.servers.iter().chain(&result.servers) {
-        manager.stop_server(&server.id);
+    let ids = previous
+        .servers
+        .iter()
+        .chain(&result.servers)
+        .map(|server| server.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for id in ids {
+        let before = previous.servers.iter().find(|s| s.id == id);
+        let after = result.servers.iter().find(|s| s.id == id);
+        if serde_json::to_value(before)? != serde_json::to_value(after)? {
+            manager.stop_server(&id);
+            live.invalidate_server(&id);
+        }
     }
     use tauri::Emitter;
     let _ = app.emit("reviewbox:language-servers-changed", ());
@@ -807,4 +846,25 @@ pub async fn cancel_review_preparation(
     let storage = storage.scoped(repository_id.as_deref());
     let manager = manager.inner().clone();
     blocking(move || manager.cancel(&storage, &review_id)).await
+}
+
+#[tauri::command]
+pub async fn review_writing_profile(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+) -> AppResult<Option<ReviewWritingProfile>> {
+    let storage = storage.inner().clone();
+    blocking(move || crate::preparation::writing::load(&storage, repository_id.as_deref())).await
+}
+#[tauri::command]
+pub async fn save_review_writing_profile(
+    storage: State<'_, Storage>,
+    repository_id: Option<String>,
+    profile: Option<ReviewWritingProfile>,
+) -> AppResult<()> {
+    let storage = storage.inner().clone();
+    blocking(move || {
+        crate::preparation::writing::store(&storage, repository_id.as_deref(), profile)
+    })
+    .await
 }

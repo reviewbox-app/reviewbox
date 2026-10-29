@@ -4,7 +4,7 @@ import type { ReadingLevel } from "@/lib/desktop/contracts.generated"
 
 const key = "reviewbox.reading-preferences"
 const event = "reviewbox:reading-preferences"
-const defaults = { level: "explained" as ReadingLevel, askEachReview: false }
+const defaults = { level: "essential" as ReadingLevel, askEachReview: false }
 let raw: string | null | undefined
 let cached = defaults
 export function getReadingPreferences() {

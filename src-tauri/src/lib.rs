@@ -5,6 +5,7 @@ mod commands;
 pub mod contracts;
 mod diagnostics;
 mod editor;
+mod editor_extensions;
 mod illustrations;
 mod integrations;
 mod knowledge;
@@ -15,6 +16,7 @@ mod notifications;
 mod onboarding;
 mod preparation;
 mod processes;
+mod project_skills;
 mod project_storage;
 #[cfg(test)]
 mod project_storage_tests;
@@ -23,12 +25,17 @@ mod proposals;
 mod reader;
 mod repositories;
 mod repository_cache;
+mod review_comments;
 mod review_creation;
+mod review_documents;
+mod review_finalization;
 mod review_menu;
 mod reviews;
 mod snapshots;
 mod source_control;
 mod storage;
+mod terminals;
+mod working_context;
 pub use project_storage::schemas as project_schemas;
 use tauri::Manager;
 
@@ -37,8 +44,12 @@ pub fn run() {
     #[cfg(feature = "native-validation")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
+        .manage(agents::chat::ChatManager::default())
+        .manage(review_finalization::Finalizations::default())
+        .manage(source_control::review_commit::ReviewCommits::default())
         .manage(illustrations::Illustrations::default())
         .manage(editor::commands::EditorState::default())
+        .manage(terminals::Terminals::default())
         .manage(notifications::Notifications::default())
         .manage(language_servers::live::LiveLanguages::default())
         .manage(language_servers::setup::Setup::default())
@@ -86,6 +97,28 @@ pub fn run() {
                 use tauri::Emitter;
                 let _ = cache_app.emit("reviewbox:repository-read-invalidated", repository_id);
             });
+            let live = app
+                .state::<language_servers::live::LiveLanguages>()
+                .inner()
+                .clone();
+            storage
+                .repository_cache
+                .set_native_notifier(move |root, change| {
+                    let live = live.clone();
+                    let root = root.to_path_buf();
+                    let change = change.clone();
+                    tauri::async_runtime::spawn(async move {
+                        live.repository_changed(&root, &change).await;
+                    });
+                });
+            let review_app = app.handle().clone();
+            storage.set_review_notifier(move |repository_id, review_id| {
+                use tauri::Emitter;
+                let _ = review_app.emit(
+                    "reviewbox:review-changed",
+                    serde_json::json!({"repositoryId":repository_id,"reviewId":review_id}),
+                );
+            });
             app.manage(storage);
             app.manage(source_control::SourceControl::default());
             notifications::install(app.handle());
@@ -128,6 +161,9 @@ pub fn run() {
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window
+                    .state::<agents::chat::ChatManager>()
+                    .release_window(window.label());
+                window
                     .state::<illustrations::Illustrations>()
                     .release_window(window.label());
                 window
@@ -136,6 +172,7 @@ pub fn run() {
                     .stop_all();
             }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<terminals::Terminals>().stop_all();
                 notifications::shutdown(window.app_handle());
                 window
                     .state::<language_servers::setup::Setup>()
@@ -145,6 +182,7 @@ pub fn run() {
                     .state::<language_servers::live::LiveLanguages>()
                     .stop_all();
                 window.state::<source_control::SourceControl>().stop_all();
+                window.state::<review_finalization::Finalizations>().stop();
                 window.state::<preparation::PreparationManager>().stop_all();
                 window
                     .state::<review_creation::CaptureManager>()
@@ -159,6 +197,26 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            project_skills::project_skill_preferences,
+            project_skills::configure_project_skills,
+            project_skills::import_project_skills,
+            working_context::review_working_context,
+            working_context::retry_working_context_cleanup,
+            agents::chat::rev_chat_send,
+            agents::chat::rev_chat_cancel,
+            agents::chat::rev_chat_close,
+            review_comments::read_review_comments,
+            review_comments::mutate_review_comment,
+            editor::commands::editor_navigation,
+            editor::commands::editor_store_navigation,
+            terminals::terminal_create,
+            terminals::terminal_list,
+            terminals::terminal_write,
+            terminals::terminal_resize,
+            terminals::terminal_ack,
+            terminals::terminal_close,
+            terminals::terminal_open_url,
+            terminals::terminal_resolve_file,
             app_info::get_app_info,
             diagnostics::diagnostics_record,
             diagnostics::diagnostics_read,
@@ -181,7 +239,11 @@ pub fn run() {
             language_servers::live::live_language_cancel,
             language_servers::live::live_language_restart,
             language_servers::live::live_language_source,
+            language_servers::project::get_live_language_project_settings,
+            language_servers::project::set_live_language_project_settings,
             editor::commands::editor_inventory,
+            editor::commands::editor_watch,
+            editor::commands::editor_watch_status,
             editor::commands::editor_search_content,
             editor::commands::editor_cancel_search,
             editor::commands::editor_read,
@@ -202,16 +264,25 @@ pub fn run() {
             source_control::commands::git_commit_detail,
             source_control::commands::fetch_git_remote,
             source_control::commands::push_git_branch,
+            source_control::commands::list_git_branches,
+            source_control::commands::switch_git_branch,
             source_control::commands::commit_local_changes,
             source_control::commands::cancel_git_operation,
             source_control::commands::last_git_operation,
+            source_control::recovery::recover_git_lock,
+            source_control::recovery::clear_git_plans,
             review_menu::configure_review_menu,
             editor_menu::configure_editor_menu,
             review_menu::configure_repository_menu,
             appearance::appearance_settings,
             appearance::configure_appearance,
-            appearance::editor_profiles,
-            appearance::import_editor_icons,
+            appearance::system_code_fonts,
+            editor_extensions::editor_extension_settings,
+            editor_extensions::set_prettier_on_save,
+            editor_extensions::set_editor_extension,
+            editor_extensions::ensure_editor_engine,
+            editor_extensions::formatting::format_editor_document,
+            editor_extensions::completions::complete_editor_paths,
             illustrations::register_illustration,
             illustrations::release_illustration,
             commands::list_repositories,
@@ -221,6 +292,8 @@ pub fn run() {
             commands::list_reviews,
             commands::create_review,
             commands::preview_review,
+            commands::review_writing_profile,
+            commands::save_review_writing_profile,
             commands::cancel_repository_read,
             commands::review_references,
             commands::create_review_operation,
@@ -234,6 +307,10 @@ pub fn run() {
             commands::diagnose_proposal,
             commands::load_review,
             commands::update_review,
+            review_finalization::start_review_finalization,
+            review_finalization::get_review_finalization,
+            source_control::review_commit::start_review_commit,
+            source_control::review_commit::get_review_commit,
             commands::refresh_review,
             commands::delete_review,
             commands::read_change,
@@ -295,6 +372,9 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 app.state::<language_servers::setup::Setup>().0.stop_all();
+                app.state::<terminals::Terminals>().stop_all();
+                app.state::<review_finalization::Finalizations>().stop();
+                app.state::<source_control::SourceControl>().stop_all();
                 app.state::<language_servers::live::LiveLanguages>()
                     .stop_all();
                 app.state::<preparation::PreparationManager>().stop_all();

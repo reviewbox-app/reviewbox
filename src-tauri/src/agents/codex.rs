@@ -172,7 +172,19 @@ impl Messages {
         {
             self.drafts.entry(id.to_owned()).or_default();
         }
+        if stream.live_text
+            && value["method"] == "item/started"
+            && params["item"]["type"] == "agentMessage"
+        {
+            stream.emit("textStart", "")?;
+        }
         if value["method"] == "item/agentMessage/delta" {
+            if stream.live_text
+                && let Some(delta) = params["delta"].as_str()
+            {
+                stream.emit("textDelta", delta)?;
+            }
+
             let id = params["itemId"].as_str().unwrap_or("message").to_owned();
             if let Some(text) = params["delta"].as_str() {
                 let partial = self.partial.entry(id.clone()).or_default();
@@ -256,6 +268,7 @@ pub(super) use session::Session;
 pub(super) struct Prepared {
     pub effort: Option<String>,
     pub helper: Option<String>,
+    pub helper_effort: String,
 }
 pub(super) async fn prepare(
     config: &ProviderConfig,
@@ -316,34 +329,40 @@ pub(super) async fn prepare(
         ));
     }
 
-    let effort = if let Some(helper) = &helper {
-        let catalog = models::discover(config, cancel.clone()).await?;
-        let child = catalog.iter().find(|model| &model.id == helper).ok_or_else(|| AppError::new("helper_model", "The selected helper model is unavailable. Choose another helper in Settings > Rev."))?;
-        if !child
-            .supported_efforts
+    let catalog = match models::discover(config, cancel).await {
+        Ok(catalog) => Some(catalog),
+        Err(error) if error.code == "cancelled" => return Err(error),
+        Err(_) => None,
+    };
+    if let (Some(helper), Some(catalog)) = (&helper, &catalog)
+        && !catalog.iter().any(|model| &model.id == helper)
+    {
+        return Err(AppError::new(
+            "helper_model",
+            "The selected helper model is unavailable. Choose another helper in Settings > Rev.",
+        ));
+    }
+    let catalog = catalog.as_deref().unwrap_or(&[]);
+    let effort = if let Some(effort) = &config.reasoning_effort {
+        if !catalog
             .iter()
-            .any(|effort| effort == "high")
+            .any(|m| Some(&m.id) == config.model.as_ref() && m.supported_efforts.contains(effort))
         {
             return Err(AppError::new(
-                "helper_model",
-                "The helper model must support high reasoning effort. Choose another helper in Settings > Rev.",
+                "reasoning_effort",
+                "The selected reasoning effort is unavailable for this model.",
             ));
         }
-        config
-            .model
-            .as_ref()
-            .and_then(|selected| catalog.iter().find(|model| &model.id == selected))
-            .filter(|model| {
-                model
-                    .supported_efforts
-                    .iter()
-                    .any(|effort| effort == "medium")
-            })
-            .map(|_| "medium".to_owned())
+        Some(effort.clone())
     } else {
-        models::effort(config, cancel).await?.map(str::to_owned)
+        Some(models::catalog_effort(catalog, config.model.as_deref()).into())
     };
-    Ok(Prepared { effort, helper })
+    let helper_effort = models::catalog_effort(catalog, helper.as_deref()).into();
+    Ok(Prepared {
+        effort,
+        helper,
+        helper_effort,
+    })
 }
 #[cfg(test)]
 pub(super) async fn run(
@@ -428,6 +447,7 @@ mod progress_tests {
             Ok(())
         });
         let mut stream = Stream {
+            live_text: false,
             id: "run".into(),
             sequence: 0,
             channel,

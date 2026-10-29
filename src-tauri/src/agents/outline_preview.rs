@@ -168,6 +168,7 @@ pub(super) struct Preview {
     emitted: Vec<Value>,
 }
 impl Preview {
+    #[cfg(test)]
     pub(super) fn new(observer: OutlineObserver) -> Self {
         Self {
             observer,

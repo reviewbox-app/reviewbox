@@ -6,9 +6,11 @@ import * as monaco from "monaco-editor/editor/editor.api"
 import { useEffect, useLayoutEffect, useRef } from "react"
 import styles from "./editor-surface.module.css"
 import { useTheme } from "next-themes"
-import { useCodeTheme } from "@/lib/code/codeAppearance"
+import { useCodeTheme, codeEditorOptions } from "@/lib/code/codeAppearance"
 import { ensureCodeLanguage } from "@/lib/code/highlighter"
 import { useEditorLanguageServices } from "@/features/language-servers/hooks/useEditorLanguageServices"
+
+import { bindReadOnlyFeatures } from "@/features/editor-extensions/services/readOnlyFeatures"
 
 import type { CodeDiffEditorProps } from "../contracts/codeEditor.types"
 
@@ -19,6 +21,11 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
     overlayTop = 0,
     ...editorProps
   } = props
+  const features = useRef<ReturnType<typeof bindReadOnlyFeatures>[]>([])
+  useEffect(
+    () => () => features.current.forEach((feature) => feature.dispose()),
+    []
+  )
   const services = useEditorLanguageServices(
     originalLanguageDocument,
     modifiedLanguageDocument
@@ -80,6 +87,7 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
           theme={theme}
           options={{
             ...props.options,
+            ...codeEditorOptions(),
             // The viewport starts below the glass bars, so sticky-scroll and
             // reveal/find calculations share the same visible upper boundary.
             padding: {
@@ -93,6 +101,14 @@ export function CodeDiffEditorRuntime(props: CodeDiffEditorProps) {
           }}
           onMount={(mountedEditor, monaco) => {
             instance.current = mountedEditor
+            features.current.forEach((feature) => feature.dispose())
+            const models = mountedEditor.getModel()
+            features.current = models
+              ? [
+                  bindReadOnlyFeatures(monaco, models.original),
+                  bindReadOnlyFeatures(monaco, models.modified),
+                ]
+              : []
             mountedEditor
               .getOriginalEditor()
               .updateOptions({ "semanticHighlighting.enabled": true })

@@ -1,22 +1,22 @@
 "use client"
+import { useExplorerSearchMode } from "@/features/file-tree/hooks/useExplorerSearchMode"
+import { ExplorerSearchProvider } from "@/features/file-tree/components/ExplorerSearchProvider"
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
-  Add01Icon,
   FileAddIcon,
   FolderAddIcon,
   Edit02Icon,
   Delete02Icon,
 } from "@hugeicons/core-free-icons"
+
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu"
+  canCreateProjectFile,
+  editableProjectPath,
+  isReviewBoxPath,
+} from "../helpers/editorPaths"
 import { EditorTabs } from "../components/EditorTabs"
 import { useEditorMenu } from "../hooks/useEditorMenu"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { EditorSearchMatch } from "@/lib/desktop/contracts.generated"
 import { EditorSearchResults } from "../components/EditorSearchResults"
 import { useEditorContentSearch } from "../hooks/useEditorContentSearch"
@@ -24,8 +24,16 @@ import {
   findEditorFiles,
   indexEditorFiles,
 } from "../helpers/editorSearch.helpers"
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyContent,
+} from "@/components/ui/empty"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { FileTreeToolbar } from "@/features/file-tree/components/FileTreeToolbar"
 import {
   Dialog,
   DialogContent,
@@ -39,18 +47,21 @@ import {
 } from "@/components/ui/context-menu"
 import { SidebarResizeHandle } from "@/components/ui/sidebar-resize-handle"
 import { FileMenu } from "@/features/file-tree/components/FileMenu"
+import { useFileTreeNavigation } from "@/features/file-tree/hooks/useFileTreeNavigation"
 import { FileTree } from "@/features/file-tree/components/FileTree"
 import type { GitFileStatus } from "@/lib/git/file-status"
 import { CodeDiffEditor } from "../components/CodeDiffEditor"
 import { editorCommands } from "../services/editor.commands"
 import {
   closeBuffer,
+  keepEditorFile,
   moveEditorBuffer,
   dirty,
   editorError,
   getEditor,
   initializeEditor,
   openEditorFile,
+  refreshEditor,
   saveAllEditors,
   saveBuffer,
   updateBuffer,
@@ -59,6 +70,7 @@ import {
 } from "../stores/editor.store"
 import { EditorFileView } from "./EditorFileView"
 import { EditorFileDialog, type FileAction } from "./EditorFileDialog"
+import { EditorWatchNotice } from "./EditorWatchNotice"
 import { LanguageEditPreview } from "@/features/language-servers/composites/LanguageEditPreview"
 
 export function CodeEditorWorkspace({
@@ -70,13 +82,20 @@ export function CodeEditorWorkspace({
 }) {
   const session = useEditorStore((s) => s.sessions[id])
   useEditorMenu(id, session)
+  const filesPanel = useRef<HTMLElement>(null)
   const navigationRequest = useRef(0)
   const entries = session?.entries
   const ignoredPaths = session?.ignoredPaths
   const query = session?.filter.trim() ?? ""
   const deferredQuery = useDeferredValue(query)
   const searching = !!query
-  const searchMode = session?.searchMode ?? "file"
+  const {
+    ref: attachTree,
+    onScroll: saveTreeScroll,
+    toggle: toggleTree,
+    update: updateTree,
+  } = useFileTreeNavigation(id, "editor", searching)
+  const [searchMode, setSearchMode] = useExplorerSearchMode()
   const fileIndex = useMemo(
     () => indexEditorFiles(entries ?? [], ignoredPaths ?? new Set()),
     [entries, ignoredPaths]
@@ -162,8 +181,14 @@ export function CodeEditorWorkspace({
     setAction({ kind, path, revision })
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <ExplorerSearchProvider
+      onReveal={() => updateEditor(id, (s) => ({ ...s, tree: true }))}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <LanguageEditPreview />
+      {session.watchHealthy === false && (
+        <EditorWatchNotice repositoryId={id} />
+      )}
       {session.error && (
         <div
           role="alert"
@@ -184,75 +209,44 @@ export function CodeEditorWorkspace({
         data-resize-workspace
       >
         <aside
+          ref={filesPanel}
           aria-label="Code Editor files"
           className="relative flex w-[clamp(180px,var(--explain-files-width,272px),30%)] shrink-0 flex-col gap-2"
         >
-          <div className="flex items-center gap-1">
-            <Input
-              aria-label="Filter files"
-              placeholder={
-                searchMode === "content"
-                  ? "Search file contents"
-                  : "Filter files"
-              }
-              onKeyDown={(event) => {
-                if (event.key === "Escape")
-                  updateEditor(id, (s) => ({ ...s, filter: "" }))
-              }}
-              value={session.filter}
-              onChange={(e) =>
-                updateEditor(id, (s) => ({ ...s, filter: e.target.value }))
-              }
-            />
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Create file or folder"
-                  />
-                }
-              >
-                <HugeiconsIcon icon={Add01Icon} />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem
-                  onClick={() =>
-                    setAction({ kind: "file", path: "", revision: "" })
-                  }
-                >
-                  <HugeiconsIcon icon={FileAddIcon} />
-                  New file
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() =>
-                    setAction({ kind: "folder", path: "", revision: "" })
-                  }
-                >
-                  <HugeiconsIcon icon={FolderAddIcon} />
-                  New folder
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          {searching && (
-            <Tabs
-              value={searchMode}
-              onValueChange={(value) =>
-                updateEditor(id, (s) => ({
-                  ...s,
-                  searchMode: value === "content" ? "content" : "file",
-                }))
-              }
-            >
-              <TabsList aria-label="Search mode" className="w-full">
-                <TabsTrigger value="file">File</TabsTrigger>
-                <TabsTrigger value="content">Content</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          )}
+          <FileTreeToolbar
+            value={session.filter}
+            onChange={(filter) => updateEditor(id, (s) => ({ ...s, filter }))}
+            mode={searchMode}
+            onModeChange={setSearchMode}
+            paths={treePaths}
+            expandedPaths={[...session.toggledFolders]}
+            disabled={searching}
+            onExpand={(expandedPaths) => {
+              updateTree((tree) => ({ ...tree, expandedPaths }))
+              updateEditor(id, (s) => ({
+                ...s,
+                toggledFolders: new Set(expandedPaths),
+              }))
+              report(
+                refreshEditor(id, {
+                  repositoryId: id,
+                  paths: [],
+                  tree: true,
+                  git: false,
+                  full: false,
+                })
+              )
+            }}
+            onNewFile={() =>
+              setAction({ kind: "file", path: "", revision: "" })
+            }
+            onNewFolder={() =>
+              setAction({ kind: "folder", path: "", revision: "" })
+            }
+          />
           <nav
+            ref={attachTree}
+            onScroll={saveTreeScroll}
             aria-label="Project files"
             className="min-h-0 flex-1 overflow-auto"
           >
@@ -277,14 +271,31 @@ export function CodeEditorWorkspace({
                 <FileTree
                   alwaysExpanded={searching}
                   toggledFolders={session.toggledFolders}
-                  onToggleFolder={(path) =>
+                  onToggleFolder={(path) => {
+                    toggleTree(path)
+                    const opening = !session.toggledFolders.has(path)
                     updateEditor(id, (s) => {
                       const toggledFolders = new Set(s.toggledFolders)
                       if (toggledFolders.has(path)) toggledFolders.delete(path)
                       else toggledFolders.add(path)
                       return { ...s, toggledFolders }
                     })
-                  }
+                    if (
+                      opening &&
+                      session.entries.some(
+                        (entry) => entry.path === path && entry.lazy
+                      )
+                    )
+                      report(
+                        refreshEditor(id, {
+                          repositoryId: id,
+                          paths: [],
+                          tree: true,
+                          git: false,
+                          full: false,
+                        })
+                      )
+                  }}
                   paths={searching ? fileResults.paths : treePaths}
                   selected={session.active}
                   marks={{}}
@@ -293,8 +304,13 @@ export function CodeEditorWorkspace({
                   statuses={statuses}
                   onSelect={(path) => {
                     navigationRequest.current++
-                    report(openEditorFile(id, path))
+                    updateTree((tree) => ({
+                      ...tree,
+                      selectedPath: path,
+                    }))
+                    report(openEditorFile(id, path, true, true))
                   }}
+                  onKeepOpen={(path) => report(openEditorFile(id, path))}
                   renderRow={(row, target) => (
                     <FileMenu
                       row={row}
@@ -304,6 +320,16 @@ export function CodeEditorWorkspace({
                       before={
                         <>
                           <ContextMenuItem
+                            disabled={
+                              !canCreateProjectFile(
+                                target.folder
+                                  ? target.path
+                                  : target.path.slice(
+                                      0,
+                                      target.path.lastIndexOf("/")
+                                    )
+                              )
+                            }
                             onClick={() =>
                               setAction({
                                 kind: "file",
@@ -321,6 +347,7 @@ export function CodeEditorWorkspace({
                             New file
                           </ContextMenuItem>
                           <ContextMenuItem
+                            disabled={isReviewBoxPath(target.path)}
                             onClick={() =>
                               setAction({
                                 kind: "folder",
@@ -344,6 +371,10 @@ export function CodeEditorWorkspace({
                         <>
                           <ContextMenuSeparator />
                           <ContextMenuItem
+                            disabled={
+                              (target.folder && isReviewBoxPath(target.path)) ||
+                              !editableProjectPath(target.path)
+                            }
                             onClick={() =>
                               report(chooseAction("rename", target.path))
                             }
@@ -352,6 +383,10 @@ export function CodeEditorWorkspace({
                             Rename
                           </ContextMenuItem>
                           <ContextMenuItem
+                            disabled={
+                              (target.folder && isReviewBoxPath(target.path)) ||
+                              !editableProjectPath(target.path)
+                            }
                             onClick={() =>
                               report(chooseAction("trash", target.path))
                             }
@@ -367,50 +402,88 @@ export function CodeEditorWorkspace({
               </>
             )}
           </nav>
+        </aside>
+        <div className="relative flex min-h-0 min-w-0 flex-1">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-panel border bg-card">
+            <EditorTabs
+              onKeepOpen={(path) => keepEditorFile(id, path)}
+              onMove={(source, target, after) =>
+                updateEditor(id, (s) => ({
+                  ...s,
+                  buffers: moveEditorBuffer(s.buffers, source, target, after),
+                }))
+              }
+              buffers={session.buffers}
+              active={session.active}
+              onSelect={(path) => {
+                navigationRequest.current++
+                updateEditor(id, (s) => ({ ...s, active: path }))
+              }}
+              onClose={(buffer) =>
+                dirty(buffer)
+                  ? setClosing(buffer.id)
+                  : closeBuffer(id, buffer.id)
+              }
+            />
+            {active ? (
+              <EditorFileView
+                key={active.id}
+                repositoryId={id}
+                buffer={active}
+                onSave={() =>
+                  active.external !== undefined
+                    ? setConflict(active.id)
+                    : report(saveBuffer(id, active.id))
+                }
+                onConflict={() => setConflict(active.id)}
+              />
+            ) : (
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <HugeiconsIcon icon={FileAddIcon} />
+                  </EmptyMedia>
+                  <EmptyTitle>
+                    {session.ready
+                      ? "Open a file to start editing"
+                      : "Reading project files…"}
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    Select a file in the explorer or create one in this project.
+                  </EmptyDescription>
+                </EmptyHeader>
+                {session.ready && (
+                  <EmptyContent className="flex-row justify-center">
+                    <Button
+                      onClick={() =>
+                        setAction({ kind: "file", path: "", revision: "" })
+                      }
+                    >
+                      <HugeiconsIcon icon={FileAddIcon} />
+                      New file
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() =>
+                        setAction({ kind: "folder", path: "", revision: "" })
+                      }
+                    >
+                      <HugeiconsIcon icon={FolderAddIcon} />
+                      New folder
+                    </Button>
+                  </EmptyContent>
+                )}
+              </Empty>
+            )}
+          </main>
           <SidebarResizeHandle
             name="Code Editor files"
             property="--explain-files-width"
             maxRatio={0.3}
+            panelRef={filesPanel}
+            edge="left"
           />
-        </aside>
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-panel border bg-card">
-          <EditorTabs
-            onMove={(source, target, after) =>
-              updateEditor(id, (s) => ({
-                ...s,
-                buffers: moveEditorBuffer(s.buffers, source, target, after),
-              }))
-            }
-            buffers={session.buffers}
-            active={session.active}
-            onSelect={(path) => {
-              navigationRequest.current++
-              updateEditor(id, (s) => ({ ...s, active: path }))
-            }}
-            onClose={(buffer) =>
-              dirty(buffer) ? setClosing(buffer.id) : closeBuffer(id, buffer.id)
-            }
-          />
-          {active ? (
-            <EditorFileView
-              key={active.id}
-              repositoryId={id}
-              buffer={active}
-              onSave={() =>
-                active.external !== undefined
-                  ? setConflict(active.id)
-                  : report(saveBuffer(id, active.id))
-              }
-              onConflict={() => setConflict(active.id)}
-            />
-          ) : (
-            <p role="status" className="p-6 text-sm text-muted-foreground">
-              {session.ready
-                ? "Open a file to start editing."
-                : "Reading project files…"}
-            </p>
-          )}
-        </main>
+        </div>
       </div>
       {action && (
         <EditorFileDialog
@@ -534,6 +607,6 @@ export function CodeEditorWorkspace({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </ExplorerSearchProvider>
   )
 }

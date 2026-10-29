@@ -34,6 +34,9 @@ import { SettingRow } from "../components/SettingRow"
 import { CodeAppearanceSettings } from "../components/CodeAppearanceSettings"
 import { ReadingSettings } from "../components/ReadingSettings"
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel"
+import { ProjectSkillSettings } from "../components/ProjectSkillSettings"
+
+import { ExtensionsSettings } from "@/features/editor-extensions/composites/ExtensionsSettings"
 
 const sections = [
   { id: "General", icon: Settings01Icon },
@@ -42,6 +45,7 @@ const sections = [
   { id: "Permissions", icon: SecurityCheckIcon },
   { id: "Context sent", icon: Attachment01Icon },
   { id: "Integrations", icon: PlugSocketIcon },
+  { id: "Extensions", icon: PlugSocketIcon },
   { id: "Languages", icon: CodeIcon },
   { id: "Storage", icon: Database01Icon },
   { id: "Error log", icon: AlertCircleIcon },
@@ -57,7 +61,8 @@ const shortcuts = [
   ["Switch document / code", ["D"]],
   ["Command palette", ["⌘K"]],
   ["Open a review file", ["⌘P"]],
-  ["Home · Review · Code Editor", ["⌘1", "⌘2", "⌘3"]],
+  ["Home · Review · Code Editor · Terminal", ["⌘1", "⌘2", "⌘3", "⌘4"]],
+  ["Toggle terminal", ["Ctrl", "`"]],
   ["Side-by-side diff", ["⌘\\"]],
   ["New review / open repository", ["⌘N", "⌘O"]],
   ["Confirm (forms)", ["⌘↵"]],
@@ -66,12 +71,14 @@ const shortcuts = [
 const intro: Record<Section, string> = {
   General: "Appearance and language of ReviewBox on this Mac.",
   Reading:
-    "Choose how Rev explains changes. Your reading mode stays on this Mac.",
+    "Choose how Rev writes review documents. Preferences stay on this Mac.",
   Rev: "Rev helps you review and understand code using your chosen harness. Sign-in stays with the provider; ReviewBox has no account of its own.",
   Permissions: "What Rev and the commands you run are allowed to do.",
   "Context sent": "Context used to prepare review explanations.",
   Integrations:
     "Enrich project reviews from other tools, with the app open or closed.",
+  Extensions:
+    "Built-in code assistance. Language tools download when first needed.",
   Languages:
     "Manage language tools for the live Code Editor and captured review sources.",
   Storage: "Where reviews, tours and explanations are saved.",
@@ -160,9 +167,11 @@ export function SettingsDialog({
             {intro[section]}
           </p>
           <div className={cn("mt-6 space-y-5", section === "Rev" && "mt-5")}>
+            {section === "Extensions" && <ExtensionsSettings />}
             {section === "General" && (
               <div className="rounded-3xl border px-5">
                 <CodeAppearanceSettings />
+                <ProjectSkillSettings />
                 <SettingRow
                   title="Appearance"
                   description="ReviewBox is designed dark first; light stays available."

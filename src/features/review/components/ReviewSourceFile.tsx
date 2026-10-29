@@ -11,6 +11,7 @@ import {
 import type { editor } from "monaco-editor"
 import { useTheme } from "next-themes"
 import { CodeEditor } from "@/features/code-editor/components/CodeEditor"
+import { observeSourceSelection } from "@/features/code-editor/services/sourceSelection"
 import { reviewboxTheme } from "@/lib/monaco/reviewboxThemes"
 import { sameReadingPoint } from "@/features/markdown/helpers/documentPosition.helpers"
 import { languageFor } from "../helpers/review.helpers"
@@ -114,7 +115,19 @@ export function ReviewSourceFile(
           },
         ])
       }
-      if (restore && point) {
+      const match = latest.current.searchTarget
+      if (match) {
+        const range = source.getModel()?.validateRange({
+          startLineNumber: match.line,
+          endLineNumber: match.line,
+          startColumn: match.column,
+          endColumn: match.column + match.length,
+        })
+        if (range) {
+          source.setSelection(range)
+          source.revealRangeInCenter(range)
+        }
+      } else if (restore && point) {
         if (saved?.singleCode && sameReadingPoint(point, saved.point))
           source.restoreViewState(saved.singleCode)
         else {
@@ -156,6 +169,9 @@ export function ReviewSourceFile(
     revealed.current = props.selection
     reveal(false)
   }, [props.selection, reveal])
+  useEffect(() => {
+    if (props.searchTarget) reveal(false)
+  }, [props.searchTarget, reveal])
   useLayoutEffect(
     () => () => {
       const position = capture()
@@ -169,6 +185,12 @@ export function ReviewSourceFile(
   )
   return (
     <CodeEditor
+      inspectionDocument={
+        props.inspectionRepositoryId
+          ? { repositoryId: props.inspectionRepositoryId, path }
+          : undefined
+      }
+      changeBaseline={side === "after" ? (content.before ?? "") : undefined}
       height="100%"
       overlayTop={Math.max(0, padding.top - reviewReaderLayout.contentInset)}
       value={text}
@@ -184,6 +206,7 @@ export function ReviewSourceFile(
             }
           : undefined
       }
+      sourcePath={path}
       language={languageFor(path)}
       theme={reviewboxTheme(resolvedTheme !== "light")}
       options={{
@@ -227,6 +250,9 @@ export function ReviewSourceFile(
           )
         }
         const subscriptions = [
+          observeSourceSelection(source, side, (selection) =>
+            latest.current.onCommentSelection?.(selection)
+          ),
           source.onDidScrollChange(persist),
           source.onDidChangeCursorPosition((event) => {
             latest.current.onCursor({

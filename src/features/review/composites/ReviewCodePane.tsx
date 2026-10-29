@@ -1,4 +1,5 @@
 "use client"
+import type { SourceSearchTarget } from "@/features/code-editor/contracts/sourceSelection.types"
 import { reviewReaderLayout } from "../reader.config"
 
 import { Badge } from "@/components/ui/badge"
@@ -21,6 +22,7 @@ import { MarkdownPreviewToggle } from "@/features/markdown/components/MarkdownPr
 import { DocumentDiffView } from "@/features/markdown/components/DocumentDiffView"
 import { isDocumentFile } from "@/features/markdown/helpers/documentFiles.helpers"
 import { ReviewSourceCode } from "../components/ReviewSourceCode"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
 import { ReviewSourceFile } from "../components/ReviewSourceFile"
 import {
   sourcePreviewSession,
@@ -29,7 +31,7 @@ import {
   type SourceViewHandle,
   type SourceViewPosition,
 } from "../helpers/sourcePreviewSession"
-import { FileIcon } from "@/features/file-icons/components/FileIcon"
+import { CodeFileHeader } from "@/features/code-editor/components/CodeFileHeader"
 import type {
   Change,
   CodeAnchor,
@@ -49,7 +51,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { fileName, folderOf, languageName } from "../helpers/review.helpers"
+import { languageName } from "../helpers/review.helpers"
 import { useReviewWorkspaceStore } from "../stores/useReviewWorkspace.store"
 
 export function ReviewCodePane({
@@ -63,10 +65,16 @@ export function ReviewCodePane({
   overlay,
   modelScope = "reader",
   source,
+  onCommentSelection,
+  searchTarget,
+  inspectionRepositoryId,
 }: {
   /** Each simultaneous diff owns distinct Monaco models and their lifecycle. */
   modelScope?: "reader" | "reference" | "local"
+  inspectionRepositoryId?: string
+  searchTarget?: SourceSearchTarget
   source?: FileContent
+  onCommentSelection?: (selection: SourceSelection | null) => void
   snapshot: Pick<Snapshot, "id">
   change: Change
   passage?: Passage
@@ -112,6 +120,7 @@ export function ReviewCodePane({
     selection,
   }))
   const markdown =
+    !searchTarget &&
     compatible &&
     choice.mode === "markdown" &&
     (modelScope !== "reference" || choice.selection === selection)
@@ -167,7 +176,6 @@ export function ReviewCodePane({
         bottom: overlay.bottom + codeStatusHeight + contentInset,
       }
     : { top: contentInset, bottom: contentInset }
-  const folder = folderOf(change.path)
   return (
     <section
       className={cn(
@@ -176,28 +184,12 @@ export function ReviewCodePane({
       )}
       aria-label="Code diff"
     >
-      <header
-        className={cn(
-          "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1",
-          overlay &&
-            "absolute inset-x-0 z-10 flex-nowrap overflow-hidden glass-bar"
-        )}
-        style={
-          overlay ? { top: overlay.top, height: codeHeaderHeight } : undefined
-        }
+      <CodeFileHeader
+        path={change.path}
+        previousPath={change.previousPath}
+        className={cn(overlay && "absolute inset-x-0 z-10 glass-bar")}
+        style={overlay ? { top: overlay.top } : undefined}
       >
-        <FileIcon path={change.path} />
-        <span
-          className="min-w-0 flex-1 basis-20 truncate text-sm"
-          title={
-            change.previousPath
-              ? `${change.previousPath} → ${change.path}`
-              : change.path
-          }
-        >
-          {folder && <span className="text-muted-foreground">{folder}/</span>}
-          <span className="font-medium">{fileName(change.path)}</span>
-        </span>
         {counts && (
           <span className="flex shrink-0 gap-1.5 text-xs font-medium tabular-nums max-[1100px]:hidden">
             {counts.added > 0 && (
@@ -299,7 +291,7 @@ export function ReviewCodePane({
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-      </header>
+      </CodeFileHeader>
       {error || content?.unavailableReason ? (
         <div
           className="p-8 text-sm leading-6 text-muted-foreground"
@@ -332,6 +324,9 @@ export function ReviewCodePane({
             />
           ) : (
             <SourceCode
+              inspectionRepositoryId={inspectionRepositoryId}
+              searchTarget={searchTarget}
+              onCommentSelection={onCommentSelection}
               snapshot={snapshot}
               change={change}
               content={content}

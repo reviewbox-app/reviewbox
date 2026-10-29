@@ -69,7 +69,8 @@ export function observeEditorPersistence() {
           s.active !== old.active ||
           s.autoSave !== old.autoSave ||
           s.associations !== old.associations ||
-          s.servers !== old.servers
+          s.servers !== old.servers ||
+          s.saveActions !== old.saveActions
         )
       })
     previous = sessions
@@ -100,8 +101,8 @@ export function observeEditorPersistence() {
           timer: setTimeout(() => {
             const live = getEditor(id)?.buffers.find((b) => b.id === buffer.id)
             if (!finishing && live && live.external === undefined)
-              void saveBuffer(id, buffer.id).catch((error) =>
-                editorError(id, error)
+              void saveBuffer(id, buffer.id, false, "automatic").catch(
+                (error) => editorError(id, error)
               )
           }, 1000),
         })

@@ -3,19 +3,40 @@ import type {
   EditorFile,
   LiveLanguageDocument,
   LiveLanguageSession,
+  LiveLanguageProjectSettings,
 } from "@/lib/desktop/contracts.generated"
 export const liveCommands = {
+  projectSettings: (repositoryId: string, serverId: string, path?: string) =>
+    call<LiveLanguageProjectSettings>("get_live_language_project_settings", {
+      repositoryId,
+      serverId,
+      path,
+    }),
+  saveProjectSettings: (
+    repositoryId: string,
+    serverId: string,
+    settings: LiveLanguageProjectSettings,
+    path?: string
+  ) =>
+    call<LiveLanguageProjectSettings>("set_live_language_project_settings", {
+      repositoryId,
+      serverId,
+      settings,
+      path,
+    }),
   open: (
     repositoryId: string,
     path: string,
     languageId: string,
-    serverId?: string
+    serverId?: string,
+    inspectionId?: string
   ) =>
     call<LiveLanguageSession>("live_language_open", {
       repositoryId,
       path,
       languageId,
       serverId: serverId ?? null,
+      inspectionId: inspectionId ?? null,
     }),
   sync: (sessionId: string, document: LiveLanguageDocument, saved: boolean) =>
     call<void>("live_language_sync", { sessionId, document, saved }),

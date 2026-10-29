@@ -7,12 +7,12 @@ import type {
   ReviewPreparationView,
   ReviewUpdateView,
 } from "../contracts/preparation.types"
-import { PreparationPhases } from "./PreparationPhases"
 import { PreparationWorkers } from "./PreparationWorkers"
 import { PreparationProgress } from "./PreparationProgress"
 import { PreparationSteps } from "./PreparationSteps"
 import { PreparedReview } from "./PreparedReview"
 import { ReviewPreparationError } from "./ReviewPreparationError"
+import { WorkingContextStatus } from "./WorkingContextStatus"
 
 export function ReviewPreparationContent({
   workspace,
@@ -88,17 +88,21 @@ export function ReviewPreparationContent({
           removed
         </p>
       )}
-      <PreparationPhases preparation={preparation} failed={failed} />
-      {state && (
+      <WorkingContextStatus
+        repositoryId={workspace.review.repositoryId}
+        reviewId={workspace.review.id}
+        revision={`${state?.phase}:${state?.status}:${state?.completedBatches}`}
+      />
+      {state && state.steps.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          {state.completedBatches} of {state.totalBatches} batches complete
+          {state.completedBatches} of {state.totalBatches} documents ready
         </p>
       )}
-      {progress && (
-        <PreparationWorkers
-          progress={progress}
-          batches={state?.activeBatches}
-        />
+      {progress && <PreparationWorkers progress={progress} />}
+      {!state?.steps.length && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Rev is analysing the changes and preparing the document plan.
+        </p>
       )}
       {state && <PreparationSteps steps={state.steps} status={state.status} />}
       <ReviewPreparationError workspace={workspace} preparation={preparation} />
@@ -150,7 +154,11 @@ export function ReviewPreparationContent({
             disabled={preparation.pending}
             onClick={() => void preparation.start()}
           >
-            {state?.canResume ? "Resume preparation" : "Try again"}
+            {state?.error?.code === "legacy_preparation"
+              ? "Start a new preparation"
+              : state?.canResume
+                ? "Resume preparation"
+                : "Try again"}
           </Button>
         )}
       </div>

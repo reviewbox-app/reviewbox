@@ -13,11 +13,13 @@ export function SortableEditorTab({
   buffer,
   selected,
   onSelect,
+  onKeepOpen,
   onClose,
   onNavigate,
 }: {
   buffer: EditorBuffer
   selected: boolean
+  onKeepOpen: (path: string) => void
   onSelect: (path: string) => void
   onClose: (buffer: EditorBuffer) => void
   onNavigate: (event: KeyboardEvent<HTMLButtonElement>) => void
@@ -56,15 +58,18 @@ export function SortableEditorTab({
         aria-label={`${buffer.path}${unsaved ? " (unsaved)" : ""}`}
         tabIndex={selected ? 0 : -1}
         title={buffer.path}
-        className={`flex h-full w-full min-w-0 touch-none items-center gap-2 rounded-lg p-1 pr-2 text-xs outline-none select-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-foreground/5" : "hover:bg-foreground/5"}`}
+        className={`flex h-full w-full min-w-0 touch-none items-center gap-2 rounded-lg p-1 pr-2 text-xs transition-all duration-150 outline-none select-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-foreground/5" : "hover:bg-foreground/5"}`}
         onClick={() => onSelect(buffer.path)}
+        onDoubleClick={() => onKeepOpen(buffer.path)}
         onKeyDown={(event) => {
           listeners?.onKeyDown?.(event)
           if (!event.defaultPrevented && !isSorting) onNavigate(event)
         }}
       >
         <FileIcon path={buffer.path} size={20} />
-        <span className="max-w-56 truncate">
+        <span
+          className={`max-w-56 truncate ${buffer.temporary ? "italic" : ""}`}
+        >
           {buffer.path.split("/").at(-1)}
         </span>
       </button>
@@ -77,7 +82,7 @@ export function SortableEditorTab({
       <button
         aria-label={`Close ${buffer.path}`}
         title={unsaved ? "Unsaved changes · Close" : "Close"}
-        className="pointer-events-none absolute top-1 right-1 flex size-5 items-center justify-center rounded bg-popover/60 text-muted-foreground opacity-0 backdrop-blur-md group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        className="pointer-events-none absolute top-1 right-1 flex size-5 items-center justify-center rounded bg-popover/60 text-muted-foreground opacity-0 backdrop-blur-md transition-all group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => onClose(buffer)}
       >
         <HugeiconsIcon icon={Cancel01Icon} size={16} />

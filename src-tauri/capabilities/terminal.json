@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "terminal",
+  "description": "Interactive terminals in the main application window only.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-terminal-create",
+    "allow-terminal-list",
+    "allow-terminal-write",
+    "allow-terminal-resize",
+    "allow-terminal-ack",
+    "allow-terminal-close",
+    "allow-terminal-open-url",
+    "allow-terminal-resolve-file"
+  ]
+}

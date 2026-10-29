@@ -12,44 +12,9 @@ import { FileIcon, FolderIcon } from "@/features/file-icons/components/FileIcon"
 import { folderGitStatuses, type GitFileStatus } from "@/lib/git/file-status"
 import { GitStatusBadge, gitStatusColor } from "./GitStatusBadge"
 
-interface Folder {
-  name: string
-  path: string
-  folders: Map<string, Folder>
-  files: string[]
-}
+import { treeRowOpacity } from "../helpers/treeRowOpacity"
 
-function buildTree(paths: string[]) {
-  const root: Folder = { name: "", path: "", folders: new Map(), files: [] }
-  for (const path of paths) {
-    const parts = path.split("/")
-    let node = root
-    for (const part of parts.slice(0, -1)) {
-      const next = node.path ? `${node.path}/${part}` : part
-      if (!node.folders.has(part))
-        node.folders.set(part, {
-          name: part,
-          path: next,
-          folders: new Map(),
-          files: [],
-        })
-      node = node.folders.get(part)!
-    }
-    if (!path.endsWith("/")) node.files.push(path)
-  }
-  // Collapse single-child chains ("src-tauri/src") like the prototype.
-  const compact = (folder: Folder): Folder => {
-    folder.folders.forEach((child, key) =>
-      folder.folders.set(key, compact(child))
-    )
-    if (folder.name && folder.folders.size === 1 && folder.files.length === 0) {
-      const only = [...folder.folders.values()][0]
-      return { ...only, name: `${folder.name}/${only.name}` }
-    }
-    return folder
-  }
-  return compact(root)
-}
+import { buildTree, type Folder } from "../helpers/tree.helpers"
 
 export type FileMark = "validated" | "unavailable"
 
@@ -61,16 +26,17 @@ const markLabels: Record<FileMark, string> = {
 /** Shared file tree with Git statuses and review decisions. */
 export function FileTree({
   paths,
-  allPaths = paths,
   selected,
   marks,
   statuses = {},
+  staged = false,
   reviewedPaths,
   ignoredPaths,
   dimmedLabel = "Reviewed.",
   alwaysExpanded = false,
   defaultExpanded = false,
   onSelect,
+  onKeepOpen,
   selectedPaths,
   renderRow,
   toggledFolders,
@@ -82,6 +48,7 @@ export function FileTree({
   selected: string
   marks: Record<string, FileMark>
   statuses?: Record<string, GitFileStatus>
+  staged?: boolean
   reviewedPaths?: ReadonlySet<string>
   ignoredPaths?: ReadonlySet<string>
   dimmedLabel?: string
@@ -94,6 +61,7 @@ export function FileTree({
     row: React.ReactElement,
     target: { path: string; folder: boolean }
   ) => React.ReactNode
+  onKeepOpen?: (path: string) => void
   onSelect: (
     path: string,
     event: React.MouseEvent,
@@ -101,20 +69,6 @@ export function FileTree({
   ) => void
 }) {
   const tree = useMemo(() => buildTree(paths), [paths])
-  const ignoredFolders = useMemo(() => {
-    const folders = new Map<string, boolean>()
-    for (const path of allPaths) {
-      if (path.endsWith("/")) continue
-      const ignored = ignoredPaths?.has(path) ?? false
-      let end = path.lastIndexOf("/")
-      while (end > 0) {
-        const folder = path.slice(0, end)
-        folders.set(folder, (folders.get(folder) ?? true) && ignored)
-        end = path.lastIndexOf("/", end - 1)
-      }
-    }
-    return folders
-  }, [allPaths, ignoredPaths])
   const folderStatuses = useMemo(() => folderGitStatuses(statuses), [statuses])
   const [internalToggled, setToggled] = useState<Set<string>>(new Set())
   const toggled = toggledFolders ?? internalToggled
@@ -144,7 +98,7 @@ export function FileTree({
     })
   }
   const row =
-    "relative flex w-full items-center gap-1.5 rounded-xl py-1 pr-2 text-left text-sm outline-none hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/30"
+    "relative flex h-[22px] w-full items-center gap-0 rounded-md p-0 text-left text-[13px] leading-[22px] outline-none hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/30"
   const render = (folder: Folder, depth: number): React.ReactNode => (
     <>
       {[...folder.folders.values()]
@@ -156,13 +110,14 @@ export function FileTree({
             <>
               <HugeiconsIcon
                 icon={open ? ArrowDown01Icon : ArrowRight01Icon}
-                size={14}
+                size={16}
                 className="shrink-0 text-muted-foreground"
+                style={{ marginLeft: 8 + depth * 8, marginRight: 6 }}
               />
-              <FolderIcon path={child.path} open={open} />
+              <FolderIcon path={child.path} open={open} size={16} />
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate",
+                  "ml-1.5 min-w-0 flex-1 truncate",
                   gitStatusColor(folderStatuses[child.path])
                 )}
               >
@@ -179,9 +134,12 @@ export function FileTree({
                     tabIndex={renderRow ? 0 : undefined}
                     className={cn(
                       row,
-                      ignoredFolders.get(child.path) && "opacity-60"
+                      treeRowOpacity(
+                        staged,
+                        selected === child.path,
+                        ignoredPaths?.has(child.path)
+                      )
                     )}
-                    style={{ paddingLeft: 6 + depth * 14 }}
                   >
                     {content}
                   </div>
@@ -191,9 +149,12 @@ export function FileTree({
                     aria-expanded={open}
                     className={cn(
                       row,
-                      ignoredFolders.get(child.path) && "opacity-60"
+                      treeRowOpacity(
+                        staged,
+                        selected === child.path,
+                        ignoredPaths?.has(child.path)
+                      )
                     )}
-                    style={{ paddingLeft: 6 + depth * 14 }}
                     onClick={() => toggle(child.path)}
                   >
                     {content}
@@ -214,23 +175,22 @@ export function FileTree({
               title={path}
               className={cn(
                 row,
+                treeRowOpacity(
+                  staged,
+                  selectedPaths ? selectedPaths.has(path) : path === selected,
+                  ignoredPaths?.has(path)
+                ),
                 (selectedPaths ? selectedPaths.has(path) : path === selected) &&
                   "bg-accent hover:bg-accent"
               )}
-              style={{ paddingLeft: 26 + depth * 14 }}
               onClick={(event) => onSelect(path, event, visiblePaths)}
+              onDoubleClick={() => onKeepOpen?.(path)}
             >
               <span
-                className={cn(
-                  "flex min-w-0 flex-1 items-center gap-1.5",
-                  ignoredPaths?.has(path)
-                    ? "opacity-60"
-                    : reviewedPaths?.has(path)
-                      ? "opacity-50"
-                      : statuses[path] === "D" && "opacity-75"
-                )}
+                className="flex min-w-0 flex-1 items-center gap-1.5"
+                style={{ marginLeft: 30 + depth * 8 }}
               >
-                <FileIcon path={path} />
+                <FileIcon path={path} size={16} />
                 {reviewedPaths?.has(path) && (
                   <span className="sr-only">{dimmedLabel}</span>
                 )}
@@ -243,7 +203,7 @@ export function FileTree({
                   {path.split("/").at(-1)}
                 </span>
               </span>
-              <GitStatusBadge status={statuses[path]} className="opacity-50" />
+              <GitStatusBadge status={statuses[path]} />
               {marks[path] === "validated" ? (
                 <HugeiconsIcon
                   icon={Tick02Icon}
@@ -267,5 +227,5 @@ export function FileTree({
       ))}
     </>
   )
-  return <ul className="space-y-px">{render(tree, 0)}</ul>
+  return <ul>{render(tree, 0)}</ul>
 }

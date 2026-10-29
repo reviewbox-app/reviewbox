@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { NativeUI, fixture } from "../tests/native/ui-driver"
 import { createPreparationHarness } from "../tests/native/preparation-fixture"
 
+const completionOnly = process.argv.includes("--completion-only")
 const referencesOnly = process.argv.includes("--references-only")
 const f = await fixture()
 const ui = new NativeUI()
@@ -303,7 +304,48 @@ try {
   )
   await ui.named("Start review")
   await ui.has("Step 1 of 11")
-  if (referencesOnly) {
+  if (completionOnly) {
+    for (let step = 1; step <= 11; step++) {
+      await ui.has(`Step ${step} of 11`)
+      await ui.named("Validate step and continue")
+    }
+    await ui.has("Review complete")
+    await ui.has("11 of 11 steps validated")
+    await ui.has("Published in the repository.")
+    const published = await readdir(join(f.repo, ".reviewbox", "published"))
+    assert.equal(published.length, 1, "last step publishes exactly once")
+    const completed = JSON.parse(
+      await readFile(
+        join(
+          f.repo,
+          ".reviewbox",
+          "published",
+          published[0],
+          "reviews",
+          published[0],
+          "review.json"
+        ),
+        "utf8"
+      )
+    )
+    assert.equal(completed.data.publication.status, "published")
+    assert.equal(completed.data.publication.completion.kind, "guided")
+    assert.equal(
+      f.git("write-tree"),
+      f.index,
+      "publication preserves the index"
+    )
+    await ui.named("Back to review")
+    await ui.named("Review summary")
+    await ui.has("11 of 11 steps validated")
+    await ui.named("Back home", "main[aria-label=Review] button")
+    await ui.named("Review", '[role="tab"]')
+    await ui.has("Review complete")
+    await ui.screenshot("reader-guided-published")
+    console.log(
+      "Native completion: eleven steps validated, published once, summary reopened and resumed, Git index preserved."
+    )
+  } else if (referencesOnly) {
     await verifyReferences()
     console.log(
       "Native references: cards without snippets, exact before/after/context sources, repeated centered navigation, complete Unified/Split files and preserved step passed."
@@ -355,7 +397,7 @@ try {
       await level(name)
       await ui.named("Code", '[role="tab"]')
       await ui.until(
-        'document.querySelector("[aria-label=\\"Code diff\\"] .view-lines")?.textContent.includes("export")'
+        '[...document.querySelectorAll("[aria-label=\\"Code diff\\"] .view-lines")].some(e => e.textContent.includes("export"))'
       )
       await ui.named("Document", '[role="tab"]')
     }
@@ -405,7 +447,7 @@ try {
       "changing reading mode keeps source code visible"
     )
     await ui.until(
-      'document.querySelector("[aria-label=\\"Code diff\\"] .view-lines")?.textContent.includes("export")'
+      '[...document.querySelectorAll("[aria-label=\\"Code diff\\"] .view-lines")].some(e => e.textContent.includes("export"))'
     )
     for (const layout of ["Show previous code", "Hide previous code"]) {
       await ui.named(layout)
@@ -542,11 +584,17 @@ try {
       f.index,
       "automatic publication never stages"
     )
+    await ui.named("Back to review")
+    await ui.named("Review summary")
+    await ui.has("Review complete")
+    await ui.has("11 of 11 steps validated")
     await ui.screenshot("reader-guided-published")
-    await ui.named("Home", "main[aria-label=Review] button")
+    await ui.named("Back home", "main[aria-label=Review] button")
     await ui.has("Complete")
 
     await ui.named("Review", '[role="tab"]')
+    if ((await ui.text()).includes("Back to review"))
+      await ui.named("Back to review")
     await ui.until(
       '!document.querySelector("main[aria-label=Review] > footer")'
     )

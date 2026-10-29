@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub(in crate::agents) struct Session {
     transport: Transport,
     next_id: u32,
+    preparation_tools: Option<Value>,
     root: PathBuf,
     config: ProviderConfig,
     prepared: Prepared,
@@ -33,17 +34,27 @@ fn failure(value: &Value) -> AppError {
     .with_details(super::error_details(error))
 }
 impl Session {
+    pub(in crate::agents) fn preparation_tools(&mut self, configuration: Value) {
+        self.transport.read_only = true;
+        self.preparation_tools = Some(configuration);
+    }
     pub(in crate::agents) fn read_only(&mut self) {
         self.transport.read_only = true;
-    }
-    pub(in crate::agents) fn set_cancel(&mut self, cancel: Arc<AtomicBool>) {
-        self.transport.cancel = cancel;
     }
     pub(in crate::agents) async fn start(
         root: &std::path::Path,
         config: &ProviderConfig,
         prepared: Prepared,
         cancel: Arc<AtomicBool>,
+    ) -> AppResult<Self> {
+        Self::start_with_delegation(root, config, prepared, cancel, true).await
+    }
+    pub(in crate::agents) async fn start_with_delegation(
+        root: &std::path::Path,
+        config: &ProviderConfig,
+        prepared: Prepared,
+        cancel: Arc<AtomicBool>,
+        allow_delegation: bool,
     ) -> AppResult<Self> {
         let mut command = providers::command(&providers::resolve_executable(&config.executable));
         command
@@ -57,13 +68,19 @@ impl Session {
                     "-c",
                     "agents.max_concurrent_threads_per_session=3",
                     "-c",
-                    "agents.default_subagent_reasoning_effort=\"high\"",
-                    "-c",
                 ])
+                .arg(format!(
+                    "agents.default_subagent_reasoning_effort={}",
+                    serde_json::to_string(&prepared.helper_effort)?
+                ))
+                .arg("-c")
                 .arg(format!(
                     "agents.default_subagent_model={}",
                     serde_json::to_string(helper)?
                 ));
+        }
+        if !allow_delegation {
+            command.args(["-c", "agents.enabled=false"]);
         }
         let mut transport = Transport::new(command, cancel)?;
         transport.send(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"reviewbox","title":"ReviewBox","version":env!("CARGO_PKG_VERSION")}}})).await?;
@@ -74,6 +91,7 @@ impl Session {
         Ok(Self {
             transport,
             next_id: 2,
+            preparation_tools: None,
             root: root.into(),
             config: config.clone(),
             prepared,
@@ -103,6 +121,27 @@ impl Session {
                 )
                 .await?;
             start["config"] = planning_configuration(&effective["config"]);
+            if let Some(configuration) = &self.preparation_tools {
+                start["config"]["features.shell_tool"] = json!(false);
+                start["config"]["agents.enabled"] = json!(true);
+                start["config"]["features.multi_agent"] = json!(true);
+                start["config"]["mcp_servers"]["reviewbox_preparation"] = configuration.clone();
+                for name in [
+                    "review_state",
+                    "review_source",
+                    "review_read_document",
+                    "review_search",
+                    "review_context_assess",
+                    "review_activity",
+                    "review_plan",
+                    "review_document",
+                    "review_decide",
+                    "review_finish",
+                ] {
+                    start["config"]["mcp_servers"]["reviewbox_preparation"]["tools"][name] =
+                        json!({"approval_mode":"approve"});
+                }
+            }
         }
         let started = self.request("thread/start", start).await?;
         if started["thread"]["ephemeral"] != true {
@@ -196,6 +235,15 @@ impl Session {
                 }
                 continue;
             }
+            if value["method"] == "thread/tokenUsage/updated" {
+                let usage = &params["tokenUsage"]["total"];
+                stream.progress(AgentProgress::Usage {
+                    id: thread.clone(),
+                    input: usage["inputTokens"].as_u64().unwrap_or(0),
+                    cached: usage["cachedInputTokens"].as_u64().unwrap_or(0),
+                    output: usage["outputTokens"].as_u64().unwrap_or(0),
+                })?;
+            }
             if turn_id.is_none() {
                 if pending.len() >= 100 {
                     return Err(AppError::new(
@@ -287,15 +335,6 @@ impl Session {
                     })?;
                 }
             }
-            if value["method"] == "thread/tokenUsage/updated" {
-                let usage = &params["tokenUsage"]["total"];
-                stream.progress(AgentProgress::Usage {
-                    id: thread.clone(),
-                    input: usage["inputTokens"].as_u64().unwrap_or(0),
-                    cached: usage["cachedInputTokens"].as_u64().unwrap_or(0),
-                    output: usage["outputTokens"].as_u64().unwrap_or(0),
-                })?;
-            }
             messages.receive(&value, stream)?;
             if value["method"] == "turn/completed" {
                 if params["turn"]["status"] != "completed" {
@@ -308,6 +347,10 @@ impl Session {
                         "Codex returned no final answer for this batch.",
                     )
                 })?;
+                #[cfg(test)]
+                if std::env::var_os("REVIEWBOX_REAL_PROVIDER").is_some() {
+                    eprintln!("Real harness final: {text}");
+                }
                 stream.emit("delta", &text)?;
                 if self.prepared.helper.is_some() {
                     for (child, status) in children {
@@ -360,15 +403,17 @@ impl Session {
 
 /// Read-only filesystem sandbox plus no out-of-sandbox connectors or delegated tools.
 fn planning_configuration(effective: &Value) -> Value {
-    let mut config = json!({"features.apps": false, "features.plugins": false, "features.multi_agent": false, "agents.enabled": false, "apps._default.enabled": false});
+    let mut config = json!({"features.apps": false, "features.plugins": false, "features.multi_agent": false, "agents.enabled": false, "apps._default.enabled": false, "web_search": "disabled", "features.web_search_request": false});
     for category in ["mcp_servers", "plugins", "apps"] {
         if let Some(entries) = effective[category].as_object() {
-            for name in entries.keys() {
-                config[format!(
-                    "{category}.{}.enabled",
-                    serde_json::to_string(name).expect("JSON key")
-                )] = json!(false);
-            }
+            // App-server splits override paths on dots; it does not parse TOML
+            // quoting. Nested objects preserve literal connector names and merge
+            // only this flag into their existing transport configuration.
+            config[category] = entries
+                .keys()
+                .map(|name| (name.clone(), json!({"enabled": false})))
+                .collect::<serde_json::Map<String, Value>>()
+                .into();
         }
     }
     config
@@ -393,11 +438,15 @@ mod planning_tests {
     }
     #[test]
     fn disables_configured_connectors_and_delegation_without_writing_preferences() {
-        let source = json!({"mcp_servers":{"files":{"command":"test"}},"apps":{"writer":{"enabled":true}},"plugins":{"tool@local":{"enabled":true}}});
+        let source = json!({"mcp_servers":{"files":{"command":"test"}, "files.with.dots":{"url":"https://example.test/mcp"}},"apps":{"writer":{"enabled":true}},"plugins":{"tool@local":{"enabled":true}}});
         let config = planning_configuration(&source);
-        assert_eq!(config["mcp_servers.\"files\".enabled"], false);
-        assert_eq!(config["apps.\"writer\".enabled"], false);
-        assert_eq!(config["plugins.\"tool@local\".enabled"], false);
+        assert_eq!(config["mcp_servers"]["files"], json!({"enabled": false}));
+        assert_eq!(
+            config["mcp_servers"]["files.with.dots"],
+            json!({"enabled": false})
+        );
+        assert_eq!(config["apps"]["writer"]["enabled"], false);
+        assert_eq!(config["plugins"]["tool@local"]["enabled"], false);
         assert_eq!(config["features.multi_agent"], false);
         assert_eq!(source["apps"]["writer"]["enabled"], true);
     }

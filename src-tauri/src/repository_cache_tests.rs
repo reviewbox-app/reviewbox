@@ -35,7 +35,8 @@ fn fixture() -> (tempfile::TempDir, Storage, Repository) {
     let repository = repositories::open(&storage, root.to_str().unwrap()).unwrap();
     (dir, storage, repository)
 }
-fn watcher_ready(entry: &Entry) {
+fn watcher_ready(entry: &Arc<Entry>) {
+    ensure_watch(entry);
     let deadline = Instant::now() + Duration::from_secs(5);
     while entry.watcher.lock().unwrap().is_none() {
         assert!(
@@ -219,13 +220,13 @@ fn cached_preview_invalidates_stats_after_external_edit() {
 #[test]
 fn explicit_editor_and_git_mutations_do_not_invalidate_unrelated_buffers() {
     let (_dir, storage, repo) = fixture();
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let received = events.clone();
-    storage
-        .repository_cache
-        .set_notifier(move |event| received.lock().unwrap().push(event));
+    let (sender, receiver) = std::sync::mpsc::channel();
+    storage.repository_cache.set_notifier(move |event| {
+        sender.send(event).unwrap();
+    });
     let root = Path::new(&repo.path);
-    let _entry = storage.repository_cache.entry(&storage, root).unwrap();
+    let entry = storage.repository_cache.entry(&storage, root).unwrap();
+    watcher_ready(&entry);
     storage.repository_cache.notify_editor_mutation(
         root,
         &EditorMutation::Save {
@@ -234,17 +235,194 @@ fn explicit_editor_and_git_mutations_do_not_invalidate_unrelated_buffers() {
             expected_revision: "old".into(),
         },
     );
-    let event = events.lock().unwrap().pop().unwrap();
+    let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
     assert_eq!(event.paths, ["file-1.txt"]);
     assert!(!event.tree && !event.git && !event.full);
+    assert_eq!(event.sequence, Some(1));
     {
         let _mutation = storage.repository_cache.git_mutation(root);
     }
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 2);
-    assert!(
-        events
-            .iter()
-            .all(|e| e.git && !e.full && e.paths.is_empty())
+    let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(event.git && !event.tree && !event.full && event.paths.is_empty());
+    assert_eq!(event.sequence, Some(2));
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn explicit_watch_lease_prevents_cache_eviction_until_released() {
+    let (_dir, storage, repo) = fixture();
+    let root = Path::new(&repo.path);
+    let leased = storage
+        .repository_cache
+        .lease(&storage, root, "editor")
+        .unwrap();
+    {
+        let entry = storage.repository_cache.entry(&storage, root).unwrap();
+        entry.data.lock().unwrap().touched = Instant::now() - Duration::from_secs(901);
+    }
+    assert_eq!(
+        storage
+            .repository_cache
+            .entry(&storage, root)
+            .unwrap()
+            .status()
+            .generation,
+        leased.generation
     );
+    storage.repository_cache.release_lease(root, "editor");
+    assert_ne!(
+        storage
+            .repository_cache
+            .entry(&storage, root)
+            .unwrap()
+            .status()
+            .generation,
+        leased.generation
+    );
+}
+
+#[test]
+fn internal_and_delayed_observations_of_unchanged_bytes_emit_once() {
+    let (_dir, storage, repo) = fixture();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    storage.repository_cache.set_notifier(move |event| {
+        let _ = sender.send(event);
+    });
+    let root = Path::new(&repo.path);
+    let entry = storage.repository_cache.entry(&storage, root).unwrap();
+    watcher_ready(&entry);
+    let mutation = EditorMutation::Save {
+        path: "file-1.txt".into(),
+        text: "changed".into(),
+        expected_revision: "old".into(),
+    };
+    storage
+        .repository_cache
+        .notify_editor_mutation(root, &mutation);
+    let first = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(first.paths, ["file-1.txt"]);
+    // Models a delayed OS observation arriving after the 200 ms merge window.
+    (entry.publish)(RepositoryReadChange {
+        full: false,
+        git: false,
+        tree: false,
+        paths: vec!["file-1.txt".into()],
+        ..events::full(root)
+    });
+    assert!(receiver.recv_timeout(Duration::from_millis(350)).is_err());
+    fs::write(root.join("file-1.txt"), "new contents").unwrap();
+    storage
+        .repository_cache
+        .notify_editor_mutation(root, &mutation);
+    let changed = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(changed.paths.contains(&"file-1.txt".to_owned()));
+}
+
+#[test]
+fn last_consumer_stops_watcher_and_reacquisition_changes_generation() {
+    let (_dir, storage, repo) = fixture();
+    let root = Path::new(&repo.path);
+    let entry = storage.repository_cache.entry(&storage, root).unwrap();
+    assert!(entry.watcher.lock().unwrap().is_none());
+    let first = storage
+        .repository_cache
+        .lease(&storage, root, "one")
+        .unwrap();
+    storage
+        .repository_cache
+        .lease(&storage, root, "two")
+        .unwrap();
+    watcher_ready(&entry);
+    assert!(storage.repository_cache.release_lease(root, "one").healthy);
+    assert!(!storage.repository_cache.release_lease(root, "two").healthy);
+    assert!(entry.watcher.lock().unwrap().is_none());
+    assert!(
+        !storage
+            .repository_cache
+            .watch_status(&storage, root)
+            .unwrap()
+            .healthy
+    );
+    let next = storage
+        .repository_cache
+        .lease(&storage, root, "again")
+        .unwrap();
+    assert_ne!(first.generation, next.generation);
+    watcher_ready(&entry);
+    storage.repository_cache.release_lease(root, "again");
+}
+
+#[test]
+fn releasing_during_registration_does_not_resurrect_the_watcher() {
+    let (_dir, storage, repo) = fixture();
+    let root = Path::new(&repo.path);
+    storage
+        .repository_cache
+        .lease(&storage, root, "short")
+        .unwrap();
+    let entry = storage.repository_cache.entry(&storage, root).unwrap();
+    storage.repository_cache.release_lease(root, "short");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Arc::strong_count(&entry.healthy) > 1 {
+        assert!(
+            Instant::now() < deadline,
+            "abandoned registration did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(entry.watcher.lock().unwrap().is_none());
+    assert!(!entry.status().healthy);
+}
+
+#[test]
+fn first_atomic_save_is_content_only_but_delete_recreate_is_structural() {
+    use notify::{
+        Event, EventKind,
+        event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
+    };
+    let (_dir, storage, repo) = fixture();
+    let root = Path::new(&repo.path);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    storage.repository_cache.set_notifier(move |event| {
+        let _ = sender.send(event);
+    });
+    let entry = storage.repository_cache.entry(&storage, root).unwrap();
+    let mutation = EditorMutation::Save {
+        path: "file-1.txt".into(),
+        text: "first save".into(),
+        expected_revision: crate::editor::read(root, "file-1.txt").unwrap().revision,
+    };
+    crate::editor::mutate(root, mutation.clone()).unwrap();
+    // Pair-aware watchers report the temp->target rename. macOS can instead
+    // report an unpaired rename; native save provenance resolves that case.
+    for event in [
+        Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(root.join(".reviewbox-save-fixture"))
+            .add_path(root.join("file-1.txt")),
+        Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+            .add_path(root.join("file-1.txt")),
+    ] {
+        (entry.publish)(events::classify(root, Ok(event)).unwrap());
+    }
+    storage
+        .repository_cache
+        .notify_editor_mutation(root, &mutation);
+    let changed = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(changed.paths, ["file-1.txt"]);
+    assert!(!changed.tree && !changed.full);
+    fs::remove_file(root.join("file-1.txt")).unwrap();
+    fs::write(root.join("file-1.txt"), "recreated bytes").unwrap();
+    for kind in [
+        EventKind::Remove(RemoveKind::File),
+        EventKind::Create(CreateKind::File),
+    ] {
+        (entry.publish)(
+            events::classify(root, Ok(Event::new(kind).add_path(root.join("file-1.txt")))).unwrap(),
+        );
+    }
+    storage
+        .repository_cache
+        .notify_editor_mutation(root, &mutation);
+    let recreated = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(recreated.tree && !recreated.full);
 }

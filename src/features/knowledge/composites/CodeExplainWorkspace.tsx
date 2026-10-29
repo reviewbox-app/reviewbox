@@ -1,7 +1,10 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
 import type { Snapshot } from "@/lib/desktop/contracts.generated"
-import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
+import {
+  hasSourceChanges,
+  subscribeRepositoryReads,
+} from "@/lib/desktop/repositoryReads"
 import { errorMessage } from "@/lib/desktop/review.commands"
 import { Button } from "@/components/ui/button"
 import { contexts, contextCommands } from "../services/context.commands"
@@ -61,7 +64,9 @@ export function CodeExplainWorkspace({
       timer = setTimeout(refresh, 150)
     }
     void refresh()
-    const unsubscribe = subscribeRepositoryReads(repositoryId, refresh)
+    const unsubscribe = subscribeRepositoryReads(repositoryId, (change) => {
+      if (hasSourceChanges(change)) refresh()
+    })
     window.addEventListener("focus", focus)
     return () => {
       alive = false

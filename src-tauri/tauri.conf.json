@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "capabilities": ["main"],
+      "capabilities": ["main", "terminal", "collaboration"],
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",

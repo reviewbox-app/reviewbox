@@ -12,11 +12,6 @@ export const useFileIcons = create<{
   catalog: FileIconCatalog | null
 }>(() => ({ preferences: defaultFileIconPreferences, catalog: null }))
 
-/** The native appearance owner calls this after reading or changing preferences. */
-export function configureFileIcons(preferences: FileIconPreferences) {
-  useFileIcons.setState({ preferences })
-}
-
 let pending: Promise<void> | null = null
 export function loadFileIcons() {
   if (!pending) {

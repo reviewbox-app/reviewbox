@@ -11,12 +11,7 @@ const tree = 'nav[aria-label="Project files"]'
 const file = (path: string) => `${tree} [title=${JSON.stringify(path)}]`
 const editor = 'section[aria-label="Project file"] .monaco-editor'
 const disk = (path: string) => readFile(join(f.repo, path), "utf8")
-const shortcut = async (key: string, shift = false) => {
-  await ui.execute(
-    `const e=document.activeElement;for(const type of ['keydown','keyup']) e.dispatchEvent(new KeyboardEvent(type,{key:arguments[0],code:'Key'+arguments[0].toUpperCase(),keyCode:arguments[0].toUpperCase().charCodeAt(0),which:arguments[0].toUpperCase().charCodeAt(0),metaKey:true,shiftKey:arguments[1],bubbles:true,cancelable:true}));return true`,
-    [key, shift]
-  )
-}
+const shortcut = (key: string, shift = false) => ui.shortcut(key, shift)
 const showsCode = (text: string) =>
   ui.until(
     `document.querySelector('section[aria-label="Project file"] .view-lines')?.textContent.replaceAll('\\u00a0',' ').includes(${JSON.stringify(text)})`
@@ -61,7 +56,14 @@ const open = async () => {
 try {
   await mkdir(join(f.repo, "empty"))
   await f.write(".gitignore", "ignored.txt\n")
-  await f.write("ignored.txt", "ignored file")
+  await f.write("ignored.txt", "ignored file draftNeedle")
+  await f.write(
+    "language-sample",
+    await readFile(
+      "src/features/language-servers/helpers/languageDetection.ts",
+      "utf8"
+    )
+  )
   await ui.start(join(f.root, "appdata"))
   await ui.execute(`window.BASE_UI_ANIMATIONS_DISABLED=true;
     const frame=window.requestAnimationFrame.bind(window),cancel=window.cancelAnimationFrame.bind(window);
@@ -70,11 +72,88 @@ try {
   await open()
   await ui.element(`${tree} [data-folder="empty"]`)
   await ui.element(file("ignored.txt"))
+  assert.equal(
+    await ui.execute(
+      `return getComputedStyle(document.querySelector(arguments[0]).querySelector('span')).opacity`,
+      [file("ignored.txt")]
+    ),
+    "0.6"
+  )
+  phase = "native view menu and file search"
+  await ui.nativeMenu("View", "Show ignored files")
+  await ui.until(
+    `!document.querySelector(${JSON.stringify(file("ignored.txt"))})`
+  )
+  await ui.nativeMenu("View", "Show ignored files")
+  await ui.element(file("ignored.txt"))
+  await ui.until(
+    `document.querySelector('${tree} [data-folder="src"]')?.getAttribute('aria-expanded')==='false'`
+  )
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    "answer"
+  )
+  await ui.element(file("src/answer.ts"))
+  await ui.until(
+    `!!document.querySelector(${JSON.stringify(file("src/answer.ts"))})?.getClientRects().length`,
+    "matching file is visible in the expanded tree"
+  )
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    ""
+  )
+  await ui.until(
+    `document.querySelector('${tree} [data-folder="src"]')?.getAttribute('aria-expanded')==='false'`,
+    "pre-search closed folder restored"
+  )
+  phase = "local content language detection"
+  await ui.click(file("language-sample"))
+  await ui.until(
+    `document.querySelector('[aria-label="File language"]')?.value==='typescript'`,
+    "extensionless TypeScript detected locally"
+  )
   phase = "drafts and tabs"
   await ui.click(`${tree} [data-folder="src"]`)
   await ui.click(file("src/answer.ts"))
   await replace("export const answer = 99;\n")
   assert.equal(await disk("src/answer.ts"), "export const answer = 43;\n")
+  phase = "unsaved content search and targeted refresh"
+  await replace("export const answer = 99; // draftNeedle\n")
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    "draftNeedle"
+  )
+  await ui.named("Content", '[aria-label="Search mode"] [role=tab]')
+  await ui.element(
+    '[aria-label="Content search results"] [title="src/answer.ts"]'
+  )
+  await ui.until(
+    `document.querySelector('[aria-label="Content search results"]')?.getAttribute('aria-busy')==='false'`
+  )
+  assert.equal(
+    await ui.execute(
+      `return !!document.querySelector('[aria-label="Content search results"] [title="ignored.txt"]')`
+    ),
+    false
+  )
+  await ui.execute(
+    `window.__searchCleared=false;window.__searchObserver=new MutationObserver(()=>{if(!document.querySelector('[aria-label="Content search results"] [title="src/answer.ts"]'))window.__searchCleared=true});window.__searchObserver.observe(document.querySelector('[aria-label="Content search results"]'),{childList:true,subtree:true});return true`
+  )
+  await f.write("unrelated.txt", "an unrelated external change")
+  await Bun.sleep(2200)
+  assert.equal(
+    await ui.execute(
+      "window.__searchObserver.disconnect();return window.__searchCleared"
+    ),
+    false,
+    "unrelated events preserve displayed results"
+  )
+  await ui.fill(
+    'input[aria-label="Filter files"], input[aria-label="Search file contents"]',
+    ""
+  )
+  await replace("export const answer = 99;\n")
+  phase = "drafts and tabs"
   await ui.click(file("src/other.ts"))
   await replace("export const other = 'edited';\n")
   await ui.named("Review", "[role=tab]")
@@ -83,7 +162,7 @@ try {
   await showsCode("answer = 99")
   await ui.click(`${editor} .view-lines`)
   await shortcut("z")
-  await showsCode("answer = 43")
+  await showsCode("draftNeedle")
   await shortcut("z", true)
   await showsCode("answer = 99")
   await shortcut("s")
@@ -91,6 +170,9 @@ try {
     async () => (await disk("src/answer.ts")).includes("99"),
     "manual save"
   )
+  phase = "clean external reload"
+  await f.write("src/answer.ts", "export const answer = 102;\n")
+  await showsCode("answer = 102")
   phase = "external conflict"
   await replace("export const answer = 100;\n")
   await f.write("src/answer.ts", "export const answer = 200;\n")
@@ -112,7 +194,7 @@ try {
   await ui.fill('[aria-label="File path"]', "src/renamed.ts")
   await ui.named("Rename", "[role=dialog] button")
   await ui.element('[role=tab][title="src/renamed.ts"]')
-  await ui.named("Save", 'section[aria-label="Project file"] button')
+  await shortcut("s")
   await ui.wait(
     async () => (await disk("src/renamed.ts")).includes("101"),
     "renamed buffer saved"
@@ -157,7 +239,7 @@ try {
   await ui.named("Code Editor", "[role=tab]")
   await ui.has("Unsaved preview")
   phase = "auto save outside editor"
-  await ui.named("Auto save", "label")
+  await ui.nativeMenu("Editor", "Auto save")
   await ui.named("Review", "[role=tab]")
   await ui.wait(
     async () => (await disk("README.md")).includes("Unsaved preview"),
@@ -176,9 +258,12 @@ try {
     []
   )
   console.log(
-    "Native Code Editor: tabs, undo, manual/auto save, conflicts, rename, creation/trash, Markdown drafts, crash recovery and Git index preservation passed."
+    "Native Code Editor: native menus, search expansion restoration, unsaved search with targeted refresh, local language detection, tabs/undo, manual/auto save, conflicts, rename, creation/trash, Markdown drafts, crash recovery and Git index preservation passed."
   )
 } catch (error) {
+  if (phase === "auto save outside editor") {
+    await ui.named("Code Editor", "[role=tab]").catch(() => {})
+  }
   await ui.screenshot(`failed-${phase.replaceAll(" ", "-")}`).catch(() => {})
   console.error(
     await ui.execute("return {errors:window.__uiErrors,hidden:document.hidden}")

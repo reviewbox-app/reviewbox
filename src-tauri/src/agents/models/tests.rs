@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn model_precedence_respects_the_project_harness_and_explicit_inheritance() {
     let config = ProviderConfig {
+        reasoning_effort: None,
         provider: "codex".into(),
         executable: "codex".into(),
         model: Some("application-model".into()),
@@ -131,6 +132,7 @@ for line in sys.stdin:
     std::fs::write(&executable, script).unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let config = ProviderConfig {
+        reasoning_effort: None,
         provider: provider.into(),
         executable: executable.to_string_lossy().into_owned(),
         model: None,
@@ -158,7 +160,7 @@ fn discovery_paginates_and_filters_without_starting_a_turn() {
             runtime
                 .block_on(effort(&config, Arc::new(AtomicBool::new(false))))
                 .unwrap()
-                .is_none()
+                .is_some_and(|effort| effort == "low")
         );
         config.model = Some(
             if provider == "codex" {
@@ -172,14 +174,14 @@ fn discovery_paginates_and_filters_without_starting_a_turn() {
             runtime
                 .block_on(effort(&config, Arc::new(AtomicBool::new(false))))
                 .unwrap(),
-            Some("medium")
+            Some("low".into())
         );
         config.model = Some("unlisted".into());
         assert!(
             runtime
                 .block_on(effort(&config, Arc::new(AtomicBool::new(false))))
                 .unwrap()
-                .is_none()
+                .is_some_and(|effort| effort == "low")
         );
     }
 }
@@ -254,6 +256,7 @@ fn installed_harness_catalogs() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     for provider in ["codex", "claude"] {
         let config = ProviderConfig {
+            reasoning_effort: None,
             provider: provider.into(),
             executable: provider.into(),
             model: None,

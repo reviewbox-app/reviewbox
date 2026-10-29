@@ -214,11 +214,13 @@ for line in sys.stdin:
         fs::write(&executable, script).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let config = ProviderConfig {
+            reasoning_effort: None,
             provider: "codex".into(),
             executable: executable.to_string_lossy().into_owned(),
             model: None,
         };
         let mut stream = Stream {
+            live_text: false,
             id: id(),
             sequence: 0,
             channel: Channel::new(|_| Ok(())),
@@ -260,11 +262,13 @@ print(json.dumps({'type':'result','is_error':False,'result':'Complete answer'}),
     .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let config = ProviderConfig {
+        reasoning_effort: None,
         provider: "claude".into(),
         executable: executable.to_string_lossy().into(),
         model: None,
     };
     let mut stream = Stream {
+        live_text: false,
         id: id(),
         sequence: 0,
         channel: Channel::new(|_| Ok(())),
@@ -325,7 +329,7 @@ for line in sys.stdin:
         send({'id':2,'result':{'thread':{'id':'review-thread','ephemeral':True}}})
     elif method == 'turn/start':
         assert value['params']['sandboxPolicy'] == {'type':'dangerFullAccess'}
-        assert value['params'].get('effort') == ('medium' if model else None)
+        assert value['params'].get('effort') == 'low'
         text = value['params']['input'][0]['text']
         pointer = next(line for line in text.splitlines() if line.strip().startswith('"reviewManifest":'))
         manifest = json.loads(pathlib.Path(json.loads(pointer.split(':',1)[1].strip().rstrip(','))).read_text())
@@ -366,7 +370,7 @@ for line in sys.stdin:
     });
     let path = manifest(&storage, &workspace, &request);
     let exploration = exploration::materialize(&storage, &workspace, &request, &AtomicBool::new(false)).unwrap();
-    let mut stream = Stream {id:id(),sequence:0,channel,text:String::new(),preview:None};
+    let mut stream = Stream { live_text: false,id:id(),sequence:0,channel,text:String::new(),preview:None};
     let config = settings(&storage).unwrap().providers.into_iter().find(|p| p.provider == "codex").unwrap();
     codex::run(&exploration.project, &exploration::descriptor(&storage, &workspace, &request).unwrap(), &config, Arc::new(AtomicBool::new(false)), &mut stream).await.unwrap();
     drop(exploration);
@@ -385,4 +389,43 @@ for line in sys.stdin:
     assert!(!path.exists());
     assert!(!Path::new(&repository.path).join("protocol").exists());
     });
+}
+
+#[test]
+fn preparation_tree_is_bounded_and_terminal_manifest_keeps_frozen_sources() {
+    let (_directory, storage, _repository, mut workspace, request) = fixture();
+    let original = workspace.snapshot.files[0].clone();
+    for i in 0..10_000 {
+        workspace.snapshot.files.push(SnapshotFile {
+            path: format!("packages/project-{i}/src/file.ts"),
+            content: original.content.clone(),
+        });
+    }
+    let summary = capture_summary(&workspace.snapshot);
+    assert!(summary.to_string().len() < 20 * 1024);
+    assert!(summary["omittedTreeEntries"].as_u64().unwrap() > 0);
+    assert_eq!(summary["tree"].as_array().unwrap().len(), 100);
+    assert!(summary.get("sources").is_none());
+    let exploration =
+        exploration::materialize(&storage, &workspace, &request, &AtomicBool::new(false)).unwrap();
+    let path = exploration.directory.join("manifest.json");
+    let manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let source = manifest["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["path"] == "packages/project-9999/src/file.ts")
+        .unwrap();
+    assert_eq!(source["sourceId"], "file:packages/project-9999/src/file.ts");
+    assert_eq!(
+        fs::read(source["contentPath"].as_str().unwrap()).unwrap(),
+        storage.read_blob(&original.content.hash).unwrap()
+    );
+    let change: Value = serde_json::from_slice(
+        &fs::read(manifest["changes"][0]["metadata"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert!(!change["anchors"].as_array().unwrap().is_empty());
+    drop(exploration);
+    assert!(!path.exists());
 }

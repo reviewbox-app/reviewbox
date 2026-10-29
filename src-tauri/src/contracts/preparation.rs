@@ -123,6 +123,9 @@ pub struct PreparationPhaseCount {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparationStep {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub decision: Option<String>,
     pub id: String,
     pub title: String,
     pub status: PreparationStepStatus,
@@ -130,6 +133,7 @@ pub struct PreparationStep {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum PreparationStepStatus {
+    Removed,
     Queued,
     Writing,
     Checking,

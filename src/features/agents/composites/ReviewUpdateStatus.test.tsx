@@ -131,7 +131,7 @@ test("Rev uses semantic status colors and prioritizes a failed pass over stale c
   expect(running).toContain('data-rev-status="running"')
   expect(running).not.toContain("bg-review-attention-soft")
 })
-test("creation and adaptation share their phase rows and ready titles", () => {
+test("creation and adaptation show the agent document plan and ready titles", () => {
   const renderContent = (
     updating: boolean,
     status: PreparationState["status"]
@@ -147,8 +147,8 @@ test("creation and adaptation share their phase rows and ready titles", () => {
       />
     )
   for (const updating of [false, true]) {
-    expect(renderContent(updating, "running")).toContain("Rev’s work")
-    expect(renderContent(updating, "running")).toContain(
+    expect(renderContent(updating, "running")).toContain("The changed behavior")
+    expect(renderContent(updating, "running")).not.toContain(
       "Writing the reading path"
     )
     expect(renderContent(updating, "ready")).toContain("The changed behavior")

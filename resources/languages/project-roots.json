@@ -8,5 +8,15 @@
   "ruby": ["Gemfile"],
   "php": ["composer.json"],
   "csharp": ["global.json"],
-  "kotlin": ["build.gradle.kts", "settings.gradle.kts"]
+  "kotlin": ["build.gradle.kts", "settings.gradle.kts"],
+  "vue": ["tsconfig.json", "jsconfig.json", "package.json"],
+  "tailwind": [
+    "package.json",
+    "tailwind.config.js",
+    "tailwind.config.ts",
+    "tailwind.config.cjs",
+    "tailwind.config.mjs"
+  ],
+  "prisma": ["prisma.config.ts", "schema.prisma", "package.json"],
+  "slang": ["slang.json", "CMakeLists.txt"]
 }

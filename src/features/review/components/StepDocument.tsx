@@ -8,7 +8,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ReviewMarkdown } from "@/features/markdown/components/ReviewMarkdown"
+import { DocumentInteractions } from "./DocumentInteractions"
+import type { ReviewCommentsSession } from "../hooks/useReviewComments"
 import type {
   CodeAnchor,
   DocumentReference,
@@ -25,6 +26,7 @@ import {
 
 export function StepDocument({
   workspace,
+  comments,
   unit,
   index,
   total,
@@ -36,6 +38,7 @@ export function StepDocument({
   onOpenCode,
   onOpenReference,
 }: {
+  comments: ReviewCommentsSession
   workspace: Workspace
   unit: ReadingUnit
   index: number
@@ -48,8 +51,13 @@ export function StepDocument({
   onOpenCode: (anchor: CodeAnchor) => void
   onOpenReference: (reference: DocumentReference) => void
 }) {
-  const { step, topic } = unit.step
-  const document = step.documents[level]
+  const { step } = unit.step
+  const document = step.documents.single?.content ?? step.documents.essential
+  const contentLevel =
+    step.documents.single?.profile.style === "custom"
+      ? "technical"
+      : (step.documents.single?.profile.style ?? "essential")
+  if (!document) return <p role="alert">This review document is unavailable.</p>
   return (
     <article
       className={cn(
@@ -60,7 +68,6 @@ export function StepDocument({
       <header className="space-y-3">
         <p className="text-xs font-medium text-muted-foreground">
           Step {index + 1} of {total} ·{" "}
-          <InlineMarkdown>{topic.title}</InlineMarkdown> ·{" "}
           {Math.max(1, Math.ceil(document.readingSeconds / 60))} min read
         </p>
         <h1
@@ -88,14 +95,18 @@ export function StepDocument({
           </AlertDescription>
         </Alert>
       )}
-      <ReviewMarkdown
+      <DocumentInteractions
         key={`${workspace.snapshot.id}/${step.id}/${level}`}
+        repositoryId={workspace.review.repositoryId}
+        stepId={step.id}
+        title={step.title}
+        session={comments}
         document={document}
         glossary={[
           ...(workspace.review.glossary ?? []),
           ...(step.documents.glossary ?? []),
         ]}
-        level={level}
+        level={contentLevel}
         reviewId={workspace.review.id}
         snapshotId={workspace.snapshot.id}
         files={workspace.review.files}

@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/select"
 import { ModelSelector } from "@/features/agents/components/ModelSelector"
 import { useProviderStatus } from "@/features/agents/hooks/useProviderStatus"
+import { ReviewWritingSettings } from "../components/ReviewWritingSettings"
+import { ProjectSkillSettings } from "../components/ProjectSkillSettings"
 import { reviewCommands, errorMessage } from "@/lib/desktop/review.commands"
 import type {
   PreparationMode,
@@ -30,7 +32,6 @@ const scopeItems: { value: Scope; label: string }[] = [
 ].map((value) => ({ value: value as Scope, label: value }))
 const preparationItems: { value: PreparationMode; label: string }[] = [
   { value: "rev", label: "With Rev" },
-  { value: "manual", label: "Myself" },
 ]
 const providerItems = [
   { value: "", label: "Use application default" },
@@ -108,6 +109,9 @@ export function ProjectSettingsPanel() {
           permissions remain in Application settings.
         </p>
       </div>
+      {repositoryId && (
+        <ReviewWritingSettings key={repositoryId} repositoryId={repositoryId} />
+      )}
       <Label htmlFor="settings-project">Project</Label>
       <Select
         items={repositoryItems}
@@ -263,6 +267,9 @@ export function ProjectSettingsPanel() {
             {saved && <span role="status">Saved in .reviewbox</span>}
           </div>
         </form>
+      )}
+      {repositoryId && (
+        <ProjectSkillSettings key={repositoryId} repositoryId={repositoryId} />
       )}
       {error && (
         <p role="alert" className="text-destructive">

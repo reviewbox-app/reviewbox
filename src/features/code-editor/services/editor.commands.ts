@@ -1,6 +1,11 @@
+import { Channel } from "@tauri-apps/api/core"
 import { call } from "@/lib/desktop/review.commands"
 import type {
   EditorEntry,
+  EditorWatchStatus,
+  RepositoryReadChange,
+  EditorSearchBatch,
+  EditorSearchBuffer,
   EditorSearchResult,
   EditorFile,
   EditorMutation,
@@ -8,16 +13,43 @@ import type {
 } from "@/lib/desktop/contracts.generated"
 
 export const editorCommands = {
-  search: (repositoryId: string, query: string, requestId: string) =>
-    call<EditorSearchResult>("editor_search_content", {
+  search: (
+    repositoryId: string,
+    query: string,
+    requestId: string,
+    owner: string,
+    buffers: EditorSearchBuffer[],
+    paths: string[] | undefined,
+    receive: (batch: EditorSearchBatch) => void
+  ) => {
+    const onBatch = new Channel<EditorSearchBatch>()
+    onBatch.onmessage = receive
+    return call<EditorSearchResult>("editor_search_content", {
       repositoryId,
       query,
       requestId,
+      owner,
+      buffers,
+      paths,
+      onBatch,
+    })
+  },
+  cancelSearch: (requestId: string, owner: string, repositoryId: string) =>
+    call<void>("editor_cancel_search", { requestId, owner, repositoryId }),
+  watchStatus: (repositoryId: string) =>
+    call<EditorWatchStatus>("editor_watch_status", { repositoryId }),
+  inventory: (
+    repositoryId: string,
+    showIgnored: boolean,
+    expandedPaths: string[] = [],
+    change?: RepositoryReadChange
+  ) =>
+    call<EditorEntry[]>("editor_inventory", {
+      repositoryId,
+      showIgnored,
+      expandedPaths,
+      change,
     }),
-  cancelSearch: (requestId: string) =>
-    call<void>("editor_cancel_search", { requestId }),
-  inventory: (repositoryId: string, showIgnored: boolean) =>
-    call<EditorEntry[]>("editor_inventory", { repositoryId, showIgnored }),
   read: (repositoryId: string, path: string) =>
     call<EditorFile>("editor_read", { repositoryId, path }),
   revision: (repositoryId: string, path: string) =>

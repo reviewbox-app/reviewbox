@@ -2,11 +2,12 @@
 import { reviewReaderLayout } from "../reader.config"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTheme } from "next-themes"
-import { FileIcon } from "@/features/file-icons/components/FileIcon"
+import { CodeFileHeader } from "@/features/code-editor/components/CodeFileHeader"
 import type { editor } from "monaco-editor"
 import type {
   DocumentReference,
   FrozenSource,
+  ReviewCommentAnchor,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 import { CodeEditor } from "@/features/code-editor/components/CodeEditor"
@@ -15,6 +16,9 @@ import { errorMessage } from "@/lib/desktop/review.commands"
 import { readerCommands } from "../services/reader.commands"
 import { languageFor } from "../helpers/review.helpers"
 import { revealPassage } from "../helpers/revealPassage.helpers"
+import { observeSourceSelection } from "@/features/code-editor/services/sourceSelection"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
+import { commentAnchor } from "../helpers/reviewComment.helpers"
 import { ReviewCodePane } from "./ReviewCodePane"
 
 /** Exploring a reference never changes the primary reading or decision cursor. */
@@ -22,8 +26,13 @@ export function ReviewReferencePane({
   workspace,
   reference,
   overlay,
+  onCommentSelection,
 }: {
   workspace: Workspace
+  onCommentSelection?: (
+    value: SourceSelection | null,
+    anchor?: ReviewCommentAnchor
+  ) => void
   reference: DocumentReference
   overlay: { top: number; bottom: number }
 }) {
@@ -40,6 +49,7 @@ export function ReviewReferencePane({
     error?: string
   } | null>(null)
   const { resolvedTheme } = useTheme()
+  const commentObserver = useRef<{ dispose: () => void } | null>(null)
   const mounted = useRef<editor.IStandaloneCodeEditor | null>(null)
   const marker = useRef<editor.IEditorDecorationsCollection | null>(null)
   const content = loaded?.key === requestKey ? loaded : null
@@ -125,6 +135,7 @@ export function ReviewReferencePane({
   }, [highlight, content])
   useEffect(
     () => () => {
+      commentObserver.current?.dispose()
       marker.current?.clear()
       mounted.current = null
     },
@@ -154,6 +165,17 @@ export function ReviewReferencePane({
     return (
       <ReviewCodePane
         key={key}
+        onCommentSelection={
+          onCommentSelection
+            ? (value) =>
+                onCommentSelection(
+                  value,
+                  value
+                    ? commentAnchor(workspace.snapshot.id, change, value)
+                    : undefined
+                )
+            : undefined
+        }
         snapshot={workspace.snapshot}
         change={change}
         selection={selection}
@@ -172,16 +194,11 @@ export function ReviewReferencePane({
   const source = content.source
   return (
     <section className="absolute inset-0" aria-label="Referenced source">
-      <header
-        className="absolute inset-x-0 z-10 flex items-center gap-2 truncate border-b glass-bar px-4 text-xs"
-        style={{
-          top: overlay.top,
-          height: reviewReaderLayout.codeHeaderHeight,
-        }}
-      >
-        <FileIcon path={source.path} />
-        {source.path}
-      </header>
+      <CodeFileHeader
+        path={source.path}
+        className="absolute inset-x-0 z-10 glass-bar"
+        style={{ top: overlay.top }}
+      />
       <CodeEditor
         key={key}
         height="100%"
@@ -218,6 +235,26 @@ export function ReviewReferencePane({
         }}
         onMount={(instance) => {
           mounted.current = instance
+          commentObserver.current?.dispose()
+          if (onCommentSelection)
+            commentObserver.current = observeSourceSelection(
+              instance,
+              "after",
+              (value) =>
+                onCommentSelection(
+                  value,
+                  value
+                    ? {
+                        snapshotId: workspace.snapshot.id,
+                        sourceId: reference.sourceId,
+                        path: content.source!.path,
+                        contentHash: content.source!.hash,
+                        range: value.range,
+                        excerpt: value.excerpt,
+                      }
+                    : undefined
+                )
+            )
           marker.current = instance.createDecorationsCollection()
           // Automatic layout runs asynchronously; measure the mounted viewport
           // before calculating its center on the first navigation.

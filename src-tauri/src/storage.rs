@@ -13,6 +13,7 @@ use std::{
 };
 
 mod contexts;
+mod finalization;
 mod publications;
 mod readers;
 mod updates;
@@ -30,6 +31,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{fs, path::PathBuf, time::Duration};
 
+type ReviewNotifier = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 type ArchivedDocuments = BTreeMap<(String, String, String), Value>;
 
 #[derive(Clone)]
@@ -37,6 +40,8 @@ pub struct Storage {
     pub(crate) repository_cache: Arc<crate::repository_cache::RepositoryCache>,
     updating: Arc<Mutex<BTreeMap<(String, String), String>>>,
     update_owner: Option<String>,
+    enrich_reviews: bool,
+    review_notifier: Arc<Mutex<Option<ReviewNotifier>>>,
     root: PathBuf,
     source_cache: Arc<source_cache::SourceCache>,
     active_snapshots: Arc<Mutex<BTreeMap<String, usize>>>,
@@ -48,8 +53,20 @@ pub struct Storage {
     _owner: std::sync::Arc<project_storage::FileLock>,
 }
 impl Storage {
+    pub(crate) fn set_review_notifier(&self, notify: impl Fn(&str, &str) + Send + Sync + 'static) {
+        *self
+            .review_notifier
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(notify));
+    }
+
     pub(crate) fn cached_blob_exists(&self, hash: &str) -> bool {
         self.root.join("blobs").join(hash).is_file()
+    }
+    pub(crate) fn for_finalization(&self, repository_id: &str) -> Self {
+        let mut storage = self.scoped(Some(repository_id));
+        storage.enrich_reviews = false;
+        storage
     }
     pub fn scoped(&self, repository_id: Option<&str>) -> Self {
         let mut scoped = self.clone();
@@ -85,6 +102,8 @@ impl Storage {
             repository_cache: Arc::default(),
             updating: Arc::default(),
             update_owner: None,
+            enrich_reviews: true,
+            review_notifier: Arc::default(),
             source_cache,
             active_snapshots: Arc::default(),
             pending_snapshot_gc: Arc::default(),
@@ -160,7 +179,7 @@ impl Storage {
             }
             if kind == "review" {
                 self.fill_reading(&mut value)?;
-                self.enrich_publication(&mut value)?;
+                self.enrich_publication(&mut value, true)?;
             }
             if kind == "review" {
                 self.fill_step_documents(&mut value)?;
@@ -203,7 +222,7 @@ impl Storage {
                 .map(|(_, mut value)| {
                     if kind == "review" {
                         self.fill_reading(&mut value)?;
-                        self.enrich_publication(&mut value)?;
+                        self.enrich_publication(&mut value, false)?;
                     }
                     if (kind == "review") && value["publication"]["status"] != "archived" {
                         self.fill_step_documents(&mut value)?;
@@ -268,7 +287,27 @@ impl Storage {
             .iter()
             .any(|(kind, _, _, _)| project_storage::KINDS.contains(kind))
         {
-            return self.project_write(writes);
+            let changed: Vec<_> = writes
+                .iter()
+                .filter(|(kind, _, _, _)| *kind == "review")
+                .filter_map(|(_, id, _, value)| {
+                    value["repositoryId"]
+                        .as_str()
+                        .map(|repo| (repo.to_string(), id.to_string()))
+                })
+                .collect();
+            self.project_write(writes)?;
+            let notify = self
+                .review_notifier
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(notify) = notify {
+                for (repo, review) in changed {
+                    notify(&repo, &review);
+                }
+            }
+            return Ok(());
         }
         let mut db = self.connection()?;
         let tx = db.transaction()?;
@@ -600,6 +639,9 @@ impl Storage {
         self.index(&project, &documents)?;
         let dirty = Arc::new(AtomicBool::new(false));
         let flag = dirty.clone();
+        let review_notifier = self.review_notifier.clone();
+        let watched_root = project.root.clone();
+        let watched_repository = repo.id.clone();
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if event.as_ref().map_or(true, |e| {
@@ -611,6 +653,22 @@ impl Storage {
                         })
                 }) {
                     flag.store(true, Ordering::Release);
+                    if let Ok(event) = event {
+                        let changed: std::collections::BTreeSet<_> = event
+                            .paths
+                            .iter()
+                            .filter_map(|path| finalization::changed_review_id(&watched_root, path))
+                            .collect();
+                        let notify = review_notifier
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .clone();
+                        if let Some(notify) = notify {
+                            for review in changed {
+                                notify(&watched_repository, &review);
+                            }
+                        }
+                    }
                 }
             })
             .map_err(|e| AppError::new("watcher", e.to_string()))?;

@@ -1,3 +1,5 @@
+import { registerLanguageConfigurations } from "./languageConfigurations"
+import { observeCodeEditors } from "@/lib/code/codeAppearance"
 import { initializeCodeHighlighting } from "@/lib/code/highlighter"
 
 let initialization: Promise<void> | undefined
@@ -47,6 +49,8 @@ export function initializeMonaco(): Promise<void> {
     await import("monaco-editor/editor/contrib/semanticTokens/browser/documentSemanticTokens")
     loader.config({ monaco })
     await initializeCodeHighlighting(monaco)
+    await registerLanguageConfigurations(monaco)
+    observeCodeEditors(monaco)
   })().catch((error: unknown) => {
     initialization = undefined
     throw error

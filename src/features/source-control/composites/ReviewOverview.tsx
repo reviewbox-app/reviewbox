@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
+import { GitRecoveryActions } from "../components/GitRecoveryActions"
 import { CommitCard } from "../components/CommitCard"
 import type { SourceControlSession } from "../hooks/useSourceControl"
 import { sourceControlCommands as commands } from "../services/source-control.commands"
@@ -88,9 +89,11 @@ export function ReviewOverview({
           </EmptyHeader>
           <EmptyContent>
             <div className="flex flex-wrap justify-center gap-2">
-              {!!state?.files.length && (
+              {state && (
                 <Button variant="secondary" onClick={onLocal}>
-                  View local changes
+                  {state.files.length
+                    ? "View local changes"
+                    : "View local code"}
                 </Button>
               )}
               <Button onClick={onResume ?? onStart}>
@@ -202,6 +205,12 @@ export function ReviewOverview({
                     {lastOperation.error ?? lastOperation.message}{" "}
                     {lastOperation.commits.length} commits completed. Remaining
                     staged changes are preserved.
+                    <GitRecoveryActions
+                      repositoryId={state.repositoryId}
+                      error={lastOperation.error}
+                      disabled={busy}
+                      onRecovered={() => setLastOperation(null)}
+                    />
                   </AlertDescription>
                 </Alert>
               )}

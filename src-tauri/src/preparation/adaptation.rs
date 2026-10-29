@@ -1,4 +1,4 @@
-//! Incremental preparation uses a private candidate and the existing batch pipeline.
+//! Incremental preparation installs a private candidate without mutating the source review.
 use super::*;
 use crate::reader;
 
@@ -17,34 +17,13 @@ pub(super) fn capture_key(snapshot: &Snapshot) -> AppResult<String> {
         &json!({"request":snapshot.request,"selectedCommits":selected_commits,"changes":changes,"files":files}),
     )?))
 }
-pub(super) fn comparison(old: &Snapshot, new: &Snapshot) -> Value {
-    let mut before: Vec<_> = old.changes.iter().map(change_key).collect();
-    let mut after: Vec<_> = new.changes.iter().map(change_key).collect();
-    let mut files_before: Vec<_> = old
-        .files
-        .iter()
-        .map(|file| json!([file.path, file.content]))
-        .collect();
-    let mut files_after: Vec<_> = new
-        .files
-        .iter()
-        .map(|file| json!([file.path, file.content]))
-        .collect();
-    for values in [&mut before, &mut after, &mut files_before, &mut files_after] {
-        values.sort_by_key(Value::to_string);
-    }
-    json!({"contextRemovedOrChanged":files_before.iter().filter(|v|!files_after.contains(v)).collect::<Vec<_>>(),
-        "contextAddedOrChanged":files_after.iter().filter(|v|!files_before.contains(v)).collect::<Vec<_>>(),
-        "removedOrChanged":before.iter().filter(|v| !after.contains(v)).collect::<Vec<_>>(),
-        "addedOrChanged":after.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>()})
-}
 fn mapped_change<'a>(old: &Change, snapshot: &'a Snapshot) -> Option<&'a Change> {
     let key = change_key(old);
     let mut candidates = snapshot.changes.iter().filter(|c| change_key(c) == key);
     let candidate = candidates.next()?;
     candidates.next().is_none().then_some(candidate)
 }
-fn source_map(old: &Snapshot, new: &Snapshot) -> BTreeMap<String, String> {
+pub(super) fn source_map(old: &Snapshot, new: &Snapshot) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
     for change in &old.changes {
         if let Some(next) = mapped_change(change, new) {
@@ -69,21 +48,22 @@ fn source_map(old: &Snapshot, new: &Snapshot) -> BTreeMap<String, String> {
 /// Only meanings that can be displayed by this document influence its decision.
 /// Include automatic term linking and illustration aliases, not just explicit links.
 fn used_glossary(docs: &LevelDocuments, glossary: &[DocumentTerm]) -> Vec<Value> {
-    let bodies = [&docs.essential, &docs.explained, &docs.technical]
+    let bodies = docs
+        .documents()
+        .into_iter()
         .map(|d| d.body.to_lowercase())
+        .collect::<Vec<_>>()
         .join("\n");
     let mut used: Vec<_> = glossary
         .iter()
         .filter(|term| {
             bodies.contains(&term.term.to_lowercase())
                 || bodies.contains(&term.id.to_lowercase())
-                || [&docs.essential, &docs.explained, &docs.technical]
-                    .iter()
-                    .any(|doc| {
-                        doc.term_aliases.iter().any(|(alias, id)| {
-                            id == &term.id && bodies.contains(&alias.to_lowercase())
-                        })
-                    })
+                || docs.documents().iter().any(|doc| {
+                    doc.term_aliases
+                        .iter()
+                        .any(|(alias, id)| id == &term.id && bodies.contains(&alias.to_lowercase()))
+                })
         })
         .map(|term| json!([term.id, term.term, term.context, term.definition]))
         .collect();
@@ -115,11 +95,10 @@ fn decision_documents_unchanged(old: &Workspace, new: &Workspace, step_id: &str)
         return false;
     }
     let mapping = source_map(&old.snapshot, &new.snapshot);
-    for (before, after) in [
-        (&previous.documents.essential, &next.documents.essential),
-        (&previous.documents.explained, &next.documents.explained),
-        (&previous.documents.technical, &next.documents.technical),
-    ] {
+    for (before, after) in [(
+        previous.documents.get(ReadingLevel::Essential),
+        next.documents.get(ReadingLevel::Essential),
+    )] {
         if before.body != after.body {
             return false;
         }
@@ -174,6 +153,7 @@ pub(super) fn recover_checkpoint(
         return Ok(previous);
     }
     let checkpoint = Checkpoint {
+        working_context: None,
         revision: previous.as_ref().map_or(0, |old| old.revision + 1),
         review_revision: update.source_revision,
         repository_id: review.repository_id.clone(),
@@ -211,7 +191,7 @@ pub(super) fn recover_checkpoint(
     }
     Ok(Some(checkpoint))
 }
-fn mapped_anchors(
+pub(super) fn mapped_anchors(
     old: &Snapshot,
     new: &Snapshot,
     anchors: &[CodeAnchor],
@@ -241,44 +221,6 @@ fn mapped_anchors(
         })
         .collect()
 }
-pub(super) fn validate_outline_update(outline: &Outline, source: &Review) -> AppResult<()> {
-    let ids: HashSet<_> = source
-        .topics
-        .iter()
-        .flat_map(|t| &t.steps)
-        .map(|s| s.id.as_str())
-        .collect();
-    let mut seen = HashSet::new();
-    for step in outline.topics.iter().flat_map(|t| &t.steps) {
-        if let Some(id) = &step.previous_step_id {
-            if !ids.contains(id.as_str()) || !seen.insert(id.as_str()) {
-                return Err(invalid("An existing step must be identified exactly once."));
-            }
-        } else if step.reuse {
-            return Err(invalid("A new step cannot reuse an existing document."));
-        }
-    }
-    for id in &outline.removed_steps {
-        if !ids.contains(id.as_str()) || !seen.insert(id.as_str()) {
-            return Err(invalid("Removed steps must be distinct known step IDs."));
-        }
-    }
-    if seen != ids {
-        return Err(invalid(
-            "Account for every existing step: retain, rewrite or remove it.",
-        ));
-    }
-    Ok(())
-}
-pub(super) fn generation_signature(run: &Run) -> AppResult<String> {
-    Ok(fingerprint(&serde_json::to_vec(&json!([
-        run.templates.get("documents"),
-        run.language,
-        run.config,
-        run.checkpoint.helper_model,
-        schemars::schema_for!(LevelDocuments)
-    ]))?))
-}
 pub(super) fn attach_dependencies(
     docs: &mut LevelDocuments,
     anchors: &[CodeAnchor],
@@ -298,7 +240,7 @@ pub(super) fn attach_dependencies(
         .cloned()
         .map(|id| (id, ()))
         .collect();
-    for doc in [&docs.essential, &docs.explained, &docs.technical] {
+    for doc in docs.documents() {
         for reference in &doc.references {
             ids.insert(reference.source_id.clone(), ());
         }
@@ -331,99 +273,6 @@ pub(super) fn attach_dependencies(
     });
     Ok(())
 }
-pub(super) fn reuse_documents(
-    source: &Workspace,
-    target: &Snapshot,
-    topic: &OutlineTopic,
-    step: &OutlineStep,
-    signature: &str,
-) -> Option<LevelDocuments> {
-    if !step.reuse {
-        return None;
-    }
-    let previous_id = step.previous_step_id.as_ref()?;
-    let old_topic = source
-        .review
-        .topics
-        .iter()
-        .find(|t| t.steps.iter().any(|s| &s.id == previous_id))?;
-    let old_step = old_topic.steps.iter().find(|s| &s.id == previous_id)?;
-    if old_topic.title != topic.title
-        || old_topic.brief != topic.brief
-        || old_step.title != step.title
-    {
-        return None;
-    }
-    let anchors = mapped_anchors(&source.snapshot, target, &old_step.anchors)?;
-    if serde_json::to_value(&anchors).ok()? != serde_json::to_value(&step.anchors).ok()? {
-        return None;
-    }
-    let mapping = source_map(&source.snapshot, target);
-    let mut docs = old_step.documents.clone();
-    // Newly requested context needs a writer unless it was already a verified
-    // dependency of the previous explanation. Never enlarge reused evidence silently.
-    if step.context_source_ids.iter().any(|id| {
-        !docs.dependencies.as_ref().is_some_and(|dependencies| {
-            dependencies
-                .sources
-                .iter()
-                .any(|source| mapping.get(&source.source_id) == Some(id))
-        })
-    }) {
-        return None;
-    }
-    if let Some(dependencies) = &docs.dependencies {
-        if dependencies.signature != signature {
-            return None;
-        }
-        for item in &dependencies.sources {
-            let next = mapping.get(&item.source_id)?;
-            if !reader::sources(target)
-                .iter()
-                .any(|s| &s.source_id == next && s.hash == item.hash && s.path == item.path)
-            {
-                return None;
-            }
-        }
-    }
-    for doc in [
-        &mut docs.essential,
-        &mut docs.explained,
-        &mut docs.technical,
-    ] {
-        for reference in &mut doc.references {
-            reference.source_id = mapping.get(&reference.source_id)?.clone();
-        }
-    }
-    // Preserve all previously verified dependencies, including coordinator-only
-    // context that the writer did not cite in the document.
-    if let Some(dependencies) = &mut docs.dependencies {
-        let target_sources = reader::sources(target);
-        for source in &mut dependencies.sources {
-            let next_id = mapping.get(&source.source_id)?;
-            *source = target_sources
-                .iter()
-                .find(|s| &s.source_id == next_id)?
-                .clone();
-        }
-    }
-    for id in &mut docs.context_sources {
-        *id = mapping.get(id)?.clone();
-    }
-    // Checkpoint documents must carry the shared definitions needed by aliases
-    // and automatic term linking, not just the explicit Markdown links.
-    docs.glossary = source.review.glossary.clone();
-    attach_dependencies(
-        &mut docs,
-        &step.anchors,
-        &step.context_source_ids,
-        target,
-        signature,
-    )
-    .ok()?;
-    Some(docs)
-}
-
 impl PreparationManager {
     pub(crate) fn adapt(
         &self,
@@ -469,10 +318,25 @@ impl PreparationManager {
             source.snapshot.request.clone(),
             &mut |_, _, _, _| Ok(()),
         )?;
-        if capture_key(&source.snapshot)? == capture_key(&next)? {
+        let profile = writing::effective(&storage, &source.review.repository_id)?;
+        let profile_changed = source
+            .review
+            .topics
+            .iter()
+            .flat_map(|t| &t.steps)
+            .any(|step| {
+                step.documents
+                    .single
+                    .as_ref()
+                    .map(|d| &d.profile)
+                    .unwrap_or(&ReviewWritingProfile::default())
+                    != &profile
+            });
+        if !profile_changed && capture_key(&source.snapshot)? == capture_key(&next)? {
             return Ok(None);
         }
-        if let Some(previous) = previous
+        if !profile_changed
+            && let Some(previous) = previous
             && let Some(update) = &previous.adaptation
             && update.snapshot_id == source.snapshot.id
             && update.source_revision == source.review.revision
@@ -599,6 +463,13 @@ pub(super) fn finish(
         && done.review.preparation_id.as_deref() == Some(&state.id)
         && done.review.update_origin.is_none()
     {
+        crate::working_context::transfer(
+            storage,
+            &done.review.repository_id,
+            &state.review_id,
+            &update.destination_review_id,
+            &done.snapshot.id,
+        )?;
         return Ok(done);
     }
     if source.review.revision != update.source_revision || source.snapshot.id != update.snapshot_id
@@ -609,6 +480,13 @@ pub(super) fn finish(
         ));
     }
     let mut next = reviews::load(storage, &update.candidate_review_id)?;
+    crate::working_context::transfer(
+        storage,
+        &next.review.repository_id,
+        &state.review_id,
+        &update.destination_review_id,
+        &next.snapshot.id,
+    )?;
     next.review.id = update.destination_review_id.clone();
     next.review.revision = if next.review.id == source.review.id {
         source.review.revision + 1

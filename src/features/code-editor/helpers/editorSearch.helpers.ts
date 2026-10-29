@@ -5,7 +5,12 @@ export function indexEditorFiles(
   ignored: ReadonlySet<string>
 ) {
   return entries
-    .filter((entry) => !entry.directory && !ignored.has(entry.path))
+    .filter(
+      (entry) =>
+        !entry.directory &&
+        !ignored.has(entry.path) &&
+        !entry.path.startsWith(".reviewbox/")
+    )
     .map((entry) => ({ path: entry.path, search: entry.path.toLowerCase() }))
 }
 export function findEditorFiles(

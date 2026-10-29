@@ -1,15 +1,14 @@
-//! The helper plans commits; only source_control executes Git mutations.
+//! Explicit commit execution in the project's harness. Git is the result source.
 use super::*;
 
-pub(crate) async fn plan(
+pub(crate) async fn run(
     storage: &Storage,
     root: &std::path::Path,
     resources: &std::path::Path,
     request: &GitCommitRequest,
-    context: String,
+    stage_all: bool,
     cancel: Arc<AtomicBool>,
-    channel: Channel<AgentEvent>,
-) -> AppResult<String> {
+) -> AppResult<()> {
     let settings = settings(storage)?;
     let project = storage.project_settings(&request.repository_id)?;
     let provider = project
@@ -23,28 +22,34 @@ pub(crate) async fn plan(
         .cloned()
         .ok_or_else(|| AppError::new("provider", "Configure the project's harness first."))?;
     config.model = Some(if provider == "codex" {
-        settings.helper_model
+        settings.helper_model.clone()
     } else {
         "claude-sonnet-5".into()
     });
     let template = std::fs::read_to_string(resources.join("prompts/commit.md"))?;
-    let prompt = prompts::render(&template, &BTreeMap::from([("context".into(), context)]))?;
+    let scope = if stage_all {
+        "Stage and commit all saved Git changes in this project, including changes outside the completed review."
+    } else {
+        "Commit the changes currently staged in Git. Keep unrelated unstaged changes in the working tree."
+    };
+    let prompt = prompts::render(&template, &BTreeMap::from([("scope".into(), scope.into())]))?;
+    // Provider commentary is not a commit receipt. The source-control observer
+    // streams only commits it can actually read back from Git.
     let mut stream = Stream {
+        live_text: false,
         id: request.operation_id.clone(),
         sequence: 0,
-        channel,
+        channel: Channel::new(|_| Ok(())),
         text: String::new(),
         preview: None,
     };
-    let schema = serde_json::json!({"type":"object","additionalProperties":false,"required":["commits"],"properties":{"commits":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["message","paths"],"properties":{"message":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}}}}}}});
     if provider == "codex" {
-        let prepared = codex::prepare(&config, cancel.clone(), None).await?;
+        let prepared = codex::prepare(&config, cancel.clone(), Some(settings.helper_model)).await?;
         let mut session = codex::Session::start(root, &config, prepared, cancel).await?;
-        let result = session.run(&prompt, Some(schema), &mut stream).await;
+        let result = session.run(&prompt, None, &mut stream).await;
         session.finish().await;
-        result?;
+        result
     } else {
-        claude::run(root, &prompt, &config, cancel, &mut stream).await?;
+        claude::run(root, &prompt, &config, cancel, &mut stream).await
     }
-    Ok(stream.text)
 }

@@ -24,6 +24,12 @@ export function editorSurfaceColors(dark: boolean) {
     "editorStickyScroll.shadow": dark ? "#00000026" : "#00000014",
     "scrollbar.shadow": dark ? "#00000026" : "#00000014",
     "editorIndentGuide.background1": "#00000000",
+    "editorBracketHighlight.foreground1": dark ? "#7aa2f7" : "#2959aa",
+    "editorBracketHighlight.foreground2": dark ? "#bb9af7" : "#5a4a78",
+    "editorBracketHighlight.foreground3": dark ? "#e0af68" : "#8f5e15",
+    "editorBracketHighlight.foreground4": dark ? "#9ece6a" : "#485e30",
+    "editorBracketHighlight.foreground5": dark ? "#7dcfff" : "#0f4b6e",
+    "editorBracketHighlight.foreground6": dark ? "#f7768e" : "#c64343",
     "scrollbarSlider.background": faint,
     "diffEditor.insertedLineBackground": dark ? "#4ade8012" : "#16a34a12",
     "diffEditor.insertedTextBackground": dark ? "#4ade8029" : "#16a34a24",
@@ -42,7 +48,7 @@ export function pseudoPalette(theme: string): Record<PseudoTokenKind, string> {
   const tokyo = theme.startsWith("tokyo-night")
   return {
     plain: dark ? "#a9b1d6" : "#343b59",
-    comment: dark ? "#737c9e" : "#747c9c",
+    comment: dark ? "#919191" : "#8c8c8c",
     string: tokyo
       ? dark
         ? "#9ece6a"
@@ -92,7 +98,36 @@ export const codeThemes: ThemeRegistration[] = [true, false].flatMap((dark) => {
     {
       ...common,
       name: tokyoName,
-      tokenColors: [...theme.tokenColors, ...pseudoRules(tokyoName)],
+      tokenColors: [
+        ...theme.tokenColors,
+        ...theme.tokenColors.flatMap((rule) => {
+          const scopes = (
+            typeof rule.scope === "string"
+              ? rule.scope.split(",")
+              : (rule.scope ?? [])
+          ).filter((scope) => scope.includes("comment"))
+          return scopes.length
+            ? [
+                {
+                  scope: scopes,
+                  settings: {
+                    ...rule.settings,
+                    foreground: dark ? "#919191" : "#8c8c8c",
+                  },
+                },
+              ]
+            : []
+        }),
+        {
+          scope: [
+            "comment",
+            "comment.block.documentation",
+            "punctuation.definition.comment",
+          ],
+          settings: { foreground: dark ? "#919191" : "#8c8c8c" },
+        },
+        ...pseudoRules(tokyoName),
+      ],
     },
     {
       ...common,
@@ -108,7 +143,7 @@ export const codeThemes: ThemeRegistration[] = [true, false].flatMap((dark) => {
         },
         {
           scope: "comment",
-          settings: { foreground: dark ? "#888888" : "#707070" },
+          settings: { foreground: dark ? "#919191" : "#8c8c8c" },
         },
         {
           scope: ["entity.name.type", "support.type", "entity.name.class"],

@@ -6,11 +6,7 @@ import {
   type FileIconPreferences,
   type IconClone,
 } from "../contracts/fileIcons.types"
-import {
-  resolveFileIcon,
-  resolveFolderIcon,
-  fileIconImportWarnings,
-} from "./fileIcons.helpers"
+import { resolveFileIcon, resolveFolderIcon } from "./fileIcons.helpers"
 import { recolorIcon } from "./iconColors.helpers"
 
 const catalog: FileIconCatalog = {
@@ -52,9 +48,9 @@ describe("Material file icon resolution", () => {
     expect(
       asset("user.controller.ts", prefs({ activeIconPack: "nest" }))
     ).toEndWith("nest-controller.clone.svg")
-    expect(asset("user.controller.ts")).not.toEndWith(
-      "nest-controller.clone.svg"
-    )
+    expect(
+      asset("user.controller.ts", prefs({ activeIconPack: "default" }))
+    ).not.toEndWith("nest-controller.clone.svg")
   })
   test("custom file suffixes override matching built-in extensions without losing longer suffixes", () => {
     const preferences = prefs({
@@ -96,7 +92,10 @@ describe("Material file icon resolution", () => {
       activeForPacks: ["nest"],
     })
     expect(
-      asset("user.provider.ts", prefs({ fileClones: [custom] }))
+      asset(
+        "user.provider.ts",
+        prefs({ activeIconPack: "default", fileClones: [custom] })
+      )
     ).toEndWith("typescript.svg")
     expect(
       resolveFileIcon(
@@ -126,34 +125,6 @@ describe("Material file icon resolution", () => {
 })
 
 describe("Material folder icon resolution", () => {
-  test("reports unresolved associations and colors without warning on folder aliases or active clones", () => {
-    const warnings = fileIconImportWarnings(
-      catalog,
-      prefs({
-        fileAssociations: { "*.one": "missing", "*.two": "custom" },
-        fileClones: [clone({ base: "settings", color: "impossible-color" })],
-        folderAssociations: { ui: "components", missing: "not-found" },
-        folderClones: [clone({ base: "components" })],
-      })
-    )
-    expect(warnings).toHaveLength(3)
-    expect(warnings.some((value) => value.includes('"*.one"'))).toBe(true)
-    expect(warnings.some((value) => value.includes('"not-found"'))).toBe(true)
-    expect(warnings.some((value) => value.includes("color"))).toBe(true)
-  })
-  test("reports ineffective imported settings separately from displayed file labels", () => {
-    const warnings = fileIconImportWarnings(
-      catalog,
-      prefs({
-        folderClones: [
-          clone({ base: "folder-helpers", folderNames: ["*.helpers"] }),
-        ],
-      })
-    )
-    expect(warnings).toHaveLength(2)
-    expect(warnings[0]).toContain("unavailable")
-    expect(warnings[1]).toContain("unsupported")
-  })
   test("resolves compacted folders by final basename and preserves open state", () => {
     expect(
       resolveFolderIcon(catalog, prefs(), "src/components", false)?.assetPath
@@ -220,4 +191,33 @@ describe("Material clone colors", () => {
       recolorIcon('<svg fill="#ffffff"/>', "url(https://example.com)")
     ).toThrow("Unknown Material icon color")
   })
+})
+
+test("the shared icon preset includes Nest and the shipped variants for every installation", () => {
+  expect(asset("user.controller.ts")).toEndWith("nest-controller.clone.svg")
+  expect(
+    resolveFileIcon(
+      catalog,
+      defaultFileIconPreferences,
+      "order.repository.ts",
+      false
+    )
+  ).toEqual({ assetPath: "./../icons/prisma.svg", color: "blue-300" })
+  expect(
+    resolveFolderIcon(
+      catalog,
+      defaultFileIconPreferences,
+      "src/composites",
+      false
+    )?.color
+  ).toBe("teal-400")
+  expect(
+    resolveFolderIcon(catalog, defaultFileIconPreferences, "src/menus", true)
+      ?.color
+  ).toBe("deep-purple-400")
+  expect(
+    defaultFileIconPreferences.folderClones.some(
+      (c) => c.base === "folder-helpers"
+    )
+  ).toBe(false)
 })

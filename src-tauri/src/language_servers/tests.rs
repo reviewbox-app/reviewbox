@@ -10,6 +10,12 @@ pub(super) async fn probe_server(
     storage: Storage,
 ) -> AppResult<LanguageCapabilities> {
     let (path, text, line, column) = match server.id.as_str() {
+        "slang" => (
+            "main.hlsl",
+            "float4 tint(float4 color) { return color; }\nfloat4 main() : SV_Target { return tint(float4(1,0,0,1)); }\n",
+            2,
+            36,
+        ),
         "typescript" => (
             "main.ts",
             "const value: number = 42;\nexport const answer = value;\n",

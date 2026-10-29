@@ -198,10 +198,6 @@ function NewReviewWizard({ repository, onCreated, onClose }: Props) {
                 />
               ) : (
                 <PreparationStep
-                  readingLevel={
-                    wizard.askReadingLevel ? wizard.readingLevel : undefined
-                  }
-                  onReadingLevelChange={wizard.setReadingLevel}
                   mode={wizard.mode}
                   ready={wizard.ready}
                   scope={wizard.request.scope}
@@ -279,9 +275,9 @@ function NewReviewWizard({ repository, onCreated, onClose }: Props) {
                   size="sm"
                   variant="ghost"
                   disabled={wizard.advancing}
-                  onClick={wizard.skip}
+                  onClick={close}
                 >
-                  Continue without Rev
+                  Cancel
                 </Button>
               ) : (
                 <Button

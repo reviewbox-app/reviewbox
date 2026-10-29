@@ -239,3 +239,15 @@
     scrollbar-color: auto;
   }
 }
+
+:root {
+  --font-mono: var(--font-geist-mono), monospace;
+  --font-code: var(--font-mono);
+  --code-font-weight: 400;
+}
+pre,
+code,
+.code-font {
+  font-family: var(--font-code);
+  font-weight: var(--code-font-weight);
+}

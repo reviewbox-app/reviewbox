@@ -15,7 +15,8 @@ use tokio::{
     sync::{Mutex as AsyncMutex, oneshot},
 };
 
-const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
+// Tailwind 4 sends its complete class catalogue in one bounded completion response.
+const RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 type NotificationHandler = Arc<dyn Fn(&Value) + Send + Sync>;
 struct Pending {
@@ -24,6 +25,8 @@ struct Pending {
 }
 
 pub(super) struct Session {
+    pub(super) vue_typescript: Mutex<Option<Arc<Session>>>,
+    pub(super) mirrored_documents: AsyncMutex<BTreeMap<String, i32>>,
     pub server: LanguageServerConfig,
     pub workspace: Workspace,
     input: AsyncMutex<tokio::process::ChildStdin>,
@@ -33,12 +36,16 @@ pub(super) struct Session {
     next_id: AtomicU64,
     pending: Mutex<BTreeMap<u64, Pending>>,
     pub(super) capabilities: Mutex<Value>,
+    static_capabilities: Mutex<Value>,
+    registrations: Mutex<BTreeMap<String, Value>>,
     opened: AsyncMutex<HashSet<String>>,
     capability_updates: tokio::sync::Notify,
     notifier: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     rust_source: Option<String>,
     pub(super) notifications: Mutex<Option<NotificationHandler>>,
     pub(super) live_settings: Mutex<Value>,
+    pub(super) live_initialization_options: Mutex<Value>,
+    pub(super) live_watch_patterns: Mutex<Vec<String>>,
 }
 
 impl Session {
@@ -84,6 +91,8 @@ impl Session {
             AppError::new("process", "The language server output is unavailable.")
         })?;
         let session = Arc::new(Self {
+            vue_typescript: Mutex::new(None),
+            mirrored_documents: AsyncMutex::new(BTreeMap::new()),
             server,
             workspace,
             input: AsyncMutex::new(input),
@@ -93,12 +102,16 @@ impl Session {
             next_id: AtomicU64::new(1),
             pending: Mutex::new(BTreeMap::new()),
             capabilities: Mutex::new(Value::Null),
+            static_capabilities: Mutex::new(Value::Null),
+            registrations: Mutex::new(BTreeMap::new()),
             opened: AsyncMutex::new(HashSet::new()),
             capability_updates: tokio::sync::Notify::new(),
             notifier: Mutex::new(None),
             rust_source,
             notifications: Mutex::new(None),
             live_settings: Mutex::new(json!({})),
+            live_initialization_options: Mutex::new(Value::Null),
+            live_watch_patterns: Mutex::new(vec![]),
         });
         let weak = Arc::downgrade(&session);
         tauri::async_runtime::spawn(async move {
@@ -108,6 +121,136 @@ impl Session {
     }
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::Acquire)
+    }
+    pub(super) fn set_capabilities(&self, mut value: Value) {
+        if self.server.id == "vue"
+            && let Some(ts) = self
+                .vue_typescript
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+        {
+            for (key, capability) in ts.capability_data().as_object().into_iter().flatten() {
+                // Only advertise capabilities that the dedicated adapter routes.
+                // Syntax, semantic tokens and formatting remain owned by Vue.
+                if (value[key].is_null() || value[key] == false)
+                    && matches!(
+                        key.as_str(),
+                        "completionProvider"
+                            | "hoverProvider"
+                            | "signatureHelpProvider"
+                            | "definitionProvider"
+                            | "referencesProvider"
+                            | "renameProvider"
+                            | "codeActionProvider"
+                            | "linkedEditingRangeProvider"
+                    )
+                {
+                    value[key] = capability.clone();
+                }
+            }
+        }
+        *self
+            .static_capabilities
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = value;
+        self.refresh_capabilities();
+    }
+    fn refresh_capabilities(&self) {
+        let base = self
+            .static_capabilities
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let registrations = self.registrations.lock().unwrap_or_else(|e| e.into_inner());
+        let effective = super::registrations::effective(&base, &registrations);
+        let mut current = self.capabilities.lock().unwrap_or_else(|e| e.into_inner());
+        // Initialization is returned to the opener directly. Publishing it as a
+        // dynamic update would leave a stale Notify permit before didOpen.
+        let changed = !current.is_null() && *current != effective;
+        *current = effective;
+        drop(current);
+        drop(registrations);
+        drop(base);
+        if changed {
+            self.notify_capabilities();
+        }
+    }
+    pub(super) fn notify(&self, method: &str, params: Value) {
+        if let Some(notify) = self
+            .notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            notify(&json!({"method":method,"params":params}));
+        }
+    }
+    pub(super) fn watches(&self, path: &std::path::Path, kind: u32) -> bool {
+        super::registrations::watches(
+            &self.registrations.lock().unwrap_or_else(|e| e.into_inner()),
+            &self
+                .live_watch_patterns
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            self.workspace.root(),
+            path,
+            kind,
+        )
+    }
+    pub(super) fn file_operation(
+        &self,
+        name: &str,
+        path: &std::path::Path,
+        directory: Option<bool>,
+    ) -> bool {
+        super::registrations::supports_file_operation(
+            &self
+                .static_capabilities
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            &self.registrations.lock().unwrap_or_else(|e| e.into_inner()),
+            name,
+            path,
+            directory,
+        )
+    }
+    pub(super) fn supports_document(
+        &self,
+        method: &str,
+        path: &std::path::Path,
+        language: &str,
+    ) -> bool {
+        let Some(provider) = super::registrations::provider(method) else {
+            return true;
+        };
+        let base = self
+            .static_capabilities
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if base[provider] != false
+            && !base[provider].is_null()
+            && super::registrations::document_matches(
+                &base[provider],
+                self.workspace.root(),
+                path,
+                language,
+            )
+        {
+            return true;
+        }
+        self.registrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|r| {
+                r["method"] == super::registrations::registration_method(method)
+                    && super::registrations::document_matches(
+                        &r["registerOptions"],
+                        self.workspace.root(),
+                        path,
+                        language,
+                    )
+            })
     }
     pub fn set_notifier(&self, notify: Option<Arc<dyn Fn() + Send + Sync>>) {
         *self
@@ -126,7 +269,7 @@ impl Session {
             notify();
         }
     }
-    fn configuration(&self) -> Value {
+    pub(super) fn configuration(&self) -> Value {
         if self.workspace.live {
             return self
                 .live_settings
@@ -152,6 +295,14 @@ impl Session {
             .as_ref()
         {
             notify(&json!({"method":"reviewbox/stopped","params":{}}));
+        }
+        if let Some(ts) = self
+            .vue_typescript
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            ts.stop();
         }
         self.group.terminate();
         let pending = std::mem::take(
@@ -179,6 +330,28 @@ impl Session {
         }
     }
     pub(super) async fn send(&self, message: &Value) -> AppResult<()> {
+        if matches!(
+            message["method"].as_str(),
+            Some(
+                "textDocument/didOpen"
+                    | "textDocument/didChange"
+                    | "textDocument/didClose"
+                    | "textDocument/didSave"
+                    | "workspace/didChangeWatchedFiles"
+            )
+        ) {
+            let ts = self
+                .vue_typescript
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(ts) = ts {
+                ts.send_raw(message).await?;
+            }
+        }
+        self.send_raw(message).await
+    }
+    pub(super) async fn send_raw(&self, message: &Value) -> AppResult<()> {
         if self.is_stopped() {
             return Err(AppError::new(
                 "language_session_closed",
@@ -211,6 +384,18 @@ impl Session {
             })?
     }
     pub(super) async fn rpc(
+        &self,
+        label: &str,
+        method: &str,
+        params: Value,
+        cancelled: Option<&AtomicBool>,
+    ) -> AppResult<Value> {
+        if self.server.id == "vue" && super::vue::routed_method(method) {
+            return self.vue_rpc(label, method, params, cancelled).await;
+        }
+        self.rpc_raw(label, method, params, cancelled).await
+    }
+    pub(super) async fn rpc_raw(
         &self,
         label: &str,
         method: &str,
@@ -272,6 +457,14 @@ impl Session {
         }
     }
     pub fn cancel(self: &Arc<Self>, label: &str) {
+        if let Some(ts) = self
+            .vue_typescript
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            ts.cancel(label);
+        }
         let mut pending = self
             .pending
             .lock()
@@ -298,7 +491,10 @@ impl Session {
             });
         }
     }
-    pub async fn initialize(&self) -> AppResult<()> {
+    pub async fn initialize(self: &Arc<Self>) -> AppResult<()> {
+        if self.server.id == "vue" {
+            self.initialize_vue().await?;
+        }
         if self.workspace.live {
             return self.initialize_live().await;
         }
@@ -311,17 +507,6 @@ impl Session {
         if self.server.id == "go" {
             options["semanticTokens"] = json!(true);
             options["env"] = json!({"GOPROXY":"off", "GOSUMDB":"off"});
-        }
-        if self.server.id == "vue" {
-            let tsdk = self.server.arguments.iter().find_map(|argument| {
-                std::path::Path::new(argument).ancestors().find_map(|parent| {
-                    let tsdk = parent.join("typescript/lib");
-                    (parent.file_name().is_some_and(|name| name == "node_modules")
-                        && tsdk.join("typescript.js").is_file()).then_some(tsdk)
-                })
-            }).ok_or_else(|| AppError::new("missing_language_prerequisite", "Vue requires its private TypeScript SDK. Reinstall the Vue language server."))?;
-            options["typescript"] = json!({"tsdk": tsdk, "disableAutoImportCache": true});
-            options["vue"] = json!({"hybridMode": false});
         }
         if self.server.id == "kotlin" {
             // The empty build-tool selector is the upstream "none" mode. In
@@ -351,10 +536,7 @@ impl Session {
                 "The language server did not negotiate UTF-16 positions.",
             ));
         }
-        *self
-            .capabilities
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = result["capabilities"].clone();
+        self.set_capabilities(result["capabilities"].clone());
         self.send(&json!({"jsonrpc":"2.0","method":"initialized","params":{}}))
             .await?;
         self.send(&json!({"jsonrpc":"2.0","method":"workspace/didChangeConfiguration","params":{"settings":self.configuration()}})).await
@@ -620,6 +802,10 @@ async fn read_messages(weak: Weak<Session>, output: tokio::process::ChildStdout)
             return;
         }
         if let Some(method) = message["method"].as_str() {
+            if method == "tsserver/request" && session.server.id == "vue" {
+                session.bridge_vue(&message["params"]);
+                continue;
+            }
             if message.get("id").is_none() {
                 if let Some(notify) = session
                     .notifications
@@ -639,6 +825,16 @@ async fn read_messages(weak: Weak<Session>, output: tokio::process::ChildStdout)
                         .into_iter()
                         .flatten()
                         .map(|item| {
+                            if session.workspace.live
+                                && item["scopeUri"].as_str().is_some_and(|scope| {
+                                    url::Url::parse(scope)
+                                        .ok()
+                                        .and_then(|uri| uri.to_file_path().ok())
+                                        .is_none_or(|p| !p.starts_with(session.workspace.root()))
+                                })
+                            {
+                                return Value::Null;
+                            }
                             item["section"]
                                 .as_str()
                                 .filter(|section| !section.is_empty())
@@ -653,36 +849,67 @@ async fn read_messages(weak: Weak<Session>, output: tokio::process::ChildStdout)
                     json!({"result":values})
                 }
                 "workspace/applyEdit" => {
-                    json!({"result":{"applied":false,"failureReason":"ReviewBox reads immutable captured sources."}})
+                    json!({"result":{"applied":false,"failureReason":if session.workspace.live {"Request a code action or refactoring preview in Code Editor."} else {"ReviewBox reads immutable captured sources."}}})
                 }
                 "workspace/workspaceFolders" => {
-                    json!({"result":[{"uri":url::Url::from_directory_path(session.workspace.root()).ok(),"name":"Captured sources"}]})
+                    json!({"result":[{"uri":url::Url::from_directory_path(session.workspace.root()).ok(),"name":if session.workspace.live {"Code Editor"} else {"Captured sources"}}]})
                 }
                 "window/workDoneProgress/create" => json!({"result":null}),
                 "workspace/semanticTokens/refresh" => {
                     session.notify_capabilities();
+                    session.notify("workspace/semanticTokens/refresh", json!({}));
+                    json!({"result":null})
+                }
+                "workspace/diagnostic/refresh" if session.workspace.live => {
+                    session.notify("workspace/diagnostic/refresh", json!({}));
                     json!({"result":null})
                 }
                 "client/registerCapability" => {
-                    let mut caps = session
-                        .capabilities
+                    let incoming = message["params"]["registrations"].as_array();
+                    if incoming.is_none_or(|items| {
+                        items.len() > 256
+                            || items.iter().any(|item| {
+                                item["id"]
+                                    .as_str()
+                                    .is_none_or(|s| s.is_empty() || s.len() > 256)
+                                    || item["method"]
+                                        .as_str()
+                                        .is_none_or(|m| !super::registrations::supported(m))
+                            })
+                    }) {
+                        json!({"error":{"code":-32602,"message":"Unsupported language registration."}})
+                    } else {
+                        let mut registrations = session
+                            .registrations
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        for item in incoming.into_iter().flatten() {
+                            registrations.insert(
+                                item["id"].as_str().unwrap_or_default().to_owned(),
+                                item.clone(),
+                            );
+                        }
+                        drop(registrations);
+                        session.refresh_capabilities();
+                        json!({"result":null})
+                    }
+                }
+                "client/unregisterCapability" => {
+                    let mut registrations = session
+                        .registrations
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    let previous = caps.clone();
-                    for item in message["params"]["registrations"]
+                        .unwrap_or_else(|e| e.into_inner());
+                    for item in message["params"]["unregisterations"]
                         .as_array()
                         .into_iter()
                         .flatten()
                     {
-                        if item["method"] == "textDocument/semanticTokens" {
-                            caps["semanticTokensProvider"] = item["registerOptions"].clone();
+                        if let Some(id) = item["id"].as_str() {
+                            registrations.remove(id);
                         }
                     }
-                    let changed = previous != *caps;
-                    drop(caps);
-                    if changed {
-                        session.notify_capabilities();
-                    }
+                    drop(registrations);
+                    session.refresh_capabilities();
                     json!({"result":null})
                 }
                 _ => json!({"error":{"code":-32601,"message":"Client method is not supported."}}),

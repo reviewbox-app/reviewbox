@@ -17,6 +17,7 @@ import {
   updateEditor,
   getEditor,
   bufferLanguage,
+  bufferLanguageDecision,
   fileAssociation,
   type EditorBuffer,
 } from "@/features/code-editor/stores/editor.store"
@@ -30,6 +31,19 @@ import {
 } from "../services/liveMonaco"
 import { useLanguageRegistry } from "../services/languageRegistry.service"
 import { LanguageSetupDialog } from "./LanguageSetupDialog"
+import { EditorProjectSettings } from "./EditorProjectSettings"
+import { useEditorLanguageDetection } from "../hooks/useEditorLanguageDetection"
+
+const detectionLabels = {
+  manual: "Selected for this file",
+  association: "Local file association",
+  filename: "Detected from filename",
+  extension: "Detected from extension",
+  firstLine: "Detected from first line",
+  project: "Detected from nearby project sources",
+  content: "Detected locally from content",
+  plaintext: "No confident language detected",
+}
 
 export function EditorLanguageStatus({
   repositoryId,
@@ -38,9 +52,11 @@ export function EditorLanguageStatus({
   repositoryId: string
   buffer: EditorBuffer
 }) {
+  useEditorLanguageDetection(repositoryId, buffer)
   const state =
     useLiveLanguages((s) => s.status[buffer.id]) ?? "Syntax highlighting"
-  useLanguageRegistry((s) => s.registry)
+  const registry = useLanguageRegistry((s) => s.registry)
+  const saveNotice = useLiveLanguages((s) => s.saveNotices[buffer.id])
   const capabilities = useLiveLanguages((s) => s.capabilities[buffer.id])
   const [servers, setServers] = useState<LanguageServerCatalogue["entries"]>([])
   const [setup, setSetup] = useState(false)
@@ -51,6 +67,11 @@ export function EditorLanguageStatus({
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<L.SymbolInformation[]>([])
   const language = bufferLanguage(repositoryId, buffer)
+  const detection = bufferLanguageDecision(repositoryId, buffer)
+  const candidates =
+    buffer.detectedLanguage?.path === buffer.path
+      ? buffer.detectedLanguage.candidates
+      : []
   const lspId = resolveLanguageId(language).lspId
   const selectedServer = getEditor(repositoryId)?.servers[lspId] ?? ""
   useEffect(() => {
@@ -60,14 +81,18 @@ export function EditorLanguageStatus({
       .then((catalogue) => {
         if (alive)
           setServers(
-            catalogue.entries.filter((e) => e.languages.includes(lspId))
+            catalogue.entries.filter(
+              (e) => e.id !== "tailwind" && e.languages.includes(lspId)
+            )
           )
       })
-      .catch((e) => setError(errorMessage(e)))
+      .catch((e) => {
+        if (alive) setError(errorMessage(e))
+      })
     return () => {
       alive = false
     }
-  }, [lspId, installId])
+  }, [lspId, installId, registry])
   useEffect(() => {
     if (!installId) return
     const timer = setInterval(() => {
@@ -138,25 +163,54 @@ export function EditorLanguageStatus({
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <select
           aria-label="File language"
+          title={detectionLabels[detection.source]}
           className="max-w-32 rounded-md bg-transparent"
           value={language}
           onChange={(e) => {
+            const value = e.target.value
+            // The detector inputs have not changed when automatic is already active.
+            if (value === "automatic" && !buffer.language) return
             updateBuffer(repositoryId, buffer.id, (b) => ({
               ...b,
-              language: e.target.value,
+              language: value === "automatic" ? undefined : value,
+              detectedLanguage: undefined,
             }))
             void restartLiveEditor(buffer.id).catch((e) =>
               setError(errorMessage(e))
             )
           }}
         >
+          <option value="automatic">Detect automatically</option>
           <option value="plaintext">Plain text</option>
-          {codeLanguages.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}
-            </option>
-          ))}
+          {candidates.length > 0 && (
+            <optgroup label="Suggested from content">
+              {candidates.map((candidate) => (
+                <option key={candidate.languageId} value={candidate.languageId}>
+                  {resolveLanguageId(candidate.languageId).name} (
+                  {Math.round(candidate.confidence * 100)}%)
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {codeLanguages
+            .filter(
+              (l) =>
+                !candidates.some((candidate) => candidate.languageId === l.id)
+            )
+            .map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
         </select>
+        {detection.source === "plaintext" && buffer.detectedLanguage?.error && (
+          <span
+            className="text-muted-foreground"
+            title={buffer.detectedLanguage.error}
+          >
+            Detection unavailable
+          </span>
+        )}
         <Button
           size="xs"
           variant="ghost"
@@ -199,9 +253,9 @@ export function EditorLanguageStatus({
         <span
           role="status"
           className="max-w-72 truncate"
-          title={error || installing || state}
+          title={error || installing || saveNotice || state}
         >
-          {error || installing || state}
+          {error || installing || saveNotice || state}
         </span>
         {!buffer.readOnly &&
           state !== "Language support active" &&
@@ -255,6 +309,14 @@ export function EditorLanguageStatus({
         >
           Settings
         </Button>
+        <EditorProjectSettings
+          repositoryId={repositoryId}
+          buffer={buffer}
+          preferredServerId={selectedServer || undefined}
+          serverId={
+            servers.find((s) => s.status === "ready")?.id || servers[0]?.id
+          }
+        />
       </div>
       {setup && (
         <LanguageSetupDialog

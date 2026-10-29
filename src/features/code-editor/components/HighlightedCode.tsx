@@ -1,10 +1,21 @@
 "use client"
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react"
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react"
 import { useTheme } from "next-themes"
 import type { ThemedToken } from "shiki"
 import { useCodeTheme } from "@/lib/code/codeAppearance"
-import { highlightCode } from "@/lib/code/highlighter"
+import {
+  highlightCode,
+  subscribeShaderSyntax,
+  getShaderSyntax,
+} from "@/lib/code/highlighter"
 import { resolveLanguageId } from "@/lib/code/languages"
 import { tokenizePseudocode } from "@/lib/code/pseudocode"
 import { pseudoPalette } from "@/lib/code/themes"
@@ -61,7 +72,12 @@ export function HighlightedCode({
   const { resolvedTheme } = useTheme()
   const theme = useCodeTheme(resolvedTheme !== "light")
   const id = resolveLanguageId(language).id
-  const key = `${theme}\0${id}\0${source}`
+  const shaderSyntax = useSyncExternalStore(
+    subscribeShaderSyntax,
+    getShaderSyntax,
+    () => true
+  )
+  const key = `${theme}\0${id}\0${shaderSyntax}\0${source}`
   const [highlighted, setHighlighted] = useState<{
     key: string
     lines: ThemedToken[][]

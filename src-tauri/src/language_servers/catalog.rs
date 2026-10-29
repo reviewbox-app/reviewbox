@@ -204,6 +204,8 @@ pub(crate) fn resolve_language(
     let candidate = candidates.iter().find(|server| {
         if let Some(id) = selected {
             server.id == id
+        } else if matches!(server.id.as_str(), "tailwind" | "prettier") {
+            false
         } else if let Some(id) = language {
             server.languages.iter().any(|l| l == id)
         } else {
@@ -216,7 +218,8 @@ pub(crate) fn resolve_language(
     if let Some(server) = candidate
         && let Some(receipt) = installed(storage, &server.id)?
     {
-        if !receipt.enabled {
+        crate::editor_extensions::require_engine(storage, &server.id)?;
+        if crate::editor_extensions::server_feature(&server.id).is_none() && !receipt.enabled {
             return Err(AppError::new(
                 "language_server_disabled",
                 format!("{} is disabled in Settings > Languages.", server.name),
@@ -293,6 +296,11 @@ pub(crate) fn catalogue(
                 _ => native.is_some(),
             };
         let receipt = installed(storage, &server.id)?;
+        let enabled = if let Some(feature) = crate::editor_extensions::server_feature(&server.id) {
+            crate::editor_extensions::enabled(storage, feature)?
+        } else {
+            receipt.as_ref().is_some_and(|value| value.enabled)
+        };
         let operation = operations
             .iter()
             .rev()
@@ -306,7 +314,7 @@ pub(crate) fn catalogue(
             "setup-required"
         } else if active.is_some() {
             "installing"
-        } else if receipt.as_ref().is_some_and(|value| !value.enabled) {
+        } else if !enabled && receipt.is_some() {
             "disabled"
         } else if receipt.is_some() {
             "installed"
@@ -338,7 +346,7 @@ pub(crate) fn catalogue(
             },
             installed_version: receipt.as_ref().map(|value| value.version.clone()),
             status: status.into(),
-            enabled: receipt.as_ref().is_some_and(|value| value.enabled),
+            enabled,
             supported,
             setup_required: server.setup_required,
             source_url: server.source_url,
@@ -392,6 +400,7 @@ pub fn cancel_language_server_install(
 }
 #[tauri::command]
 pub async fn set_language_server_enabled(
+    app: tauri::AppHandle,
     server_id: String,
     enabled: bool,
     storage: tauri::State<'_, Storage>,
@@ -401,7 +410,25 @@ pub async fn set_language_server_enabled(
 ) -> AppResult<()> {
     sessions.stop_server(&server_id);
     live.stop_server(&server_id);
-    installer.set_enabled(&storage, &server_id, enabled)
+    if let Some(id) = crate::editor_extensions::server_feature(&server_id) {
+        let value = crate::editor_extensions::update(&storage, id, enabled)?;
+        if !enabled {
+            for operation in installer.operations().into_iter().filter(|o| {
+                o.server_id == server_id && matches!(o.status.as_str(), "queued" | "installing")
+            }) {
+                let _ = installer.cancel(&operation.id);
+            }
+        }
+        if id == EditorExtensionId::Vue {
+            live.invalidate_server("typescript");
+        }
+        use tauri::Emitter;
+        let _ = app.emit("reviewbox:extensions-changed", &value);
+        let _ = app.emit("reviewbox:language-servers-changed", ());
+    } else {
+        installer.set_enabled(&storage, &server_id, enabled)?;
+    }
+    Ok(())
 }
 #[tauri::command]
 pub async fn uninstall_language_server(

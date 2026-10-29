@@ -10,7 +10,21 @@ import type {
   LocalFileSelection,
 } from "@/lib/desktop/contracts.generated"
 
+/** Shared with commit entry points, which outlive the overview's controls. */
+export const pendingGitRefreshes = new Map<string, Promise<void>>()
+export async function waitForGitRefresh(repositoryId: string) {
+  await pendingGitRefreshes.get(repositoryId)
+}
+
 export const sourceControlCommands = {
+  recoverLock: (repositoryId: string) =>
+    call<void>("recover_git_lock", { repositoryId }),
+  clearPlans: (repositoryId: string) =>
+    call<void>("clear_git_plans", { repositoryId }),
+  branches: (repositoryId: string) =>
+    call<string[]>("list_git_branches", { repositoryId }),
+  switchBranch: (repositoryId: string, branch: string) =>
+    call<void>("switch_git_branch", { repositoryId, branch }),
   state: (repositoryId: string) =>
     call<LocalGitState>("local_git_state", { repositoryId }),
   diff: (repositoryId: string, path: string, layer: string, version: string) =>

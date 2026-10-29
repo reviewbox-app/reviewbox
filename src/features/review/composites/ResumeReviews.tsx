@@ -26,6 +26,8 @@ import type {
   ReviewAction,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage, reviewCommands } from "@/lib/desktop/review.commands"
+import { isFinalizationAction } from "../helpers/reviewFinalization.helpers"
+import { reviewFinalizationCommands } from "../services/reviewFinalization.commands"
 import { cn } from "@/lib/utils"
 import {
   Add01Icon,
@@ -45,16 +47,14 @@ import {
   publicationLabel,
   reviewIsComplete,
 } from "../helpers/publication.helpers"
-import { shortTime } from "../helpers/review.helpers"
+import { readingStep, shortTime } from "../helpers/review.helpers"
 import { readerCommands } from "../services/reader.commands"
 
 function stepOf(review: Review, stepId?: string | null) {
-  if (!stepId) return null
-  for (const topic of review.topics) {
-    const index = topic.steps.findIndex((step) => step.id === stepId)
-    if (index >= 0) return { topic, step: topic.steps[index], index }
-  }
-  return null
+  return readingStep({
+    topics: review.topics,
+    position: { ...review.position, context: "guided", stepId: stepId ?? null },
+  })
 }
 
 function ListRow({
@@ -153,6 +153,17 @@ export function ResumeReviews({
     loadGeneration.current++
     setMutating(true)
     try {
+      if (isFinalizationAction(review, action)) {
+        const started = reviewFinalizationCommands.start(
+          review.repositoryId,
+          review.id,
+          review.revision,
+          action
+        )
+        onOpen(review.id)
+        await started
+        return
+      }
       const next = await reviewCommands.update(
         review.id,
         review.revision,
@@ -359,9 +370,8 @@ export function ResumeReviews({
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   {position ? (
                     <>
-                      <InlineMarkdown>{position.topic.title}</InlineMarkdown> ·
-                      step {position.index + 1} of {position.topic.steps.length}{" "}
-                      · read {shortTime(review.updatedAt)}
+                      step {position.index + 1} of {position.total} · read{" "}
+                      {shortTime(review.updatedAt)}
                     </>
                   ) : (
                     `Last opened ${shortTime(review.updatedAt)}`

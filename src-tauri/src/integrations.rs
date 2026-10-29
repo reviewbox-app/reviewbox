@@ -15,6 +15,14 @@ pub(crate) fn dispatch(storage: &Storage, request: Value) -> AppResult<Value> {
     let settings = storage.project_settings(&repository.id)?;
     let method = request["method"].as_str().unwrap_or_default();
     if method == "init" {
+        let report = crate::project_skills::bootstrap(
+            storage,
+            &repository,
+            &crate::project_skills::cli_resources()?,
+        )?;
+        if let Some(error) = report.error {
+            return Err(error);
+        }
         return Ok(serde_json::to_value(repository)?);
     }
     if method == "create" {
@@ -362,13 +370,26 @@ pub fn run_cli() -> bool {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = args.first().filter(|c| {
         [
-            "init", "create", "context", "propose", "enrich", "annotate", "tour", "mcp",
+            "init",
+            "create",
+            "context",
+            "propose",
+            "enrich",
+            "annotate",
+            "tour",
+            "mcp",
+            "preparation-mcp",
         ]
         .contains(&c.as_str())
     }) else {
         return false;
     };
     let result = (|| -> AppResult<()> {
+        if command == "preparation-mcp" {
+            return crate::preparation::bridge::proxy(
+                args.get(1).map(String::as_str).unwrap_or_default(),
+            );
+        }
         if command == "mcp" {
             return mcp();
         }

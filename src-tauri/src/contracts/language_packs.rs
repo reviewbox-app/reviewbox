@@ -54,6 +54,16 @@ pub struct LanguagePackServer {
     #[serde(default)]
     #[ts(type = "Record<string, unknown>")]
     pub settings: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub initialization_options: Option<serde_json::Value>,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum LanguageRootStrategy {
+    #[default]
+    Nearest,
+    Workspace,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -65,6 +75,12 @@ pub struct LanguagePack {
     pub languages: Vec<LanguageDefinition>,
     #[serde(default)]
     pub root_markers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub root_strategy: Option<LanguageRootStrategy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub watched_files: Option<Vec<String>>,
     pub server: Option<LanguagePackServer>,
     #[serde(default)]
     #[ts(type = "Record<string, unknown>[]")]

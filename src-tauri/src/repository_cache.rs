@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -16,10 +16,14 @@ use std::{
 mod events;
 
 type Notifier = Arc<dyn Fn(RepositoryReadChange) + Send + Sync>;
+type NativeNotifier = Arc<dyn Fn(&Path, &RepositoryReadChange) + Send + Sync>;
 
 #[derive(Default)]
 pub(crate) struct RepositoryCache {
     notifier: Mutex<Option<Notifier>>,
+    native_notifier: Mutex<Option<NativeNotifier>>,
+    // Explicit consumers pin their watcher independently of disposable read caches.
+    leases: Mutex<BTreeMap<(PathBuf, String), Arc<Entry>>>,
     entries: Mutex<BTreeMap<PathBuf, Arc<Entry>>>,
     requests: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
 }
@@ -31,6 +35,14 @@ pub(crate) struct Entry {
     pub data: Mutex<Data>,
     changes: Arc<Mutex<Changes>>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    publish: Notifier,
+    generation: String,
+    sequence: Arc<AtomicU64>,
+    healthy: Arc<AtomicBool>,
+    starting: AtomicBool,
+    watch_epoch: Arc<AtomicU64>,
+    root: PathBuf,
+    saved: Arc<Mutex<BTreeMap<String, String>>>,
 }
 pub(crate) struct Data {
     pub fingerprint: String,
@@ -82,6 +94,52 @@ impl RepositoryCache {
     pub fn set_notifier(&self, notify: impl Fn(RepositoryReadChange) + Send + Sync + 'static) {
         *self.notifier.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(notify));
     }
+    pub fn set_native_notifier(
+        &self,
+        notify: impl Fn(&Path, &RepositoryReadChange) + Send + Sync + 'static,
+    ) {
+        *self
+            .native_notifier
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(notify));
+    }
+    pub fn lease(
+        &self,
+        storage: &Storage,
+        root: &Path,
+        owner: &str,
+    ) -> AppResult<EditorWatchStatus> {
+        if owner.is_empty() || owner.len() > 128 {
+            return Err(AppError::new("watch_owner", "Invalid watcher owner."));
+        }
+        let entry = self.entry(storage, root)?;
+        let mut leases = self.leases.lock().unwrap_or_else(|e| e.into_inner());
+        leases.insert((root.into(), owner.into()), entry.clone());
+        ensure_watch(&entry);
+        Ok(entry.status())
+    }
+    pub fn release_lease(&self, root: &Path, owner: &str) -> EditorWatchStatus {
+        let mut leases = self.leases.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = leases.remove(&(root.into(), owner.into())) {
+            if !leases.keys().any(|(checkout, _)| checkout == root) {
+                entry.stop_watch();
+            }
+            return entry.status();
+        }
+        EditorWatchStatus {
+            healthy: false,
+            generation: String::new(),
+            sequence: 0,
+        }
+    }
+    pub fn watch_status(&self, storage: &Storage, root: &Path) -> AppResult<EditorWatchStatus> {
+        let entry = self.entry(storage, root)?;
+        let leases = self.leases.lock().unwrap_or_else(|e| e.into_inner());
+        if leases.keys().any(|(checkout, _)| checkout == root) {
+            ensure_watch(&entry);
+        }
+        Ok(entry.status())
+    }
     pub fn begin(&self, id: &str) -> AppResult<Request> {
         if id.is_empty() || id.len() > 128 {
             return Err(AppError::new("request", "Invalid read request."));
@@ -125,42 +183,50 @@ impl RepositoryCache {
         }
     }
     pub fn notify_editor_mutation(&self, root: &Path, mutation: &EditorMutation) {
-        // Invalidate native cached reads conservatively, but target UI consumers.
-        if let Some(entry) = self
-            .entries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(root)
-        {
-            entry
-                .changes
+        if let EditorMutation::Save { path, .. } = mutation
+            && let Some(entry) = self
+                .entries
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .uncertain = true;
-        }
-        let (paths, tree) = match mutation {
-            EditorMutation::Save { path, .. } => (vec![path.clone()], false),
-            EditorMutation::Create { path, .. } | EditorMutation::Trash { path, .. } => {
-                (vec![path.clone()], true)
+                .get(root)
+        {
+            let mut saved = entry.saved.lock().unwrap_or_else(|e| e.into_inner());
+            if saved.len() > 4096 {
+                saved.clear();
             }
+            saved.insert(path.clone(), stamp(&root.join(path)));
+        }
+        let (paths, kinds, tree) = match mutation {
+            EditorMutation::Save { path, .. } => (vec![path.clone()], vec!["changed"], false),
+            EditorMutation::Create { path, .. } => (vec![path.clone()], vec!["created"], true),
+            EditorMutation::Trash { path, .. } => (vec![path.clone()], vec!["deleted"], true),
             EditorMutation::Rename {
                 path, destination, ..
-            } => (vec![path.clone(), destination.clone()], true),
+            } => (
+                vec![path.clone(), destination.clone()],
+                vec!["deleted", "created"],
+                true,
+            ),
         };
-        if let Some(notify) = self
-            .notifier
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
-            notify(RepositoryReadChange {
+        let changes = paths
+            .iter()
+            .zip(kinds)
+            .map(|(path, kind)| RepositoryPathChange {
+                path: path.clone(),
+                kind: kind.into(),
+            })
+            .collect();
+        self.invalidate_with(
+            root,
+            RepositoryReadChange {
                 paths,
+                changes: Some(changes),
                 tree,
                 git: false,
                 full: false,
                 ..events::full(root)
-            });
-        }
+            },
+        );
     }
     pub fn invalidate(&self, root: &Path) {
         self.invalidate_with(root, events::full(root));
@@ -176,15 +242,13 @@ impl RepositoryCache {
                 .changes
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .uncertain = true;
-            if let Some(notify) = self
-                .notifier
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-            {
-                notify(change);
-            }
+                .uncertain |= change.full
+                || change.git
+                || change
+                    .paths
+                    .iter()
+                    .any(|path| !crate::editor::metadata_path(path));
+            (entry.publish)(change);
         }
     }
     pub fn entry(&self, storage: &Storage, root: &Path) -> AppResult<Arc<Entry>> {
@@ -215,30 +279,131 @@ impl RepositoryCache {
                 paths: BTreeSet::new(),
                 uncertain: false,
             }));
-            let entry = Arc::new(Entry {
-                data: Mutex::new(Data::default()),
-                changes: changes.clone(),
-                watcher: Mutex::new(None),
-            });
-            // FSEvents registration can take hundreds of milliseconds. It must
-            // not hold up the first inventory. The metadata fallback remains
-            // conservative until the watcher is ready; a dropped entry cancels
-            // publication and the initializer then drops its local watcher.
-            let target = Arc::downgrade(&entry);
-            let checkout = root.to_path_buf();
-            let notify = self
+            let generation = uuid::Uuid::new_v4().to_string();
+            let sequence = Arc::new(AtomicU64::new(0));
+            let ui = self
                 .notifier
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
-            let _ = std::thread::Builder::new()
-                .name("repository-watch".into())
-                .spawn(move || {
-                    let watcher = watch(&checkout, changes, notify);
-                    if let Some(entry) = target.upgrade() {
-                        *entry.watcher.lock().unwrap_or_else(|e| e.into_inner()) = watcher;
+            let native = self
+                .native_notifier
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let checkout = root.to_path_buf();
+            let event_generation = generation.clone();
+            let event_sequence = sequence.clone();
+            let watch_epoch = Arc::new(AtomicU64::new(0));
+            let event_epoch = watch_epoch.clone();
+            let saved = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
+            let saved_for_batch = saved.clone();
+            let structural = Arc::new(Mutex::new(BTreeSet::<String>::new()));
+            let structural_for_batch = structural.clone();
+            let recent = Mutex::new(BTreeMap::<String, (String, Instant)>::new());
+            let batched = events::batched(Arc::new(move |mut change| {
+                let mut structural = structural_for_batch
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let changed_structure = change.paths.iter().any(|path| structural.contains(path));
+                for path in &change.paths {
+                    structural.remove(path);
+                }
+                if change.full {
+                    structural.clear();
+                }
+                drop(structural);
+                if change.tree
+                    && !change.full
+                    && !change.git
+                    && !changed_structure
+                    && !change.paths.is_empty()
+                {
+                    let saved = saved_for_batch.lock().unwrap_or_else(|e| e.into_inner());
+                    if change.paths.iter().all(|path| {
+                        !Path::new(path)
+                            .file_name()
+                            .is_some_and(|name| name == ".gitignore" || name == ".ignore")
+                            && saved
+                                .get(path)
+                                .is_some_and(|revision| revision == &stamp(&checkout.join(path)))
+                    }) {
+                        change.tree = false;
                     }
-                });
+                }
+                if !change.full {
+                    let mut recent = recent.lock().unwrap_or_else(|e| e.into_inner());
+                    recent.retain(|_, (_, seen)| seen.elapsed() < Duration::from_secs(2));
+                    if recent.len() > 4096 {
+                        recent.clear();
+                    }
+                    let had_paths = !change.paths.is_empty();
+                    change.paths.retain(|path| {
+                        let revision = stamp(&checkout.join(path));
+                        if recent
+                            .get(path)
+                            .is_some_and(|(previous, _)| previous == &revision)
+                        {
+                            return false;
+                        }
+                        recent.insert(path.clone(), (revision, Instant::now()));
+                        true
+                    });
+                    if let Some(changes) = &mut change.changes {
+                        changes.retain(|item| change.paths.contains(&item.path));
+                    }
+                    if had_paths && change.paths.is_empty() && !change.git {
+                        return;
+                    }
+                }
+                change.generation = Some(format!(
+                    "{}:{}",
+                    event_generation,
+                    event_epoch.load(Ordering::Acquire)
+                ));
+                change.sequence = Some(event_sequence.fetch_add(1, Ordering::AcqRel) + 1);
+                if let Some(notify) = &native {
+                    let mut source_change = change.clone();
+                    source_change
+                        .paths
+                        .retain(|path| !crate::editor::metadata_path(path));
+                    if let Some(changes) = &mut source_change.changes {
+                        changes.retain(|item| !crate::editor::metadata_path(&item.path));
+                    }
+                    if source_change.full || source_change.git || !source_change.paths.is_empty() {
+                        notify(&checkout, &source_change);
+                    }
+                }
+                if let Some(notify) = &ui {
+                    notify(change);
+                }
+            }));
+            let publish: Notifier = Arc::new(move |change| {
+                let mut structural = structural.lock().unwrap_or_else(|e| e.into_inner());
+                if structural.len() > 4096 {
+                    structural.clear();
+                }
+                for item in change.changes.iter().flatten() {
+                    if item.kind == "created" || item.kind == "deleted" {
+                        structural.insert(item.path.clone());
+                    }
+                }
+                drop(structural);
+                batched(change);
+            });
+            let entry = Arc::new(Entry {
+                data: Mutex::new(Data::default()),
+                changes,
+                watcher: Mutex::new(None),
+                publish,
+                generation,
+                sequence,
+                healthy: Arc::new(AtomicBool::new(false)),
+                starting: AtomicBool::new(false),
+                watch_epoch,
+                root: root.into(),
+                saved,
+            });
             entries.insert(root.into(), entry.clone());
             entry
         };
@@ -251,15 +416,54 @@ impl RepositoryCache {
         Ok(entry)
     }
 }
+fn ensure_watch(entry: &Arc<Entry>) {
+    if !entry.healthy.load(Ordering::Acquire) && !entry.starting.swap(true, Ordering::AcqRel) {
+        start_watch(entry, &entry.root);
+    }
+}
+fn start_watch(entry: &Arc<Entry>, root: &Path) {
+    // Registration must not block readers. A stopped/reacquired lease invalidates
+    // any registration still in flight, so it cannot resurrect an abandoned watcher.
+    let epoch = entry.watch_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+    let target = Arc::downgrade(entry);
+    let checkout = root.to_path_buf();
+    let flags = entry.changes.clone();
+    let publish = entry.publish.clone();
+    let healthy = entry.healthy.clone();
+    let fallback = Arc::downgrade(entry);
+    if std::thread::Builder::new()
+        .name("repository-watch".into())
+        .spawn(move || {
+            let watcher = watch(&checkout, flags, Some(publish), healthy.clone());
+            if let Some(entry) = target.upgrade() {
+                let mut slot = entry.watcher.lock().unwrap_or_else(|e| e.into_inner());
+                if entry.watch_epoch.load(Ordering::Acquire) == epoch {
+                    healthy.store(watcher.is_some(), Ordering::Release);
+                    *slot = watcher;
+                    entry.starting.store(false, Ordering::Release);
+                }
+            }
+        })
+        .is_err()
+        && let Some(entry) = fallback.upgrade()
+        && entry.watch_epoch.load(Ordering::Acquire) == epoch
+    {
+        entry.starting.store(false, Ordering::Release);
+    }
+}
+
 fn watch(
     root: &Path,
     changes: Arc<Mutex<Changes>>,
     notify: Option<Notifier>,
+    healthy: Arc<AtomicBool>,
 ) -> Option<notify::RecommendedWatcher> {
     let flags = changes;
-    let notify = notify.map(events::batched);
     let checkout = root.to_path_buf();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.is_err() {
+            healthy.store(false, Ordering::Release);
+        }
         let Some(change) = events::classify(&checkout, event) else {
             return;
         };
@@ -267,6 +471,9 @@ fn watch(
             let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
             flags.uncertain |= change.full;
             for path in &change.paths {
+                if crate::editor::metadata_path(path) {
+                    continue;
+                }
                 if flags.paths.len() < 10000 {
                     flags.paths.insert(checkout.join(path));
                 } else {
@@ -307,6 +514,31 @@ fn watch(
 }
 
 impl Entry {
+    fn stop_watch(&self) {
+        let stopped = {
+            let mut watcher = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
+            self.watch_epoch.fetch_add(1, Ordering::AcqRel);
+            self.healthy.store(false, Ordering::Release);
+            self.starting.store(false, Ordering::Release);
+            watcher.take()
+        };
+        self.changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .uncertain = true;
+        drop(stopped);
+    }
+    fn status(&self) -> EditorWatchStatus {
+        EditorWatchStatus {
+            healthy: self.healthy.load(Ordering::Acquire),
+            generation: format!(
+                "{}:{}",
+                self.generation,
+                self.watch_epoch.load(Ordering::Acquire)
+            ),
+            sequence: self.sequence.load(Ordering::Acquire),
+        }
+    }
     /// Every request does a cheap inventory/stat pass as a fallback for missed
     /// notifications. No file contents or blob objects are read here.
     pub fn refresh(&self, root: &Path, data: &mut Data) -> AppResult<bool> {
@@ -422,6 +654,7 @@ impl RepositoryCache {
     pub fn git_mutation(self: &Arc<Self>, root: &Path) -> Mutation {
         let change = RepositoryReadChange {
             full: false,
+            tree: false,
             ..events::full(root)
         };
         self.invalidate_with(root, change);
@@ -439,6 +672,7 @@ impl Drop for Mutation {
                 &self.root,
                 RepositoryReadChange {
                     full: false,
+                    tree: false,
                     ..events::full(&self.root)
                 },
             );
@@ -450,6 +684,10 @@ impl Drop for Mutation {
 
 impl RepositoryCache {
     pub fn shutdown(&self, storage: &Storage) {
+        self.leases
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         for flag in self
             .requests
             .lock()
@@ -460,6 +698,7 @@ impl RepositoryCache {
         }
         let entries = std::mem::take(&mut *self.entries.lock().unwrap_or_else(|e| e.into_inner()));
         for entry in entries.values() {
+            entry.stop_watch();
             if let Ok(mut data) = entry.data.try_lock() {
                 let mut contexts = std::mem::take(&mut data.retired_contexts);
                 contexts.extend(data.context.take());

@@ -1,0 +1,18 @@
+.monaco-editor .reviewbox-change-added,
+.monaco-editor .reviewbox-change-modified {
+  width: 3px !important;
+  margin-left: 3px;
+  background: var(--diff-added-fg);
+}
+.monaco-editor .reviewbox-change-modified {
+  background: var(--git-modified);
+}
+.monaco-editor .reviewbox-change-deleted::after {
+  content: "";
+  position: absolute;
+  bottom: -3px;
+  left: 1px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--diff-removed-fg);
+}

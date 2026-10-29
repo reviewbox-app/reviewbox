@@ -21,7 +21,7 @@ const openSettings = async () => {
     "settings window"
   )
   await ui.request(ui.route("/window"), { handle: "settings" })
-  await ui.has("Code colors")
+  await ui.has("Code theme")
   await enableFrames()
 }
 const closeSettings = async () => {

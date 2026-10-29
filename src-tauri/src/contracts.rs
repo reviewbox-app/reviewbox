@@ -22,17 +22,27 @@ mod language_setup;
 pub use language_setup::*;
 mod reader;
 pub use reader::*;
+mod rev_chat;
+pub use rev_chat::*;
+mod review_comments;
+pub use review_comments::*;
 mod notifications;
 mod preparation;
 pub use notifications::*;
 mod diagnostics;
 pub use diagnostics::*;
+mod project_skills;
+pub use project_skills::*;
+mod working_context;
+pub use working_context::*;
 mod provider_setup;
 mod publication;
+mod review_finalization;
 pub use creation::*;
 pub use preparation::*;
 pub use provider_setup::*;
 pub use publication::*;
+pub use review_finalization::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -514,6 +524,28 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 pub fn typescript() -> String {
     let cfg = ts_rs::Config::default();
     let declarations = [
+        ProjectSkillPreferences::decl(&cfg),
+        ProjectSkillImport::decl(&cfg),
+        WorkingContextStatus::decl(&cfg),
+        WorkingContextAssessment::decl(&cfg),
+        WorkingContextFile::decl(&cfg),
+        ReviewWorkingContext::decl(&cfg),
+        ReviewCommentRange::decl(&cfg),
+        RevChatContext::decl(&cfg),
+        RevChatRequest::decl(&cfg),
+        ReviewCommentAnchor::decl(&cfg),
+        CodeCommentAnchor::decl(&cfg),
+        DocumentCommentAnchor::decl(&cfg),
+        DocumentSelection::decl(&cfg),
+        DocumentTextRange::decl(&cfg),
+        LocalCommentSource::decl(&cfg),
+        ReviewCommentStatus::decl(&cfg),
+        ReviewComment::decl(&cfg),
+        ReviewCommentsDocument::decl(&cfg),
+        ReviewCommentMutation::decl(&cfg),
+        TerminalSession::decl(&cfg),
+        TerminalEvent::decl(&cfg),
+        TerminalLink::decl(&cfg),
         LanguageSetupRequest::decl(&cfg),
         LanguageSetupFile::decl(&cfg),
         LanguageSetupCommand::decl(&cfg),
@@ -525,17 +557,28 @@ pub fn typescript() -> String {
         LanguagePackInstallation::decl(&cfg),
         LanguagePackServer::decl(&cfg),
         LanguagePack::decl(&cfg),
+        LanguageRootStrategy::decl(&cfg),
         LanguageRegistry::decl(&cfg),
         LiveLanguageDocument::decl(&cfg),
+        LiveLanguageChange::decl(&cfg),
         LiveLanguageSession::decl(&cfg),
+        LiveLanguageProjectContext::decl(&cfg),
         LiveLanguageEvent::decl(&cfg),
+        LiveLanguageProjectSettings::decl(&cfg),
         RepositoryReadChange::decl(&cfg),
+        RepositoryPathChange::decl(&cfg),
         EditorEntry::decl(&cfg),
+        EditorWatchStatus::decl(&cfg),
         EditorSearchMatch::decl(&cfg),
         EditorSearchResult::decl(&cfg),
+        EditorSearchBatch::decl(&cfg),
+        EditorSearchBuffer::decl(&cfg),
         EditorFile::decl(&cfg),
         EditorDraft::decl(&cfg),
+        EditorSaveActions::decl(&cfg),
         EditorRecovery::decl(&cfg),
+        FileTreeNavigation::decl(&cfg),
+        CheckoutNavigation::decl(&cfg),
         EditorMutation::decl(&cfg),
         AppError::decl(&cfg),
         DiagnosticInput::decl(&cfg),
@@ -554,6 +597,11 @@ pub fn typescript() -> String {
         LocalFileDiff::decl(&cfg),
         GitCommitRequest::decl(&cfg),
         GitOperation::decl(&cfg),
+        FinalizationStatus::decl(&cfg),
+        FinalizationStepStatus::decl(&cfg),
+        ReviewFinalizationStep::decl(&cfg),
+        ReviewFinalization::decl(&cfg),
+        ReviewCommitOperation::decl(&cfg),
         ReviewMenuEvent::decl(&cfg),
         ProjectSettings::decl(&cfg),
         PreparationMode::decl(&cfg),
@@ -594,6 +642,9 @@ pub fn typescript() -> String {
         ReviewMode::decl(&cfg),
         ReadingContext::decl(&cfg),
         ReviewDocument::decl(&cfg),
+        ReviewWritingStyle::decl(&cfg),
+        ReviewWritingProfile::decl(&cfg),
+        SingleReviewDocument::decl(&cfg),
         LevelDocuments::decl(&cfg),
         DocumentDependencies::decl(&cfg),
         DocumentReference::decl(&cfg),
@@ -638,10 +689,10 @@ pub fn typescript() -> String {
         AgentRun::decl(&cfg),
         LanguageServerConfig::decl(&cfg),
         CodeTheme::decl(&cfg),
-        IconClone::decl(&cfg),
-        FileIconPreferences::decl(&cfg),
         AppearancePreferences::decl(&cfg),
-        EditorProfile::decl(&cfg),
+        EditorExtensionId::decl(&cfg),
+        EditorExtensionPreferences::decl(&cfg),
+        EditorPathSuggestion::decl(&cfg),
         LanguageSide::decl(&cfg),
         LanguageDocument::decl(&cfg),
         LanguageMethod::decl(&cfg),
@@ -879,6 +930,9 @@ pub struct TourImportReport {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reasoning_effort: Option<String>,
     pub provider: String,
     pub executable: String,
     pub model: Option<String>,
@@ -906,4 +960,41 @@ pub struct ProviderSettings {
 
 fn default_helper_model() -> String {
     "gpt-6-luna".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSession {
+    pub id: String,
+    pub repository_id: String,
+    pub shell: String,
+    pub cwd: String,
+    pub exited: bool,
+    pub exit_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TerminalEvent {
+    Data {
+        id: String,
+        sequence: u32,
+        bytes: Vec<u8>,
+    },
+    Exit {
+        id: String,
+        code: Option<u32>,
+    },
+    Error {
+        id: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalLink {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
 }

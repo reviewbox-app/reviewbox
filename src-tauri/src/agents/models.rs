@@ -215,30 +215,69 @@ async fn discover_with_timeout(
     result?
 }
 
+/// One policy for coordination, writing, commit planning and delegated models.
 pub(super) async fn effort(
     config: &ProviderConfig,
     cancel: Arc<AtomicBool>,
-) -> AppResult<Option<&'static str>> {
-    let Some(model) = config
-        .model
-        .as_deref()
-        .filter(|m| !m.is_empty() && *m != "default")
-    else {
-        return Ok(None);
-    };
-    if Some(model) == default_model(&config.provider) {
-        return Ok(Some("medium"));
-    }
+) -> AppResult<Option<String>> {
     match discover(config, cancel).await {
-        Ok(models) => Ok(models
-            .iter()
-            .find(|m| {
-                m.id == model || (m.resolved_model.as_deref() == Some(model) && !m.id.contains('['))
-            })
-            .filter(|m| m.supported_efforts.iter().any(|e| e == "medium"))
-            .map(|_| "medium")),
+        Ok(catalog) => {
+            if let Some(effort) = &config.reasoning_effort {
+                let model = catalog
+                    .iter()
+                    .find(|m| Some(&m.id) == config.model.as_ref());
+                if !model.is_some_and(|m| m.supported_efforts.contains(effort)) {
+                    return Err(AppError::new(
+                        "reasoning_effort",
+                        "The selected reasoning effort is unavailable for this model.",
+                    ));
+                }
+                return Ok(Some(effort.clone()));
+            }
+            Ok(Some(
+                catalog_effort(&catalog, config.model.as_deref()).into(),
+            ))
+        }
         Err(error) if error.code == "cancelled" => Err(error),
-        // Missing discovery support must not invalidate an existing custom model.
-        Err(_) => Ok(None),
+        Err(error) if config.reasoning_effort.is_some() => Err(error),
+        Err(_) => Ok(Some("low".into())),
+    }
+}
+
+pub(super) fn catalog_effort(catalog: &[ProviderModel], selected: Option<&str>) -> &'static str {
+    let model = selected.filter(|m| !m.is_empty() && *m != "default");
+    let found = catalog.iter().find(|m| {
+        model.is_some_and(|id| {
+            m.id == id || (m.resolved_model.as_deref() == Some(id) && !m.id.contains('['))
+        })
+    });
+    found.map_or("low", |m| preferred_effort(&m.supported_efforts))
+}
+
+pub(super) fn preferred_effort(supported: &[String]) -> &'static str {
+    if supported.iter().any(|e| e == "none") {
+        "none"
+    } else {
+        "low"
+    }
+}
+
+#[cfg(test)]
+mod reasoning_tests {
+    use super::*;
+    #[test]
+    fn none_is_preferred_and_low_is_always_the_fallback() {
+        assert_eq!(
+            preferred_effort(&["low".into(), "none".into(), "high".into()]),
+            "none"
+        );
+        assert_eq!(
+            preferred_effort(&["low".into(), "medium".into(), "high".into()]),
+            "low"
+        );
+        assert_eq!(preferred_effort(&["high".into()]), "low");
+        assert_eq!(preferred_effort(&[]), "low");
+        assert_eq!(catalog_effort(&[], Some("unlisted")), "low");
+        assert_eq!(catalog_effort(&[], None), "low");
     }
 }

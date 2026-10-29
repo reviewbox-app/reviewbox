@@ -1,5 +1,4 @@
 import type { Manifest } from "material-icon-theme"
-import { isIconColor } from "./iconColors.helpers"
 import type {
   FileIconCatalog,
   FileIconPreferences,
@@ -176,61 +175,4 @@ export function resolveFolderIcon(
   return custom(
     lookup(themed?.[key], name) ?? lookup(manifest[key], name) ?? fallback
   )
-}
-
-/** Import diagnostics are separate from icon labels and never become hover text. */
-export function fileIconImportWarnings(
-  catalog: FileIconCatalog,
-  preferences: FileIconPreferences
-): string[] {
-  const manifest = catalog.manifests[preferences.activeIconPack]
-  const warnings = new Set<string>()
-  const folderBase = (id: string) =>
-    id.startsWith("folder") ? id : `folder-${id}`
-  const known = (id: string) => Boolean(manifest.iconDefinitions?.[id])
-  for (const [clones, folder] of [
-    [preferences.fileClones, false],
-    [preferences.folderClones, true],
-  ] as const) {
-    for (const clone of clones) {
-      if (!known(folder ? folderBase(clone.base) : clone.base))
-        warnings.add(
-          `Icon clone "${clone.name}": base "${clone.base}" is unavailable.`
-        )
-      for (const color of [clone.color, clone.lightColor]) {
-        if (color && !isIconColor(color))
-          warnings.add(
-            `Icon clone "${clone.name}": color "${color}" is invalid.`
-          )
-      }
-      for (const pattern of [...clone.folderNames, ...clone.rootFolderNames]) {
-        if (pattern.includes("*"))
-          warnings.add(
-            `Folder icon pattern "${pattern}" is unsupported; folder names must be exact.`
-          )
-      }
-    }
-  }
-  for (const [associations, clones, folder] of [
-    [preferences.fileAssociations, preferences.fileClones, false],
-    [preferences.folderAssociations, preferences.folderClones, true],
-  ] as const) {
-    for (const [pattern, target] of Object.entries(associations)) {
-      const clone = clones.findLast(
-        (item) => item.name === target && active(item, preferences)
-      )
-      const base = clone?.base ?? target
-      if (!known(folder ? folderBase(base) : base))
-        warnings.add(
-          `Icon association "${pattern}": target "${target}" is unavailable.`
-        )
-    }
-  }
-  for (const pattern of Object.keys(preferences.folderAssociations)) {
-    if (pattern.includes("*"))
-      warnings.add(
-        `Folder icon pattern "${pattern}" is unsupported; folder names must be exact.`
-      )
-  }
-  return [...warnings]
 }

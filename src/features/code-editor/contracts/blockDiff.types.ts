@@ -1,6 +1,7 @@
 import type { Ref } from "react"
 import type { editor, IRange } from "monaco-editor"
 import type { LanguageDocument } from "@/lib/desktop/contracts.generated"
+import type { SourceSelection } from "./sourceSelection.types"
 
 export type CodeSide = "before" | "after"
 export type CodePoint = { side: CodeSide; line: number; fraction: number }
@@ -19,8 +20,11 @@ export type BlockDiffHandle = {
   reveal: (point: CodePoint, end?: number) => void
 }
 export type BlockDiffProps = {
+  onCommentSelection?: (selection: SourceSelection | null) => void
   before: string
   after: string
+  inspectionRepositoryId?: string
+  sourcePath?: string
   language: string
   modelPath: string
   beforeDocument?: LanguageDocument
@@ -32,7 +36,14 @@ export type BlockDiffProps = {
   bottom: number
   inset: number
   point?: CodePoint
-  target?: { side: CodeSide; start: number; end: number; identity: unknown }
+  target?: {
+    side: CodeSide
+    start: number
+    end: number
+    column?: number
+    endColumn?: number
+    identity: unknown
+  }
   onCapture: (point: CodePoint) => void
   onCounts: (counts: { added: number; removed: number }) => void
   onCursor: (position: { line: number; column: number }) => void

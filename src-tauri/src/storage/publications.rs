@@ -19,8 +19,11 @@ fn reference_review(reference: &Value) -> Value {
     value
 }
 impl Storage {
-    pub(crate) fn enrich_publication(&self, review: &mut Value) -> AppResult<()> {
-        if !["published", "completedLocal", "publicationPending"]
+    pub(crate) fn enrich_publication(&self, review: &mut Value, discover: bool) -> AppResult<()> {
+        if !self.enrich_reviews {
+            return Ok(());
+        }
+        if !["published", "completedLocal"]
             .contains(&review["publication"]["status"].as_str().unwrap_or_default())
         {
             return Ok(());
@@ -54,6 +57,11 @@ impl Storage {
             cached.filter(|v| v["head"] == head && v["scope"] == scope && v["history"] == history)
         {
             cached["commits"].clone()
+        } else if !discover {
+            // Repository opening and history refresh must not walk every Git
+            // tree for every completed review while holding the storage lock.
+            // Full discovery remains available when opening a specific review.
+            json!([])
         } else {
             let snapshot: Snapshot = self.get(
                 "snapshot",
@@ -169,23 +177,31 @@ impl Storage {
         }
         Ok(())
     }
-    fn publication_attempt(&self, id: &str) -> AppResult<()> {
-        let _write = self.writes.lock();
+    fn publication_attempt(
+        &self,
+        id: &str,
+        progress: &mut crate::review_finalization::Progress<'_>,
+    ) -> AppResult<()> {
+        let write = self.writes.lock();
         self.sync_projects(true)?;
-        let mut mounted = self.projects.lock().unwrap();
+        let mounted = self.projects.lock().unwrap();
         let m = mounted
-            .iter_mut()
+            .iter()
             .find(|(repo, m)| {
                 self.scope.as_ref().is_none_or(|scope| scope == *repo)
                     && m.documents.contains_key(&("review".into(), id.into()))
             })
             .map(|(_, m)| m)
             .ok_or_else(|| AppError::new("not_found", "Review not found."))?;
-        let project = &m.project;
+        let project = m.project.clone();
         self.check_update_write(&project.repository_id, id)?;
         let _lock = project.lock()?;
         project.recover_locked()?;
         let old = project.read()?;
+        drop(_lock);
+        drop(mounted);
+        drop(write);
+        let project = &project;
         let publication_head = crate::repositories::text(
             project.root.parent().unwrap(),
             &["rev-parse", "--verify", "HEAD"],
@@ -216,10 +232,15 @@ impl Storage {
         let snapshot = next
             .get_mut(&("snapshot".into(), snapshot_id.clone()))
             .ok_or_else(|| AppError::new("missing_snapshot", "Review capture is missing."))?;
+        progress("preserve", FinalizationStepStatus::Running, None)?;
         let packs = content::portable_snapshot(project, snapshot)?;
+        progress("preserve", FinalizationStepStatus::Completed, None)?;
+        progress("commits", FinalizationStepStatus::Running, None)?;
         let captured: Snapshot = serde_json::from_value(snapshot.clone())?;
         review["publication"]["matchingCommitIds"] =
             json!(publication::matching_commits(project, &captured).unwrap_or_default());
+        progress("commits", FinalizationStepStatus::Completed, None)?;
+        progress("archive", FinalizationStepStatus::Running, None)?;
         review["publication"]["status"] = json!("published");
         review["publication"]["publicationError"] = Value::Null;
         let mut deferred: Vec<String> = old
@@ -302,6 +323,7 @@ impl Storage {
                 }
             }
         }
+        progress("archive", FinalizationStepStatus::Completed, None)?;
         review["publication"]["archiveDeferredReason"] = if deferred.is_empty() {
             Value::Null
         } else {
@@ -321,12 +343,31 @@ impl Storage {
             .into_iter()
             .filter_map(|(path, bytes)| path.strip_prefix(&prefix).map(|p| (p.to_string(), bytes)))
             .collect();
+        progress("verify", FinalizationStepStatus::Running, None)?;
         publication::verify_bundle(&prospective)?;
         content::verify_bundle_sources(
             project,
             &prospective,
             publication_head.as_deref().unwrap_or("HEAD"),
         )?;
+        progress("verify", FinalizationStepStatus::Completed, None)?;
+        progress("publish", FinalizationStepStatus::Running, None)?;
+        // Expensive Git/content work above does not hold application-wide locks.
+        // Revalidate the authoritative project under its writer lock before committing.
+        let _write = self.writes.lock();
+        let mut mounted = self.projects.lock().unwrap();
+        let m = mounted
+            .get_mut(&project.repository_id)
+            .ok_or_else(|| AppError::new("project", "Project closed during publication."))?;
+        self.check_update_write(&project.repository_id, id)?;
+        let _lock = project.lock()?;
+        project.recover_locked()?;
+        if project.read()? != old {
+            return Err(AppError::new(
+                "conflict",
+                "Project data changed during publication. Retry finalization.",
+            ));
+        }
         if crate::repositories::text(
             project.root.parent().unwrap(),
             &["rev-parse", "--verify", "HEAD"],
@@ -344,10 +385,18 @@ impl Storage {
         self.prune_preparation_checkpoints(&project.repository_id, &m.documents)?;
         self.index(project, &m.documents)?;
         m.dirty.store(true, Ordering::Release);
+        progress("publish", FinalizationStepStatus::Completed, None)?;
         Ok(())
     }
     pub(crate) fn publish_review(&self, id: &str) -> AppResult<Workspace> {
-        if let Err(error) = self.publication_attempt(id) {
+        self.publish_review_progress(id, &mut |_, _, _| Ok(()))
+    }
+    pub(crate) fn publish_review_progress(
+        &self,
+        id: &str,
+        progress: &mut crate::review_finalization::Progress<'_>,
+    ) -> AppResult<Workspace> {
+        if let Err(error) = self.publication_attempt(id, progress) {
             let mut review: Review = self.get("review", id)?;
             if review.publication.status == PublicationStatus::Published {
                 return crate::reviews::load(self, id);

@@ -1,0 +1,115 @@
+{
+  "activeIconPack": "nest",
+  "fileAssociations": {},
+  "folderAssociations": {},
+  "fileClones": [
+    {
+      "name": "ts-repository-custom",
+      "base": "prisma",
+      "color": "blue-300",
+      "lightColor": null,
+      "fileNames": [],
+      "fileExtensions": ["repository.ts"],
+      "folderNames": [],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    },
+    {
+      "name": "ts-config-custom",
+      "base": "settings",
+      "color": "blue-500",
+      "lightColor": null,
+      "fileNames": [],
+      "fileExtensions": ["config.ts", "configs.ts"],
+      "folderNames": [],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    },
+    {
+      "name": "ts-helpers-custom",
+      "base": "settings",
+      "color": "yellow-700",
+      "lightColor": null,
+      "fileNames": [],
+      "fileExtensions": ["helpers.ts", "helper.ts"],
+      "folderNames": [],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    },
+    {
+      "name": "ts-schema-custom",
+      "base": "database",
+      "color": "red-400",
+      "lightColor": null,
+      "fileNames": [],
+      "fileExtensions": ["schemas.ts", "schema.ts"],
+      "folderNames": [],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    },
+    {
+      "name": "ts-provider-custom",
+      "base": "nest",
+      "color": "blue-400",
+      "lightColor": null,
+      "fileNames": [],
+      "fileExtensions": ["provider.ts", "providers.ts"],
+      "folderNames": [],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    },
+    {
+      "name": "ts-use-case-custom",
+      "base": "nest",
+      "color": "indigo-200",
+      "lightColor": null,
+      "fileNames": [],
+      "fileExtensions": [
+        "usecase.ts",
+        "useCase.ts",
+        "use-case.ts",
+        "usecases.ts",
+        "useCases.ts",
+        "use-cases.ts"
+      ],
+      "folderNames": [],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    }
+  ],
+  "folderClones": [
+    {
+      "name": "composites-folder",
+      "base": "folder-components",
+      "color": "teal-400",
+      "lightColor": "teal-400",
+      "fileNames": [],
+      "fileExtensions": [],
+      "folderNames": ["composites"],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    },
+    {
+      "name": "form-folder",
+      "base": "folder-meta",
+      "color": "deep-orange-400",
+      "lightColor": "deep-orange-400",
+      "fileNames": [],
+      "fileExtensions": [],
+      "folderNames": ["form"],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    },
+    {
+      "name": "menu-folder",
+      "base": "folder-mjml",
+      "color": "deep-purple-400",
+      "lightColor": "deep-purple-400",
+      "fileNames": [],
+      "fileExtensions": [],
+      "folderNames": ["menu", "menus"],
+      "rootFolderNames": [],
+      "activeForPacks": []
+    }
+  ]
+}

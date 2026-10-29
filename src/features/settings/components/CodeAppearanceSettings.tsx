@@ -1,8 +1,4 @@
 "use client"
-
-import { useEffect, useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select,
   SelectContent,
@@ -11,107 +7,119 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { HighlightedCode } from "@/features/code-editor/components/HighlightedCode"
 import { useAppearancePreferences } from "../hooks/useAppearancePreferences"
 import { SettingRow } from "./SettingRow"
-import {
-  loadFileIcons,
-  useFileIcons,
-} from "@/features/file-icons/stores/useFileIcons.store"
-import { fileIconImportWarnings } from "@/features/file-icons/helpers/fileIcons.helpers"
 
 export function CodeAppearanceSettings() {
-  const appearance = useAppearancePreferences()
-  const icons = useFileIcons()
-  useEffect(() => {
-    void loadFileIcons()
-  }, [])
-  const warnings = [
-    ...new Set([
-      ...(appearance.preferences?.importWarnings ?? []),
-      ...(icons.catalog
-        ? fileIconImportWarnings(icons.catalog, icons.preferences)
-        : []),
-    ]),
+  const { preferences, fonts, update, saving, error } =
+    useAppearancePreferences()
+  const themes = [
+    { value: "tokyo-night", label: "Tokyo Night" },
+    { value: "reviewbox", label: "ReviewBox" },
   ]
-  const [selected, setSelected] = useState<string | null>(null)
-  const profileId =
-    selected ??
-    appearance.profiles.find(
-      (p) => p.name === appearance.preferences?.importedProfile
-    )?.id ??
-    appearance.profiles[0]?.id
-  const profileItems = appearance.profiles.map((profile) => ({
-    value: profile.id,
-    label: profile.name,
+  const family = preferences?.codeFontFamily ?? "Geist Mono"
+  const families = [...new Set([family, ...fonts])].map((value) => ({
+    value,
+    label: fonts.includes(value) ? value : `${value} (unavailable)`,
+  }))
+  const weights = Array.from({ length: 9 }, (_, i) => ({
+    value: String((i + 1) * 100),
+    label: `${(i + 1) * 100}${i === 3 ? " · Regular" : i === 6 ? " · Bold" : ""}`,
   }))
   return (
     <>
       <SettingRow
-        title="Code colors"
-        description="Rich syntax colors in code and previews. ReviewBox surfaces stay unchanged."
+        title="Code theme"
+        description="Syntax colors in the editor, reviews and code previews."
       >
-        <Tabs
-          value={appearance.preferences?.codeTheme ?? "tokyo-night"}
-          onValueChange={(value) =>
-            appearance.setCodeTheme(
-              value === "reviewbox" ? "reviewbox" : "tokyo-night"
-            )
-          }
+        <Select
+          items={themes}
+          value={preferences?.codeTheme ?? "tokyo-night"}
+          disabled={saving}
+          onValueChange={(value) => {
+            if (value === "tokyo-night" || value === "reviewbox")
+              void update({ codeTheme: value })
+          }}
         >
-          <TabsList>
-            <TabsTrigger value="tokyo-night">Tokyo Night</TabsTrigger>
-            <TabsTrigger value="reviewbox">ReviewBox</TabsTrigger>
-          </TabsList>
-        </Tabs>
+          <SelectTrigger aria-label="Code theme">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {themes.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </SettingRow>
       <SettingRow
-        title="File icons"
-        description={
-          appearance.preferences?.importedProfile
-            ? `Material Icon Theme · imported from ${appearance.preferences.importedProfile}`
-            : "Material Icon Theme, available offline."
-        }
+        title="Code font"
+        description="System monospace fonts, with Geist Mono as fallback."
       >
-        <div className="flex flex-wrap items-center gap-2">
-          {appearance.profiles.length > 1 && (
-            <Select
-              items={profileItems}
-              value={profileId}
-              onValueChange={(value) => {
-                if (value !== null) {
-                  setSelected(value)
-                }
-              }}
-            >
-              <SelectTrigger aria-label="VS Code profile">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {profileItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!profileId || appearance.saving}
-            onClick={() => profileId && void appearance.importIcons(profileId)}
-          >
-            Import VS Code icons
-          </Button>
-        </div>
+        <Select
+          items={families}
+          value={family}
+          disabled={saving}
+          onValueChange={(value) => {
+            if (value) void update({ codeFontFamily: value })
+          }}
+        >
+          <SelectTrigger aria-label="Code font">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {families.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </SettingRow>
-      {appearance.error || warnings.length ? (
-        <Alert size="sm" variant="faded" className="my-3">
-          <AlertDescription>
-            {appearance.error ?? warnings.join(" ")}
-          </AlertDescription>
+      <SettingRow
+        title="Font weight"
+        description="Used across all code surfaces."
+      >
+        <Select
+          items={weights}
+          value={String(preferences?.codeFontWeight ?? 400)}
+          disabled={saving}
+          onValueChange={(value) => {
+            if (value) void update({ codeFontWeight: Number(value) })
+          }}
+        >
+          <SelectTrigger aria-label="Code font weight">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {weights.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <div
+        className="code-font rounded-xl bg-muted/40 p-3 text-xs"
+        aria-label="Code font preview"
+      >
+        <HighlightedCode
+          language="typescript"
+          source="const review = { ready: true } // ReviewBox"
+        />
+      </div>
+      <SettingRow
+        title="File icons"
+        description="ReviewBox icons, based on Material Icon Theme. Included for everyone and available offline."
+      />
+      {error && (
+        <Alert size="sm" variant="faded">
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
-      ) : null}
+      )}
     </>
   )
 }

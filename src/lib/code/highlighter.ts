@@ -11,6 +11,29 @@ import { codeThemes, semanticThemeRules } from "./themes"
 import { codeLanguages, resolveLanguageId } from "./languages"
 import { tokenizePseudoLine, type PseudoState } from "./pseudocode"
 
+let shaderSyntax = true
+const shaderIds = new Set(["glsl", "hlsl", "slang", "shaderlab"])
+const syntaxListeners = new Set<() => void>()
+export const getShaderSyntax = () => shaderSyntax
+export function subscribeShaderSyntax(listener: () => void) {
+  syntaxListeners.add(listener)
+  return () => {
+    syntaxListeners.delete(listener)
+  }
+}
+let monacoRuntime: typeof Monaco | undefined
+export function configureShaderSyntax(enabled: boolean) {
+  if (enabled === shaderSyntax) return
+  shaderSyntax = enabled
+  refreshMonaco?.()
+  if (enabled)
+    for (const model of monacoRuntime?.editor.getModels() ?? []) {
+      const id = model.getLanguageId()
+      if (shaderIds.has(id)) void ensureCodeLanguage(id).catch(() => {})
+    }
+  for (const listener of syntaxListeners) listener()
+}
+
 let highlighter: Promise<HighlighterCore> | undefined
 const languages = new Map<string, Promise<void>>()
 let refreshMonaco: (() => void) | undefined
@@ -31,6 +54,7 @@ export function getCodeHighlighter() {
 
 export async function ensureCodeLanguage(input: string | undefined) {
   const id = resolveLanguageId(input).id
+  if (!shaderSyntax && shaderIds.has(id)) return "plaintext"
   if (id === "plaintext" || id === "reviewbox-pseudocode") return id
   let loading = languages.get(id)
   if (!loading) {
@@ -38,7 +62,15 @@ export async function ensureCodeLanguage(input: string | undefined) {
       const engine = await getCodeHighlighter()
       if (!engine.getLoadedLanguages().includes(id)) {
         const language =
-          customGrammars.get(id) ?? bundledLanguages[id as BundledLanguage]
+          customGrammars.get(id) ??
+          (id === "slang"
+            ? async () =>
+                (await bundledLanguages.hlsl()).default.map((grammar) => ({
+                  ...grammar,
+                  name: "slang",
+                  aliases: [],
+                }))
+            : bundledLanguages[id as BundledLanguage])
         if (!language) return
         await engine.loadLanguage(language)
       }
@@ -120,6 +152,7 @@ export function registerPseudoLanguage(monaco: typeof Monaco) {
 export async function initializeCodeHighlighting(monaco: typeof Monaco) {
   if (refreshMonaco) return
   const engine = await getCodeHighlighter()
+  monacoRuntime = monaco
   const originalSetTheme = monaco.editor.setTheme.bind(monaco.editor)
   const originalCreate = monaco.editor.create.bind(monaco.editor)
   let selectedTheme = "tokyo-night-dark"
@@ -149,6 +182,22 @@ export async function initializeCodeHighlighting(monaco: typeof Monaco) {
       adaptedSetTheme(name)
     }
     monaco.editor.setTheme(selected)
+    if (!shaderSyntax)
+      for (const id of shaderIds)
+        monacoRuntime?.languages.setTokensProvider(id, {
+          getInitialState: () => ({
+            clone() {
+              return this
+            },
+            equals() {
+              return true
+            },
+          }),
+          tokenize: (_line, state) => ({
+            tokens: [{ startIndex: 0, scopes: "" }],
+            endState: state,
+          }),
+        })
   }
   restoreMonacoTheme = () => monaco.editor.setTheme(selectedTheme)
   const registered = new Set(

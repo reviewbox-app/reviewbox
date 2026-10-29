@@ -12,11 +12,14 @@ pub(crate) mod catalog;
 pub(crate) mod install;
 pub(crate) mod live;
 pub(crate) mod packs;
+pub(crate) mod project;
+mod registrations;
 pub(crate) mod runtime_builds;
 mod session;
 pub(crate) mod setup;
 #[cfg(test)]
 mod tests;
+mod vue;
 mod workspace;
 
 pub fn settings(storage: &Storage) -> AppResult<LanguageServerSettings> {

@@ -7,6 +7,17 @@ pub struct EditorEntry {
     pub path: String,
     pub directory: bool,
     pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ignored: Option<bool>,
+    /// Excluded by a direct or inherited rule, unlike an ignored-only parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub excluded: Option<bool>,
+    /// An ignored directory whose children are loaded when expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lazy: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -33,6 +44,23 @@ pub struct EditorSearchResult {
     pub skipped_files: u32,
 }
 
+/// A stream belongs to one caller/checkout/query; old batches are discarded by identity.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSearchBatch {
+    pub request_id: String,
+    pub sequence: u32,
+    pub matches: Vec<EditorSearchMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSearchBuffer {
+    pub path: String,
+    pub version: u32,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorFile {
@@ -53,6 +81,13 @@ pub struct EditorDraft {
     pub revision: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorSaveActions {
+    pub format_on_save: bool,
+    pub organize_imports_on_save: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditorRecovery {
@@ -65,6 +100,9 @@ pub struct EditorRecovery {
     pub associations: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub servers: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub save_actions: Option<std::collections::BTreeMap<String, EditorSaveActions>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -93,4 +131,24 @@ pub enum EditorMutation {
         path: String,
         expected_revision: String,
     },
+}
+
+/// Private navigation for one checkout, independent of source buffers and captures.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileTreeNavigation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub visible: Option<bool>,
+    pub expanded_paths: Vec<String>,
+    pub selected_path: Option<String>,
+    pub scroll_top: f64,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckoutNavigation {
+    pub revision: u32,
+    pub trees: std::collections::BTreeMap<String, FileTreeNavigation>,
 }

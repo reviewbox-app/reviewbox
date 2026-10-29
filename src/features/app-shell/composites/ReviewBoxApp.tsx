@@ -1,4 +1,7 @@
 "use client"
+import { GitRecoveryActions } from "@/features/source-control/components/GitRecoveryActions"
+import { useEditorExtensions } from "@/features/editor-extensions/services/extensions.store"
+import { useEditorEngineStatus } from "@/features/editor-extensions/services/engines"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -24,6 +27,8 @@ import { ResumeReviews } from "@/features/review/composites/ResumeReviews"
 import { SettingsDialog } from "@/features/settings/composites/SettingsDialog"
 import { CodeEditorWorkspace } from "@/features/code-editor/composites/CodeEditorWorkspace"
 import { EditorLifecycle } from "@/features/code-editor/composites/EditorLifecycle"
+import { TerminalWorkspace } from "@/features/terminal/composites/TerminalWorkspace"
+import { terminalOwnsKey } from "@/features/terminal/services/terminal.helpers"
 import { useReviewNotifications } from "@/features/notifications/hooks/useReviewNotifications"
 import { useRepositoryGitMenu } from "@/features/source-control/hooks/useRepositoryGitMenu"
 import { useSourceControl } from "@/features/source-control/hooks/useSourceControl"
@@ -32,6 +37,7 @@ import { ReviewOverview } from "@/features/source-control/composites/ReviewOverv
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { getReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 import { useAppearancePreferences } from "@/features/settings/hooks/useAppearancePreferences"
+import { reviewIsFinalized } from "@/features/review/helpers/publication.helpers"
 import { useReviewSession } from "@/features/review/hooks/useReviewSession"
 import { useReviewWorkspaceStore } from "@/features/review/stores/useReviewWorkspace.store"
 import {
@@ -51,6 +57,8 @@ import type {
 
 export function ReviewBoxApp() {
   useAppearancePreferences()
+  useEditorExtensions()
+  useEditorEngineStatus()
   const session = useReviewSession()
   const rev = useRevStatus()
   const {
@@ -91,6 +99,16 @@ export function ReviewBoxApp() {
     repositoryId: string
     mode: "local" | "overview"
   } | null>(null)
+  const finalized = !!workspace && reviewIsFinalized(workspace.review)
+  const hasLocalChanges =
+    !git.error && git.state?.repositoryId === repository?.id
+      ? !!git.state?.files.length
+      : undefined
+  const localReview =
+    !!workspace &&
+    ["local", "staged", "unstaged"].includes(workspace.snapshot.request.scope)
+  const relevantRepositoryChange =
+    session.changed && !(finalized && localReview && hasLocalChanges === false)
   const local =
     surface?.repositoryId === repository?.id && surface?.mode === "local"
   const overview =
@@ -158,8 +176,15 @@ export function ReviewBoxApp() {
         !!target?.isContentEditable ||
         !!target?.closest("input,textarea,select,[role=combobox]")
       if (event.isComposing) return
+      const inTerminal = !!target?.closest(".xterm")
+      if (inTerminal && terminalOwnsKey(event)) return
       const meta = event.metaKey || event.ctrlKey
       if (document.querySelector("[role=dialog]")) return
+      if (event.ctrlKey && event.key === "`" && repository) {
+        event.preventDefault()
+        setSpace(space === "terminal" ? "understand" : "terminal")
+        return
+      }
       if (meta && event.key.toLowerCase() === "o") {
         event.preventDefault()
         void choose()
@@ -175,14 +200,16 @@ export function ReviewBoxApp() {
       ) {
         event.preventDefault()
         setPalette(true)
-      } else if (meta && ["1", "2", "3"].includes(event.key)) {
+      } else if (meta && ["1", "2", "3", "4"].includes(event.key)) {
         event.preventDefault()
         setSpace(
           event.key === "1"
             ? "resume"
             : event.key === "2"
               ? "review"
-              : "understand"
+              : event.key === "3"
+                ? "understand"
+                : "terminal"
         )
       } else if (meta && event.key === "\\") {
         event.preventDefault()
@@ -330,16 +357,22 @@ export function ReviewBoxApp() {
       <EditorLifecycle />
       <WorkspaceTitleBar
         repository={repository}
+        branch={git.state ? (git.state.branch ?? "Detached HEAD") : undefined}
+        onBranchSwitched={async () => {
+          await git.reload()
+          await session.checkFreshness()
+        }}
         rev={rev}
         onHome={session.home}
         onReviewOverview={showOverview}
         reviewControl={
-          workspace && (
+          workspace &&
+          (!finalized || updating) && (
             <ReviewUpdateStatus
               key={workspace.review.id}
               workspace={workspace}
               update={update}
-              changed={session.changed}
+              changed={relevantRepositoryChange}
               freshnessChecked={session.freshnessChecked}
               onCheck={session.checkFreshness}
               staleStepIds={session.staleStepIds}
@@ -386,7 +419,7 @@ export function ReviewBoxApp() {
       {space === "review" &&
         !local &&
         !overview &&
-        session.changed &&
+        relevantRepositoryChange &&
         workspace &&
         dismissedChange !== readingIdentity && (
           <div
@@ -432,7 +465,21 @@ export function ReviewBoxApp() {
         space === "review" &&
         (local || overview || !workspace) && (
           <Alert className="mx-2 mb-2 w-auto" variant="destructive" size="sm">
-            <AlertDescription>{git.error}</AlertDescription>
+            <AlertDescription>
+              {git.error}
+              <GitRecoveryActions
+                repositoryId={repository.id}
+                error={git.error}
+                disabled={git.busy}
+                onRecovered={async () => {
+                  git.setError("")
+                  await git.reload()
+                }}
+                onRetry={async () => {
+                  await git.reload()
+                }}
+              />
+            </AlertDescription>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -509,13 +556,8 @@ export function ReviewBoxApp() {
             ])
           )}
         />
-      ) : local ? (
-        <LocalChanges
-          key={repository.id}
-          git={git}
-          onBack={showOverview}
-          onFinished={showOverview}
-        />
+      ) : space === "terminal" ? null : local ? (
+        <LocalChanges key={repository.id} git={git} onBack={showOverview} />
       ) : overview || !workspace ? (
         <ReviewOverview
           git={git}
@@ -528,6 +570,14 @@ export function ReviewBoxApp() {
           <ReviewReader
             key={readingIdentity}
             workspace={workspace}
+            finalization={session.finalization}
+            hasLocalChanges={hasLocalChanges}
+            onFinish={() => {
+              session.finish()
+              setSurface(null)
+              setPreparing(null)
+            }}
+            onConfigure={() => setSettings(true)}
             selected={selected}
             busy={busy || updating}
             menuEnabled={!session.newReview && !settings && !palette}
@@ -560,6 +610,10 @@ export function ReviewBoxApp() {
           onStart={() => setNewReview(true)}
         />
       )}
+      <TerminalWorkspace
+        repositoryId={repository?.id}
+        visible={!!repository && space === "terminal"}
+      />
       {!repository && (
         <footer className="flex h-10 shrink-0 items-center justify-end gap-4 border-t px-5 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">

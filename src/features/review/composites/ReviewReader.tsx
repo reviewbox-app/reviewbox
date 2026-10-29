@@ -1,4 +1,6 @@
 "use client"
+import { ExplorerSearchProvider } from "@/features/file-tree/components/ExplorerSearchProvider"
+import type { SourceSearchTarget } from "@/features/code-editor/contracts/sourceSelection.types"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -25,6 +27,7 @@ import type {
   DocumentReference,
   ReadingLevel,
   ReviewAction,
+  ReviewCommentAnchor,
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 import { errorMessage } from "@/lib/desktop/review.commands"
@@ -47,6 +50,13 @@ import { ReviewStepsPanel } from "../components/ReviewStepsPanel"
 import { ReviewFiles } from "../components/ReviewFiles"
 import { ReviewPublicationDetails } from "../components/ReviewPublicationDetails"
 import { ReviewSummary } from "../components/ReviewSummary"
+import { RevChat } from "@/features/rev-chat/components/RevChat"
+import { CodeComments } from "../components/CodeComments"
+import { useReviewComments } from "../hooks/useReviewComments"
+import type { ReviewFinalizationSession } from "../hooks/useReviewFinalization"
+import { isFinalizationAction } from "../helpers/reviewFinalization.helpers"
+import { commentAnchor } from "../helpers/reviewComment.helpers"
+import type { SourceSelection } from "@/features/code-editor/contracts/sourceSelection.types"
 import { StepDocument } from "../components/StepDocument"
 import {
   publicationLabel,
@@ -68,13 +78,11 @@ import { reviewReaderLayout } from "../reader.config"
 import { ReviewCodePane } from "./ReviewCodePane"
 import { ReviewReferencePane } from "./ReviewReferencePane"
 
+import { useFileTreeNavigation } from "@/features/file-tree/hooks/useFileTreeNavigation"
+import { initializeReviewTree } from "@/features/file-tree/services/navigation.service"
+
 const EXPLANATION_WIDTH =
   "clamp(280px,var(--review-explanation-width,440px),50%)"
-const levelNames: Record<ReadingLevel, string> = {
-  essential: "Essential",
-  explained: "Explained",
-  technical: "Technical",
-}
 
 export function ReviewReader({
   workspace,
@@ -93,6 +101,10 @@ export function ReviewReader({
   staleStepIds = [],
   updatePending = false,
   menuEnabled = true,
+  finalization,
+  hasLocalChanges,
+  onFinish,
+  onConfigure,
 }: {
   workspace: Workspace
   selected: CodeAnchor | null
@@ -110,22 +122,45 @@ export function ReviewReader({
   staleStepIds?: string[]
   updatePending?: boolean
   menuEnabled?: boolean
+  hasLocalChanges?: boolean
+  onFinish?: () => void
+  finalization?: ReviewFinalizationSession
+  onConfigure?: () => void
 }) {
   const {
     view,
     setSplit,
-    readerLevel: level,
-    setReaderLevel,
     stepsOpen,
     setStepsOpen,
-    filesOpen,
-    setFilesOpen,
     explanationRequested,
     setExplanationRequested,
     setSpace,
   } = useReviewWorkspaceStore()
+  const level: ReadingLevel = "essential"
   const { review, snapshot } = workspace
+  const filesNavigation = useFileTreeNavigation(
+    review.repositoryId,
+    `review:${review.id}`
+  )
+  const filesOpen = filesNavigation.value.visible ?? true
+  const setFilesOpen = (visible: boolean) =>
+    filesNavigation.update((tree) => ({ ...tree, visible }))
+  useEffect(() => {
+    if (filesNavigation.ready)
+      initializeReviewTree(
+        review.repositoryId,
+        review.id,
+        review.files.map((file) => file.path)
+      )
+  }, [filesNavigation.ready, review.repositoryId, review.id, review.files])
+
   const completed = reviewIsComplete(review)
+  const comments = useReviewComments(review)
+  const [commentSelection, setCommentSelection] = useState<{
+    anchor?: ReviewCommentAnchor
+    key: string
+    value: SourceSelection
+  } | null>(null)
   const units = readingUnits(workspace)
   const hasReviewDocuments = units.length > 0
   const current = currentUnit(workspace)
@@ -149,8 +184,33 @@ export function ReviewReader({
     message: string
   } | null>(null)
   const navigationPanel = useRef<HTMLElement>(null)
-  const [summary, setSummary] = useState(false)
+  const [summary, setSummary] = useState(completed || !!finalization?.operation)
   const [details, setDetails] = useState(false)
+  const [finalizationStarting, setFinalizationStarting] = useState(false)
+  const act = useCallback(
+    async (action: ReviewAction) => {
+      const final = isFinalizationAction(review, action)
+      if (final) {
+        setDetails(false)
+        setSummary(true)
+        setFinalizationStarting(true)
+      }
+      try {
+        return await onAction(action)
+      } finally {
+        if (final) setFinalizationStarting(false)
+      }
+    },
+    [review, onAction]
+  )
+  const restoredFinalization = useRef<string | null>(null)
+  const finalizationId = finalization?.operation?.id
+  useEffect(() => {
+    if (!finalizationId || restoredFinalization.current === finalizationId)
+      return
+    restoredFinalization.current = finalizationId
+    setSummary(true)
+  }, [finalizationId])
   const menuError = useReviewMenu({
     onLocalChanges,
     review,
@@ -160,7 +220,7 @@ export function ReviewReader({
     updatePending,
     enabled: menuEnabled && !details,
     onRefresh,
-    onAction,
+    onAction: act,
     onDetails: () => setDetails(true),
     onSummary: () => setSummary(true),
   })
@@ -182,6 +242,9 @@ export function ReviewReader({
   const cursorKey = readerCursorKey(workspace)
   const scroller = useRef<HTMLDivElement>(null)
   const contentKey = file ? `${readerIdentity(workspace)}/${file.id}` : ""
+  const commentKey = `${readerIdentity(workspace)}/${pinned?.sourceId ?? change?.id ?? ""}`
+  const currentCommentSelection =
+    commentSelection?.key === commentKey ? commentSelection.value : null
   const fileError = fileFailure?.key === contentKey ? fileFailure.message : ""
   const [stateCursor, setStateCursor] = useState(cursorKey)
   if (stateCursor !== cursorKey) {
@@ -248,7 +311,7 @@ export function ReviewReader({
       decidingRef.current = true
       setDeciding(true)
       try {
-        const saved = await onAction(action)
+        const saved = await act(action)
         if (!saved || reopen || !isCurrentCursor(owner)) return
         if (guided && guideProgress.validated === guideProgress.total - 1)
           setSummary(true)
@@ -267,7 +330,7 @@ export function ReviewReader({
       guided,
       unit,
       file,
-      onAction,
+      act,
       isCurrentCursor,
       cursorIndex,
       total,
@@ -316,7 +379,9 @@ export function ReviewReader({
     setExplanationRequested(true)
     setView("code")
   }
+  const [searchTarget, setSearchTarget] = useState<SourceSearchTarget>()
   const selectFile = (fileId: string, changeId?: string) => {
+    setSearchTarget(undefined)
     setPinned(null)
     onSelectFile(fileId, changeId)
     setView("code")
@@ -324,6 +389,7 @@ export function ReviewReader({
   const document =
     guided && unit ? (
       <StepDocument
+        comments={comments}
         workspace={workspace}
         unit={unit}
         index={index}
@@ -391,34 +457,7 @@ export function ReviewReader({
     }
   }, [cursorKey, isDocument, summary, onAction])
 
-  const readingModeSwitch = hasReviewDocuments && (
-    <div
-      className="sticky z-30 mx-auto flex w-fit justify-center"
-      style={{ top: 8 }}
-    >
-      <Tabs
-        value={level}
-        onValueChange={(value) => {
-          if (
-            value === "essential" ||
-            value === "explained" ||
-            value === "technical"
-          ) {
-            setReaderLevel(value)
-          }
-        }}
-        className="rounded-full glass-bar"
-      >
-        <TabsList aria-label="Reading mode">
-          {(Object.keys(levelNames) as ReadingLevel[]).map((value) => (
-            <TabsTrigger key={value} value={value}>
-              {levelNames[value]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-    </div>
-  )
+  const readingModeSwitch = null
 
   const showFiles = !isDocument && !summary && filesOpen
   const showSteps = isDocument && !summary && hasReviewDocuments && stepsOpen
@@ -428,7 +467,8 @@ export function ReviewReader({
     : "clamp(180px,var(--review-files-width,240px),35%)"
 
   return (
-    <div
+    <ExplorerSearchProvider
+      onReveal={() => setFilesOpen(true)}
       data-resize-workspace
       className="grid min-h-0 min-w-0 flex-1 transition-[grid-template-columns,column-gap] duration-200 ease-out data-[resizing=true]:transition-none motion-reduce:transition-none"
       style={{
@@ -459,6 +499,10 @@ export function ReviewReader({
             selectedId={displayedFile?.id ?? null}
             visible={showFiles}
             onSelect={selectFile}
+            onMatch={(fileId, match) => {
+              selectFile(fileId, match.changeId)
+              setSearchTarget({ ...match, token: crypto.randomUUID() })
+            }}
             onError={(message) => setFileFailure({ key: contentKey, message })}
           />
         )}
@@ -478,12 +522,18 @@ export function ReviewReader({
               }}
             >
               <ReviewSummary
+                comments={comments}
                 workspace={workspace}
                 level={level}
                 onReturn={() => setSummary(false)}
                 onHome={() => setSpace("resume")}
                 busy={busy}
-                onAction={(action) => void onAction(action)}
+                finalization={finalization}
+                hasLocalChanges={hasLocalChanges}
+                onFinish={onFinish}
+                finalizationStarting={finalizationStarting}
+                onConfigure={onConfigure}
+                onAction={(action) => void act(action)}
               />
             </div>
           ) : isDocument ? (
@@ -523,7 +573,20 @@ export function ReviewReader({
                   aria-hidden={!!pinned}
                 >
                   <ReviewCodePane
+                    onCommentSelection={
+                      comments.editable
+                        ? (value) =>
+                            setCommentSelection(
+                              value ? { key: commentKey, value } : null
+                            )
+                        : undefined
+                    }
                     key={`${snapshot.id}/${change.id}`}
+                    searchTarget={
+                      searchTarget?.path === change.path
+                        ? searchTarget
+                        : undefined
+                    }
                     snapshot={snapshot}
                     change={change}
                     passage={passage}
@@ -546,6 +609,16 @@ export function ReviewReader({
                     <ReviewReferencePane
                       workspace={workspace}
                       reference={pinned}
+                      onCommentSelection={
+                        comments.editable
+                          ? (value, anchor) =>
+                              setCommentSelection(
+                                value && anchor
+                                  ? { key: commentKey, value, anchor }
+                                  : null
+                              )
+                          : undefined
+                      }
                       overlay={{
                         top: reviewReaderLayout.headerHeight,
                         bottom: footerHeight,
@@ -607,6 +680,34 @@ export function ReviewReader({
             className="absolute inset-x-0 top-0 z-40 flex items-center gap-2 border-b glass-bar px-3"
             style={{ height: reviewReaderLayout.headerHeight }}
           >
+            {
+              <CodeComments
+                key={`${review.repositoryId}/${review.id}`}
+                session={comments}
+                snapshotId={snapshot.id}
+                selection={
+                  view === "code" &&
+                  !summary &&
+                  currentCommentSelection &&
+                  (change || commentSelection?.anchor)
+                    ? (() => {
+                        const anchor =
+                          commentSelection?.anchor ??
+                          (change
+                            ? commentAnchor(
+                                snapshot.id,
+                                change,
+                                currentCommentSelection
+                              )
+                            : undefined)
+                        return anchor
+                          ? { value: currentCommentSelection, anchor }
+                          : null
+                      })()
+                    : null
+                }
+              />
+            }
             {(view === "code" || hasReviewDocuments) && (
               <Hint
                 label={
@@ -706,11 +807,29 @@ export function ReviewReader({
                 </Button>
               </Hint>
             )}
+            {hasReviewDocuments && !summary && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setSummary(true)}
+              >
+                Review summary
+              </Button>
+            )}
+            {review.mode === "manual" && !summary && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setSummary(true)}
+              >
+                End review
+              </Button>
+            )}
             {review.needsUpdateConfirmation && (
               <Button
                 size="sm"
                 disabled={busy}
-                onClick={() => void onAction({ kind: "completeUpdatedReview" })}
+                onClick={() => void act({ kind: "completeUpdatedReview" })}
               >
                 Complete updated review
               </Button>
@@ -729,7 +848,7 @@ export function ReviewReader({
               <ReviewPublicationDetails
                 review={review}
                 busy={busy}
-                onAction={(action) => void onAction(action)}
+                onAction={(action) => void act(action)}
               />
             </DialogContent>
           </Dialog>
@@ -779,14 +898,16 @@ export function ReviewReader({
               })}
             </div>
           )}
-          {(fileError || menuError) && !summary && (
+          {(fileError || menuError || comments.error) && !summary && (
             <div
               className="absolute inset-x-3 z-30 mx-auto max-w-[640px]"
               style={{ bottom: footerHeight + 8 }}
             >
               <Alert size="sm" variant="faded">
                 <HugeiconsIcon icon={InformationCircleIcon} />
-                <AlertDescription>{menuError || fileError}</AlertDescription>
+                <AlertDescription>
+                  {menuError || fileError || comments.error}
+                </AlertDescription>
               </Alert>
             </div>
           )}
@@ -795,6 +916,14 @@ export function ReviewReader({
               className="absolute inset-x-0 bottom-0 z-40 border-t glass-bar px-3"
               style={{ height: reviewReaderLayout.footerHeight }}
             >
+              {deciding && (
+                <p
+                  role="status"
+                  className="absolute inset-x-0 bottom-full border-t bg-card p-2 text-center text-sm text-muted-foreground"
+                >
+                  Saving your decision and finalizing the review…
+                </p>
+              )}
               <DecisionBar
                 unitLabel={guided ? "step" : "file"}
                 validated={validated}
@@ -857,6 +986,7 @@ export function ReviewReader({
           />
         )}
       </div>
-    </div>
+      <RevChat repositoryId={review.repositoryId} reviewId={review.id} />
+    </ExplorerSearchProvider>
   )
 }

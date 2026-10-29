@@ -1,8 +1,11 @@
 //! Explicit source-control actions. No review, validation or publication is created here.
+mod branches;
 pub(crate) mod commands;
 mod commits;
 mod git;
 mod history;
+pub(crate) mod recovery;
+pub(crate) mod review_commit;
 #[cfg(test)]
 mod tests;
 mod working;
@@ -86,4 +89,25 @@ impl SourceControl {
             .map(|(_, s)| s.clone())
             .unwrap_or_default()
     }
+}
+
+/// Read the exact live diff used by local source comments, without mutating Git.
+pub(crate) fn comment_diff(
+    root: &Path,
+    path: &str,
+    layer: &str,
+    version: Option<&str>,
+) -> AppResult<LocalFileDiff> {
+    let current;
+    let version = if let Some(version) = version {
+        version
+    } else {
+        current = working::files(root)?
+            .into_iter()
+            .find(|file| file.path == path)
+            .ok_or_else(|| AppError::new("source_changed", "The local change no longer exists."))?
+            .version;
+        &current
+    };
+    working::diff(root, path, layer, version)
 }

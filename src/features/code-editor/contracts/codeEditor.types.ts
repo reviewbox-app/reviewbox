@@ -9,6 +9,9 @@ type MonacoInstance = typeof Monaco
 export type CodeEditorProps = Omit<EditorProps, "beforeMount" | "onMount"> & {
   /** Fixed reader bars covering the editor, excluding its source padding. */
   overlayTop?: number
+  sourcePath?: string
+  changeBaseline?: string
+  inspectionDocument?: { repositoryId: string; path: string }
   languageDocument?: LanguageDocument
   beforeMount?: (monaco: MonacoInstance) => void
   onMount?: (

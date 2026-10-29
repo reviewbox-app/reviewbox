@@ -67,7 +67,7 @@
     "id": "c",
     "name": "C",
     "lspId": "c",
-    "extensions": ["c"]
+    "extensions": ["c", "h"]
   },
   {
     "id": "cpp",
@@ -343,5 +343,30 @@
     "name": "Diff",
     "lspId": "diff",
     "extensions": ["diff", "patch"]
+  },
+  {
+    "id": "glsl",
+    "name": "GLSL",
+    "lspId": "glsl",
+    "extensions": ["glsl", "vert", "frag", "geom", "tesc", "tese", "comp"]
+  },
+  {
+    "id": "hlsl",
+    "name": "HLSL / Cg",
+    "lspId": "hlsl",
+    "extensions": ["hlsl", "hlsli", "fx", "fxh", "cg", "cginc"],
+    "aliases": ["cg"]
+  },
+  {
+    "id": "slang",
+    "name": "Slang",
+    "lspId": "slang",
+    "extensions": ["slang"]
+  },
+  {
+    "id": "shaderlab",
+    "name": "ShaderLab",
+    "lspId": "shaderlab",
+    "extensions": ["shader"]
   }
 ]

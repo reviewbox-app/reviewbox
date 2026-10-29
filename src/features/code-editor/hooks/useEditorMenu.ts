@@ -1,17 +1,8 @@
 "use client"
 
 import { useEffect } from "react"
-import { listen } from "@tauri-apps/api/event"
 import { call, desktopAvailable } from "@/lib/desktop/review.commands"
-import {
-  dirty,
-  editorError,
-  getEditor,
-  refreshEditor,
-  saveAllEditors,
-  updateEditor,
-  type EditorSession,
-} from "../stores/editor.store"
+import { dirty, editorError, type EditorSession } from "../stores/editor.store"
 
 let writes: Promise<unknown> = Promise.resolve()
 function configure(
@@ -40,34 +31,7 @@ export function useEditorMenu(id: string, session: EditorSession | undefined) {
   const ready = !!session?.ready
   useEffect(() => {
     if (!desktopAvailable()) return
-    let disposed = false
-    const subscription = listen<[string, string]>(
-      "reviewbox:editor-menu",
-      ({ payload: [repository, action] }) => {
-        if (
-          disposed ||
-          repository !== id ||
-          document.querySelector('[role="dialog"], [role="alertdialog"]')
-        )
-          return
-        const current = getEditor(id)
-        if (!current) return
-        if (action === "editor.ignored") {
-          updateEditor(id, (s) => ({ ...s, showIgnored: !s.showIgnored }))
-          void refreshEditor(id).catch((e) => editorError(id, e))
-        } else if (action === "editor.autoSave") {
-          updateEditor(id, (s) => ({ ...s, autoSave: !s.autoSave }))
-        } else if (action === "editor.saveAll") {
-          void saveAllEditors(id).catch((e) => editorError(id, e))
-        }
-      }
-    )
-    void subscription.catch((e) => {
-      if (!disposed) editorError(id, e)
-    })
     return () => {
-      disposed = true
-      void subscription.then((stop) => stop()).catch(() => {})
       void configure(null).catch(() => {})
     }
   }, [id])

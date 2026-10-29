@@ -13,10 +13,12 @@ import type {
   Workspace,
 } from "@/lib/desktop/contracts.generated"
 import type { WizardStep } from "../components/NewReviewStepper"
-import { useReadingPreferences } from "@/features/settings/hooks/useReadingPreferences"
 import { creationCommands } from "../services/creation.commands"
 
-import { subscribeRepositoryReads } from "@/lib/desktop/repositoryReads"
+import {
+  hasSourceChanges,
+  subscribeRepositoryReads,
+} from "@/lib/desktop/repositoryReads"
 import { SessionReadCache } from "@/lib/desktop/sessionReadCache"
 
 const previews = new SessionReadCache<ReviewPreview>(24)
@@ -36,10 +38,6 @@ export function useNewReviewWizard(
   onCreated: (result: CreatedReview) => void,
   onClose: () => void
 ) {
-  const preferences = useReadingPreferences()
-  const [readingLevel, setReadingLevel] = useState<ReadingLevel>(
-    preferences.level
-  )
   const providers = useProviderStatus()
   const [settings, setSettings] = useState<ProjectSettings | null>(null)
   const [request, setRequest] = useState<CaptureRequest>({
@@ -51,7 +49,6 @@ export function useNewReviewWizard(
   })
   const [step, setStep] = useState<WizardStep>("loading")
   const [setup, setSetup] = useState(false)
-  const [skipped, setSkipped] = useState(false)
   const [provider, setProvider] = useState("codex")
   const [mode, setMode] = useState<PreparationMode>("rev")
   const [preview, setPreview] = useState<ReviewPreview | null>(
@@ -66,6 +63,7 @@ export function useNewReviewWizard(
   const [advancing, setAdvancing] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const reading = useRef(false)
+  const pendingRefresh = useRef(false)
   const operation = useRef<string | null>(null)
   const disposed = useRef(false)
   const cancelRequested = useRef(false)
@@ -106,12 +104,12 @@ export function useNewReviewWizard(
     setSetup(!chosen)
     setStep(chosen ? "scope" : "rev")
     setProvider(chosen?.provider ?? providers.defaultProvider)
-    setMode(chosen ? settings.defaultPreparation : "manual")
+    setMode("rev")
   }
   const selectedProvider =
     providers.providers.find((p) => p.provider === provider) ?? null
-  const ready = !skipped && selectedProvider?.ready === true
-  const effectiveMode = ready ? mode : "manual"
+  const ready = selectedProvider?.ready === true
+  const effectiveMode = mode
   const selected =
     preview?.scopes.find((s) => s.scope === request.scope) ?? null
 
@@ -157,7 +155,13 @@ export function useNewReviewWizard(
           setError(errorMessage(e))
         }
       } finally {
-        if (alive) reading.current = false
+        if (alive) {
+          reading.current = false
+          if (pendingRefresh.current && !operation.current) {
+            pendingRefresh.current = false
+            setRefresh((n) => n + 1)
+          }
+        }
       }
     }, 150)
     return () => {
@@ -170,22 +174,18 @@ export function useNewReviewWizard(
   }, [request, refresh])
   useEffect(() => {
     const focus = () => {
-      if (
-        document.visibilityState === "visible" &&
-        !operation.current &&
-        !reading.current
-      ) {
-        setRefresh((n) => n + 1)
+      if (document.visibilityState === "visible" && !operation.current) {
+        if (reading.current) pendingRefresh.current = true
+        else setRefresh((n) => n + 1)
       }
     }
-    const unsubscribe = subscribeRepositoryReads(repositoryId, focus)
-    const interval = window.setInterval(focus, 30000)
-    window.addEventListener("focus", focus)
-    return () => {
-      unsubscribe()
-      window.clearInterval(interval)
-      window.removeEventListener("focus", focus)
-    }
+    return subscribeRepositoryReads(
+      repositoryId,
+      (change) => {
+        if (hasSourceChanges(change)) focus()
+      },
+      focus
+    )
   }, [repositoryId])
 
   const change = (patch: Partial<CaptureRequest>) => {
@@ -251,12 +251,7 @@ export function useNewReviewWizard(
           preparation: effectiveMode,
           provider,
           warning,
-          readingLevel:
-            effectiveMode === "manual"
-              ? "technical"
-              : preferences.askEachReview
-                ? readingLevel
-                : preferences.level,
+          readingLevel: "essential",
         })
     } catch (e) {
       if (!disposed.current) {
@@ -289,7 +284,6 @@ export function useNewReviewWizard(
         const value = await agentCommands.settings()
         await agentCommands.configure({ ...value, defaultProvider: provider })
         if (!disposed.current) {
-          setSkipped(false)
           setMode(settings?.defaultPreparation ?? "rev")
           setStep("scope")
         }
@@ -332,9 +326,6 @@ export function useNewReviewWizard(
     }
   }, [onClose])
   return {
-    readingLevel,
-    setReadingLevel,
-    askReadingLevel: preferences.askEachReview,
     request,
     change,
     step,
@@ -358,11 +349,6 @@ export function useNewReviewWizard(
     cancelling,
     close,
     next,
-    skip: () => {
-      setSkipped(true)
-      setMode("manual")
-      setStep("scope")
-    },
     canNext:
       !advancing &&
       !capturing &&

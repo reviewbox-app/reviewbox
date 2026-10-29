@@ -1,4 +1,5 @@
 "use client"
+import { remapTreeNavigation } from "@/features/file-tree/services/navigation.service"
 import { useState } from "react"
 import {
   Dialog,
@@ -65,9 +66,11 @@ export function EditorFileDialog({
           p === action.path || p.startsWith(`${action.path}/`)
             ? value + p.slice(action.path.length)
             : p
+        remapTreeNavigation(id, action.path, value)
         updateEditor(id, (s) => ({
           ...s,
           active: remap(s.active),
+          toggledFolders: new Set([...s.toggledFolders].map(remap)),
           buffers: s.buffers.map((b) => ({ ...b, path: remap(b.path) })),
         }))
       } else {
@@ -81,6 +84,15 @@ export function EditorFileDialog({
           path: action.path,
           expectedRevision,
         })
+        remapTreeNavigation(id, action.path)
+        updateEditor(id, (s) => ({
+          ...s,
+          toggledFolders: new Set(
+            [...s.toggledFolders].filter(
+              (p) => p !== action.path && !p.startsWith(`${action.path}/`)
+            )
+          ),
+        }))
         for (const b of affected()) closeBuffer(id, b.id)
       }
       await refreshEditor(id)

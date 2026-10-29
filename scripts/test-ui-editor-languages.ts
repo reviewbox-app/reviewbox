@@ -13,6 +13,35 @@ const f = await fixture(),
   server = await editorLanguageFixture(f.root),
   planner = await plannerFixture(f.root)
 let phase = "import pack"
+type ServerCall = {
+  pid: number
+  method: string
+  text?: string
+  params?: { textDocument?: { uri?: string; text?: string } }
+}
+const serverCalls = async (): Promise<ServerCall[]> =>
+  (await readFile(server.calls, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+const disk = () => readFile(join(f.repo, "main.exdsl"), "utf8")
+const replace = async (text: string) => {
+  await ui.until(
+    "!document.querySelector('[role=dialog][data-open]')",
+    "dialog closed"
+  )
+  await ui.click('section[aria-label="Project file"] .view-lines')
+  await ui.execute(
+    `document.querySelector('section[aria-label="Project file"] textarea').focus();return true`
+  )
+  await ui.shortcut("a")
+  await ui.execute(
+    `const data=new DataTransfer();data.setData('text/plain',arguments[0]);document.activeElement.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}));return true`,
+    [text]
+  )
+  await ui.has("Unsaved changes")
+}
 const switchMain = async () => {
   await ui.request(ui.route("/window"), undefined, "DELETE")
   await ui.request(ui.route("/window"), { handle: "main" })
@@ -34,6 +63,7 @@ const settings = async () => {
 try {
   await f.write("main.exdsl", "hello disk\n")
   await f.write("sibling.exdsl", "hello other\n")
+  await f.write("example.config.json", '{"version":1}\n')
   await ui.start(join(f.root, "appdata"))
   await ui.named("or enter a path")
   await ui.fill('[aria-label="Repository path"]', f.repo)
@@ -63,11 +93,7 @@ try {
     "imported TextMate keyword coloring"
   )
   phase = "unsaved completion"
-  await ui.click('section[aria-label="Project file"] .view-lines')
-  await ui.execute(
-    `const e=document.querySelector('section[aria-label="Project file"] textarea');e.focus();e.dispatchEvent(new KeyboardEvent('keydown',{key:'a',code:'KeyA',keyCode:65,metaKey:true,bubbles:true}));const data=new DataTransfer();data.setData('text/plain','hello draft\\n');e.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}));return true`
-  )
-  await ui.has("Unsaved changes")
+  await replace("hello draft\n")
   await ui.wait(
     async () => (await readFile(server.calls, "utf8")).includes("hello draft"),
     "unsaved LSP text"
@@ -81,7 +107,38 @@ try {
     await readFile(join(f.repo, "main.exdsl"), "utf8"),
     "hello disk\n"
   )
+  phase = "configuration refresh preserves the live draft"
+  const initializations = (await serverCalls()).filter(
+    (call) => call.method === "initialize"
+  ).length
+  await f.write("unrelated.txt", "unrelated to the language server\n")
+  await Bun.sleep(1800)
+  assert.equal(
+    (await serverCalls()).filter((call) => call.method === "initialize").length,
+    initializations,
+    "unrelated file does not restart the server"
+  )
+  await f.write("example.config.json", '{"version":2}\n')
+  await ui.wait(
+    async () =>
+      (await serverCalls()).filter((call) => call.method === "initialize")
+        .length > initializations,
+    "language session restarted for relevant configuration"
+  )
+  await ui.wait(async () => {
+    const calls = await serverCalls()
+    const pid = calls.filter((call) => call.method === "initialize").at(-1)?.pid
+    return calls.some(
+      (call) =>
+        call.pid === pid &&
+        call.method === "textDocument/didOpen" &&
+        call.params?.textDocument?.text === "hello draft\n"
+    )
+  }, "unsaved text restored into reconfigured session")
+  await ui.has("Language support active")
+  assert.equal(await disk(), "hello disk\n")
   phase = "live definition navigation"
+  await ui.click('section[aria-label="Project file"] .view-line span')
   await ui.execute(
     `document.querySelector('section[aria-label="Project file"] textarea').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'F12',code:'F12',keyCode:123,bubbles:true,cancelable:true}));return true`
   )
@@ -90,6 +147,63 @@ try {
   await ui.until(
     `document.querySelector('section[aria-label="Project file"] .view-lines')?.textContent.includes('draft')`
   )
+  phase = "manual save imports before formatting"
+  const beforeManual = (await serverCalls()).length
+  await replace("hello savePipeline\n")
+  await ui.shortcut("s")
+  await ui.wait(
+    async () => (await disk()) === "hello formattedAfterImports\n",
+    "manual save transforms in order"
+  )
+  const manualCalls = (await serverCalls()).slice(beforeManual)
+  const importsIndex = manualCalls.findIndex(
+    (call) => call.method === "textDocument/codeAction"
+  )
+  const formatIndex = manualCalls.findIndex(
+    (call) => call.method === "textDocument/formatting"
+  )
+  assert(
+    importsIndex >= 0 && formatIndex > importsIndex,
+    "imports precede formatting"
+  )
+  assert.equal(
+    manualCalls[formatIndex].text,
+    "hello importsApplied\n",
+    "formatting sees synchronized import edits"
+  )
+  phase = "per-language save preferences"
+  await ui.named("Project settings")
+  await ui.click("#editor-format-save")
+  await ui.named("Close", "[role=dialog] button")
+  await replace("hello savePipeline formatOff\n")
+  await ui.shortcut("s")
+  await ui.wait(
+    async () => (await disk()) === "hello importsApplied formatOff\n",
+    "disabled formatter leaves organized text"
+  )
+  await ui.named("Project settings")
+  await ui.click("#editor-format-save")
+  await ui.named("Close", "[role=dialog] button")
+  phase = "auto-save does not transform text"
+  await ui.nativeMenu("Editor", "Auto save")
+  const beforeAutomatic = (await serverCalls()).length
+  await replace("hello savePipeline automatic\n")
+  await ui.wait(
+    async () => (await disk()) === "hello savePipeline automatic\n",
+    "auto-save writes verbatim"
+  )
+  assert.equal(
+    (await serverCalls())
+      .slice(beforeAutomatic)
+      .some((call) =>
+        ["textDocument/codeAction", "textDocument/formatting"].includes(
+          call.method
+        )
+      ),
+    false,
+    "auto-save performs no transformations"
+  )
+  await ui.nativeMenu("Editor", "Auto save")
   phase = "multifile rename"
   await ui.execute(
     `document.querySelector('section[aria-label="Project file"] textarea').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'F2',code:'F2',keyCode:113,bubbles:true,cancelable:true}));return true`
@@ -103,7 +217,7 @@ try {
     "hello other\n"
   )
   await ui.named("Apply changes")
-  await ui.named("Save all")
+  await ui.nativeMenu("Editor", "Save all")
   await ui.wait(
     async () =>
       (await readFile(join(f.repo, "sibling.exdsl"), "utf8")).startsWith(
@@ -133,13 +247,21 @@ try {
   const start = calls.find((m) => m.method === "thread/start"),
     turn = calls.find((m) => m.method === "turn/start")
   assert.equal(start.params.sandbox, "read-only")
-  assert.equal(start.params.config['mcp_servers."writer".enabled'], false)
+  assert.equal(
+    start.params.config.mcp_servers?.writer?.enabled ??
+      start.params.config['mcp_servers."writer".enabled'],
+    false
+  )
   assert.equal(turn.params.sandboxPolicy.type, "readOnly")
   await ui.screenshot("pack-live-edit-and-reviewed-plan")
   console.log(
-    "Native language fixtures: import without rebuild, local grammar/server activation, unsaved completion, multifile preview/save, plan rejection and explicit application; readonly harness contract verified."
+    "Native language fixtures: import without rebuild, local grammar/server activation, unsaved completion, targeted configuration restart preserving drafts, imports-before-format manual save, per-language preferences, verbatim auto-save, multifile preview/native Save all, plan rejection and explicit application; readonly harness contract verified."
   )
 } catch (error) {
+  await Bun.write(
+    join(ui.artifacts, "lsp-calls.jsonl"),
+    Bun.file(server.calls)
+  ).catch(() => {})
   await ui.screenshot("failed-" + phase.replaceAll(" ", "-")).catch(() => {})
   throw new Error(phase + ": " + error, { cause: error })
 } finally {

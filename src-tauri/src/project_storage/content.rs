@@ -396,6 +396,10 @@ fn reconstruct(root: &Path, delta: ByteDelta) -> AppResult<Vec<u8>> {
         .map(|oid| git_bytes(root, oid))
         .transpose()?
         .unwrap_or_default();
+    reconstruct_bytes(&base, delta)
+}
+
+fn reconstruct_bytes(base: &[u8], delta: ByteDelta) -> AppResult<Vec<u8>> {
     if delta.prefix > base.len() || delta.suffix > base.len() - delta.prefix {
         return Err(AppError::new("invalid_delta", "Invalid byte delta bounds."));
     }
@@ -521,6 +525,9 @@ pub(crate) fn verify_bundle_sources(
     commit: &str,
 ) -> AppResult<()> {
     let reachable = reachable_objects(project, commit)?;
+    let mut objects = super::publication::GitObjects::new(project.root.parent().unwrap())?;
+    // Parse each shared pack once, rather than once per source in the capture.
+    let mut packs = BTreeMap::<String, ContentPack>::new();
     for (path, bytes) in files {
         if !path.starts_with("snapshots/") {
             continue;
@@ -537,13 +544,18 @@ pub(crate) fn verify_bundle_sources(
                             "Source is not retained by archive history.",
                         ));
                     }
-                    git_bytes(project.root.parent().unwrap(), &oid)?
+                    objects.blob(&oid, SOURCE_LIMIT)?
                 }
                 ContentSource::Pack { path, .. } => {
-                    let bytes = files.get(&path).ok_or_else(|| {
+                    if !packs.contains_key(&path) {
+                        let bytes = files.get(&path).ok_or_else(|| {
+                            AppError::new("missing_content", "Archive source pack missing.")
+                        })?;
+                        packs.insert(path.clone(), serde_json::from_slice(bytes)?);
+                    }
+                    let pack = packs.get_mut(&path).ok_or_else(|| {
                         AppError::new("missing_content", "Archive source pack missing.")
                     })?;
-                    let mut pack: ContentPack = serde_json::from_slice(bytes)?;
                     if pack.version != VERSION
                         || pack.snapshot_id != snapshot_id
                         || pack.format != "reviewbox"
@@ -566,7 +578,13 @@ pub(crate) fn verify_bundle_sources(
                             "Delta base is not retained by archive history.",
                         ));
                     }
-                    reconstruct(project.root.parent().unwrap(), delta)?
+                    let base = delta
+                        .base_oid
+                        .as_deref()
+                        .map(|oid| objects.blob(oid, SOURCE_LIMIT))
+                        .transpose()?
+                        .unwrap_or_default();
+                    reconstruct_bytes(&base, delta)?
                 }
             };
             if result.len() != expected as usize || fingerprint(&result) != hash {
@@ -592,6 +610,53 @@ mod tests {
             replacement: Replacement::Text(text.into()),
         }
     }
+    /// Opt-in benchmark on a supplied bundle, with all Git/project writes isolated.
+    #[test]
+    #[ignore = "requires REVIEWBOX_VERIFY_REPOSITORY and REVIEWBOX_VERIFY_BUNDLE"]
+    fn verify_supplied_bundle_in_isolated_clone() {
+        let repository = std::env::var("REVIEWBOX_VERIFY_REPOSITORY").unwrap();
+        let bundle = PathBuf::from(std::env::var("REVIEWBOX_VERIFY_BUNDLE").unwrap());
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repository");
+        assert!(
+            std::process::Command::new("git")
+                .args(["clone", "--shared", "--no-checkout", "--quiet", "--"])
+                .arg(repository)
+                .arg(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let project = Project::open(&root, "verification").unwrap();
+        let mut files = Files::new();
+        let mut pending = vec![bundle.clone()];
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    pending.push(entry.path());
+                } else if entry.file_type().unwrap().is_file() {
+                    files.insert(
+                        entry
+                            .path()
+                            .strip_prefix(&bundle)
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .into(),
+                        fs::read(entry.path()).unwrap(),
+                    );
+                }
+            }
+        }
+        let started = std::time::Instant::now();
+        verify_bundle_sources(&project, &files, "HEAD").unwrap();
+        eprintln!(
+            "Exact bundle verification completed in {:?}",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn packs_are_bounded_deterministic_and_restore_every_part() {
         let input = || {

@@ -260,12 +260,12 @@ impl LanguageServerInstaller {
         records.push_back(operation.clone());
         trim_history(&mut records);
         drop(records);
+        self.changed();
         let owner = self.owner.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let _gate = owner.install_gate.lock().unwrap_or_else(|e| e.into_inner());
             let result =
                 check(&operation).and_then(|()| install_server(&storage, &server, &operation));
-            let succeeded = result.is_ok();
             let _ = fs::remove_file(pending_path);
             if let Some(group) = operation
                 .process
@@ -296,9 +296,7 @@ impl LanguageServerInstaller {
             }
             drop(progress);
             trim_history(&mut owner.operations.lock().unwrap_or_else(|e| e.into_inner()));
-            if succeeded {
-                notify(&owner);
-            }
+            notify(&owner);
         });
         Ok(progress)
     }
@@ -320,6 +318,7 @@ impl LanguageServerInstaller {
             .cloned()
             .ok_or_else(|| AppError::new("not_found", "Installation was not found."))?;
         cancel(&record);
+        self.changed();
         Ok(())
     }
     pub fn shutdown(&self) {
@@ -1799,6 +1798,10 @@ mod tests {
                 let Some(receipt) = catalog::installed(&storage, &server.id).unwrap() else {
                     continue;
                 };
+                // These engines are exercised by live-extension/formatter tests; captured readers never invoke them.
+                if matches!(server.id.as_str(), "tailwind" | "prettier") {
+                    continue;
+                }
                 let configuration = LanguageServerConfig {
                     id: server.id.clone(),
                     name: server.name.clone(),

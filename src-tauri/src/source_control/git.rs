@@ -21,6 +21,8 @@ pub(super) fn run(
         return Err(AppError::new("cancelled", "Git operation stopped."));
     }
     let mut command = Command::new("git");
+    #[cfg(target_os = "macos")]
+    command.env("PATH", macos_git_path(std::env::var_os("PATH").as_deref()));
     command
         .arg("--no-optional-locks")
         .arg("--literal-pathspecs")
@@ -106,6 +108,67 @@ pub(super) fn run(
         ));
     }
     Ok(output)
+}
+
+/// Finder launches can omit Homebrew, including Git's signing and credential
+/// helpers. Keep inherited precedence and only append standard install paths.
+#[cfg(target_os = "macos")]
+fn macos_git_path(inherited: Option<&std::ffi::OsStr>) -> std::ffi::OsString {
+    let mut paths: Vec<PathBuf> = inherited
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect();
+    for path in [
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ] {
+        let path = PathBuf::from(path);
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    std::env::join_paths(paths).expect("split PATH entries and standard macOS paths are valid")
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod environment_tests {
+    use super::*;
+
+    #[test]
+    fn finder_path_includes_signing_helpers_without_reordering_user_paths() {
+        let inherited = std::ffi::OsStr::new("/custom/bin:/usr/bin:/bin:/opt/homebrew/bin");
+        let paths: Vec<_> = std::env::split_paths(&macos_git_path(Some(inherited))).collect();
+        assert_eq!(
+            &paths[..4],
+            &[
+                PathBuf::from("/custom/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+                PathBuf::from("/opt/homebrew/bin")
+            ]
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|p| p.as_path() == std::path::Path::new("/opt/homebrew/bin"))
+                .count(),
+            1
+        );
+        assert!(paths.contains(&PathBuf::from("/usr/local/bin")));
+    }
+
+    #[test]
+    fn missing_path_includes_git_and_homebrew() {
+        let paths: Vec<_> = std::env::split_paths(&macos_git_path(None)).collect();
+        assert!(paths.contains(&PathBuf::from("/usr/bin")));
+        assert!(paths.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(paths.contains(&PathBuf::from("/usr/local/bin")));
+    }
 }
 
 pub(super) fn read(root: &Path, args: &[&str]) -> AppResult<Vec<u8>> {

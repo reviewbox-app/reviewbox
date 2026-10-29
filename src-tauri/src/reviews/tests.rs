@@ -50,6 +50,7 @@ fn docs() -> LevelDocuments {
         reading_seconds: 15,
     };
     LevelDocuments {
+        single: None,
         dependencies: None,
         context_sources: vec![],
         glossary: vec![],
@@ -1060,4 +1061,30 @@ fn review_freshness_tracks_layers_context_sources_and_reverted_changes() {
             .stale_step_ids,
         vec!["step0", "step1"]
     );
+}
+
+#[test]
+fn document_selection_verifies_mode_snapshot_and_current_body() {
+    let (_dir, storage, workspace) = fixture();
+    let mut workspace = guided(&storage, workspace);
+    let mut selection = DocumentSelection {
+        snapshot_id: workspace.snapshot.id.clone(),
+        step_id: "step0".into(),
+        level: ReadingLevel::Explained,
+        content_hash: fingerprint(b"A simple explanation."),
+        ranges: vec![DocumentTextRange { start: 2, end: 8 }],
+    };
+    assert_eq!(
+        crate::review_documents::verify(&workspace, &selection).unwrap(),
+        "simple"
+    );
+    workspace.review.topics[0].steps[0].documents.explained.body = "An updated explanation.".into();
+    assert!(crate::review_documents::verify(&workspace, &selection).is_err());
+    selection.level = ReadingLevel::Technical;
+    assert_eq!(
+        crate::review_documents::verify(&workspace, &selection).unwrap(),
+        "simple"
+    );
+    selection.snapshot_id = "another capture".into();
+    assert!(crate::review_documents::verify(&workspace, &selection).is_err());
 }
