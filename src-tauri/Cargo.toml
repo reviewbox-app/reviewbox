@@ -5,7 +5,7 @@ description = "A desktop workspace for agent-assisted code review"
 edition = "2024"
 rust-version = "1.95"
 publish = false
-license = "Unlicense"
+license = "MIT"
 
 # Keep useful backtraces without full type/variable debug information. Tests
 # inherit this profile. Reuse dependencies, but avoid growing incremental caches.
