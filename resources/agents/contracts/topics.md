@@ -17,7 +17,7 @@ Return one JSON object, with no surrounding commentary or additional properties:
           "documents": {
             "single": {
               "version": 1,
-              "profile": {"style": "essential", "instructions": ""},
+              "profile": { "style": "essential", "instructions": "" },
               "content": {
                 "body": "Explanation of the change.",
                 "readingSeconds": 30,
